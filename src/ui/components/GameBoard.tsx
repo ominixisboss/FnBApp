@@ -5,7 +5,7 @@ import {
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
-import type { Action, CardInst, GameState, PlayerId, PlayerState } from '../../engine/types';
+import type { Action, CardInst, EquipState, GameState, PlayerId, PlayerState } from '../../engine/types';
 import { chooseAction, describeAction } from '../../ai/bot';
 import { getScript } from '../../engine/cardScript';
 import CardView, { CardBack } from './CardView';
@@ -292,17 +292,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   return (
     <div className="board">
       <div className="col" ref={colRef}>
+        <div className="mat">
         <div ref={oppRef}>
           <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
         </div>
         <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppRef} />
-        <div className="prompt">{prompt}</div>
-        {error && <div className="err small">{error}</div>}
-        {hint && showHint && state.phase !== 'gameOver' && (
-          <div className="hint">
-            <b>💡 Suggested:</b> {describeAction(state, hint.action)}. <span className="muted">{hint.reason}</span>
-          </div>
-        )}
         <PlayerArea
           p={me}
           state={state}
@@ -317,6 +311,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           arsenalClass={handClass}
           fx={fx}
         />
+        </div>
+        <div className="prompt">{prompt}</div>
+        {error && <div className="err small">{error}</div>}
+        {hint && showHint && state.phase !== 'gameOver' && (
+          <div className="hint">
+            <b>💡 Suggested:</b> {describeAction(state, hint.action)}. <span className="muted">{hint.reason}</span>
+          </div>
+        )}
         <div className="hand">
           {me.hand.map((inst, i) => (
             <div key={inst.uid} data-uid={inst.uid} className="anim-deal" style={{ animationDelay: `${Math.min(i, 6) * 60}ms` }}>
@@ -392,6 +394,21 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   );
 }
 
+const SLOT = 'var(--slot)';
+
+/** A framed zone on the playmat. Shows its label when empty. */
+function Slot({ area, label, filled, onClick, className = '', children, uid, count }: {
+  area: string; label: string; filled: boolean; onClick?: () => void; className?: string; children?: React.ReactNode; uid?: number; count?: number;
+}) {
+  return (
+    <div className={`slot ${filled ? 'filled' : ''} ${className}`} style={{ gridArea: area }} onClick={onClick} data-uid={uid}>
+      {!filled && <span className="slot-label">{label}</span>}
+      {children}
+      {filled && <span className="slot-tag">{label}{count !== undefined ? ` · ${count}` : ''}</span>}
+    </div>
+  );
+}
+
 function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, arsenalClick, arsenalClass, fx }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
   onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string;
@@ -399,71 +416,90 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
 }) {
   const active = state.turnPlayer === p.id;
   const effects = pendingEffectsText(p);
-  return (
-    <div className={`side ${isOpp ? 'opp' : ''}`} style={active ? { borderColor: 'var(--accent)' } : undefined}>
-      <div className="zone-row">
-        <div className="hero-box">
-          <CardView card={cardOf(p.hero)} width={92} onHover={onHover} onClick={() => onClickArena(p.hero)} />
-          <div className="col" style={{ gap: '.2rem' }}>
-            <div key={fx.lifeKey[p.id]} className={`life ${fx.lifeAnim[p.id]}`} title="Life">{p.life}</div>
-            <b>{p.name}</b>
-            <div className="res small">
-              <span key={`r${p.resources}`} className={p.resources ? 'anim-pulse' : ''} title="Floating resources">⛀ {p.resources}</span>
-              <span key={`a${p.actionPoints}`} className={p.actionPoints ? 'anim-pulse' : ''} style={{ '--pulse': '#f2e14e' } as React.CSSProperties} title="Action points">⚡ {p.actionPoints}</span>
-            </div>
-          </div>
-          {fx.floaters.filter((f) => f.player === p.id).map((f) => (
-            <span key={f.id} className={`floater ${f.amount < 0 ? 'dmg' : 'gain'}`}>{f.amount > 0 ? `+${f.amount}` : f.amount}</span>
-          ))}
-        </div>
-        {p.weapons.map((w) => (
-          <div className="zone" key={w.inst.uid} data-uid={w.inst.uid}>
-            <CardView card={cardOf(w.inst)} width={80} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} />
-            weapon
-          </div>
-        ))}
-        {p.equipment.map((e) => (
-          <div className="zone" key={e.inst.uid} data-uid={e.inst.uid}>
-            <CardView card={cardOf(e.inst)} width={70} onHover={onHover} onClick={() => onClickArena(e.inst)}
-              className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
-              badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
-          </div>
-        ))}
-        <div className="grow" />
-        <div className="zone">
-          {p.arsenal.length ? (
-            isOpp ? <div key={p.arsenal[0].uid} className="anim-flip"><CardBack width={70} label="A" /></div> : <div key={p.arsenal[0].uid} data-uid={p.arsenal[0].uid} className="anim-flip"><CardView card={cardOf(p.arsenal[0])} width={70} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>
-          ) : <div className="card" style={{ '--w': '70px', opacity: .25, cursor: 'default' } as React.CSSProperties} />}
-          arsenal
-        </div>
-        <div className="zone">
-          <CardBack width={60} label={p.deck.length} />deck
-        </div>
-        <div className="zone" onClick={() => onZone({ title: `${p.name}'s graveyard`, cards: p.graveyard })} style={{ cursor: 'pointer' }}>
-          {p.graveyard.length ? <CardView key={p.graveyard[p.graveyard.length - 1].uid} className="anim-fade-up" card={cardOf(p.graveyard[p.graveyard.length - 1])} width={60} badge={p.graveyard.length} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
-          graveyard
-        </div>
-        <div className="zone" onClick={() => onZone({ title: `${p.name}'s pitch zone`, cards: p.pitch })} style={{ cursor: 'pointer' }}>
-          {p.pitch.length ? <CardView key={p.pitch[p.pitch.length - 1].uid} card={cardOf(p.pitch[p.pitch.length - 1])} width={60} badge={p.pitch.length} className="anim-pitch" tilt={false} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
-          pitch
-        </div>
-        {p.banished.length > 0 && (
-          <div className="zone" onClick={() => onZone({ title: `${p.name}'s banished zone`, cards: p.banished })} style={{ cursor: 'pointer' }}>
-            <CardView card={cardOf(p.banished[p.banished.length - 1])} width={50} badge={p.banished.length} />banished
-          </div>
-        )}
-      </div>
-      {(p.permanents.length > 0 || effects.length > 0 || isOpp) && (
-        <div className="row">
-          {isOpp && <span className="muted small">Hand: {p.hand.length} card{p.hand.length === 1 ? '' : 's'}{p.intimidated.length ? ` (+${p.intimidated.length} intimidated)` : ''}</span>}
-          {p.permanents.map((pm) => (
-            <div key={pm.inst.uid} data-uid={pm.inst.uid} className="anim-pop">
-              <CardView card={cardOf(pm.inst)} width={56} onHover={onHover} onClick={() => onClickArena(pm.inst)} className={arenaClass?.(pm.inst)} />
-            </div>
-          ))}
-          {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
-        </div>
+  // map equipment / weapons onto the mat's fixed slots
+  const used = new Set<number>();
+  const eq = (t: string) => {
+    const e = p.equipment.find((x) => !used.has(x.inst.uid) && cardOf(x.inst).types.includes(t));
+    if (e) used.add(e.inst.uid);
+    return e;
+  };
+  const head = eq('Head');
+  const chest = eq('Chest');
+  const arms = eq('Arms');
+  const legs = eq('Legs');
+  const offHand = eq('Off-Hand');
+  const extraEquip = p.equipment.filter((e) => !used.has(e.inst.uid));
+  const [w1, w2] = p.weapons;
+
+  const equipSlot = (area: string, label: string, e?: EquipState) => (
+    <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
+      {e && (
+        <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
+          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
+          badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
+    </Slot>
+  );
+  const weaponSlot = (area: string, w?: { inst: CardInst; usedThisTurn: boolean }, e?: EquipState) => (
+    <Slot area={area} label="Weapon" filled={!!(w || e)} uid={w?.inst.uid ?? e?.inst.uid}>
+      {w && <CardView card={cardOf(w.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} />}
+      {!w && e && <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)} className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} />}
+    </Slot>
+  );
+  const pile = (area: string, label: string, cards: CardInst[], anim: string, title: string) => {
+    const top = cards[cards.length - 1];
+    return (
+      <Slot area={area} label={label} filled={!!top} count={cards.length} onClick={() => onZone({ title, cards })} className="clickable">
+        {top && <CardView key={top.uid} card={cardOf(top)} width={SLOT} className={anim} tilt={false} />}
+      </Slot>
+    );
+  };
+
+  return (
+    <div className={`mat-side ${isOpp ? 'opp' : 'me'} ${active ? 'active' : ''}`}>
+      {equipSlot('head', 'Head', head)}
+      {equipSlot('chest', 'Chest', chest)}
+      {equipSlot('arms', 'Arms', arms)}
+      {equipSlot('legs', 'Legs', legs)}
+      {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
+      {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
+      <Slot area="hero" label="Hero" filled className="hero-box">
+        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} />
+        <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life">{p.life}</div>
+        {fx.floaters.filter((f) => f.player === p.id).map((f) => (
+          <span key={f.id} className={`floater ${f.amount < 0 ? 'dmg' : 'gain'}`}>{f.amount > 0 ? `+${f.amount}` : f.amount}</span>
+        ))}
+      </Slot>
+      <Slot area="arsenal" label="Arsenal" filled={p.arsenal.length > 0} uid={p.arsenal[0]?.uid}>
+        {p.arsenal[0] && (isOpp
+          ? <div key={p.arsenal[0].uid} className="anim-flip"><CardBack width={SLOT} label="A" /></div>
+          : <div key={p.arsenal[0].uid} className="anim-flip"><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>)}
+      </Slot>
+      <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
+        {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
+      </Slot>
+      {pile('pitch', 'Pitch', p.pitch, 'anim-pitch', `${p.name}'s pitch zone`)}
+      {pile('grave', 'Graveyard', p.graveyard, 'anim-fade-up', `${p.name}'s graveyard`)}
+      {pile('banish', 'Banished', p.banished, 'anim-fade-up', `${p.name}'s banished zone`)}
+
+      <div className="mat-info" style={{ gridArea: 'info' }}>
+        <div className="mat-name">{active && <span className="turn-dot" title="Their turn" />}{p.name}</div>
+        <div className="res small">
+          <span key={`r${p.resources}`} className={p.resources ? 'anim-pulse' : ''} title="Floating resources">⛀ {p.resources}</span>
+          <span key={`a${p.actionPoints}`} className={p.actionPoints ? 'anim-pulse' : ''} style={{ '--pulse': '#f2e14e' } as React.CSSProperties} title="Action points">⚡ {p.actionPoints}</span>
+          {isOpp && <span title="Cards in hand">✋ {p.hand.length}{p.intimidated.length ? ` (+${p.intimidated.length})` : ''}</span>}
+        </div>
+      </div>
+      <div className="mat-effects" style={{ gridArea: 'fx' }}>
+        {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
+      </div>
+      <div className="mat-perms" style={{ gridArea: 'perm' }}>
+        {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
+          <div key={inst.uid} data-uid={inst.uid} className="anim-pop">
+            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -472,12 +508,18 @@ function ChainView({ state, onHover, onClick, lastClick, oppRef }: {
   state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void;
   lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  if (!state.chain.length) return <div className="chain muted small" style={{ justifyContent: 'center' }}>Combat chain is empty</div>;
   return (
-    <div className="chain">
-      {state.chain.map((l) => (
-        <ChainLinkView key={l.inst.uid + '-' + state.chain.indexOf(l)} l={l} state={state} onHover={onHover} onClick={onClick} lastClick={lastClick} oppRef={oppRef} />
-      ))}
+    <div className="mat-chain">
+      <div className="chain-title flip">Combat Chain</div>
+      <div className="chain-track">
+        <span className="chain-start">Chain link 1 starts here</span>
+        <div className="chain-links">
+          {state.chain.map((l, i) => (
+            <ChainLinkView key={l.inst.uid + '-' + i} l={l} state={state} onHover={onHover} onClick={onClick} lastClick={lastClick} oppRef={oppRef} />
+          ))}
+        </div>
+      </div>
+      <div className="chain-title">Combat Chain</div>
     </div>
   );
 }
@@ -511,12 +553,12 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
   return (
     <div className={`link ${l.damage !== null ? 'done' : ''}`}>
       <div ref={cardRef} style={{ position: 'relative', zIndex: 2 }}>
-        <CardView card={cardOf(l.inst)} width={84} onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
+        <CardView card={cardOf(l.inst)} width="calc(var(--slot) * .95)" onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
       </div>
       {l.defenders.length > 0 && <span className="muted anim-pop">vs</span>}
       {l.defenders.map((d) => (
         <div key={d.inst.uid} className={d.inst.owner === HUMAN ? 'anim-block-up' : 'anim-block-down'}>
-          <CardView card={cardOf(d.inst)} width={64} onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
+          <CardView card={cardOf(d.inst)} width="calc(var(--slot) * .75)" onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
         </div>
       ))}
       <div className="col small" style={{ minWidth: 70 }}>

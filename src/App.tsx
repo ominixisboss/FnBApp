@@ -54,7 +54,7 @@ export default function App() {
           ))}
         </nav>
         <div className="grow" />
-        <button className="small" title="Toggle animations" onClick={() => setAnim(!anim)}>{anim ? '✨ Animations on' : '◻ Animations off'}</button>
+        <button className="small" title="Toggle animations" onClick={() => setAnim(!anim)}>{anim ? '✨' : '◻'}<span className="anim-label"> Animations {anim ? 'on' : 'off'}</span></button>
       </header>
       <main className="page">
         {error && <p className="err">Couldn’t load the card database: {error}</p>}

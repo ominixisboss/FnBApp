@@ -70,9 +70,9 @@ export function TextCard({ card }: { card: Card }) {
   );
 }
 
-export function CardBack({ width = 80, label }: { width?: number; label?: ReactNode }) {
+export function CardBack({ width = 80, label }: { width?: number | string; label?: ReactNode }) {
   return (
-    <div className="card card-back" style={{ '--w': `${width}px`, cursor: 'default' } as CSSProperties}>
+    <div className="card card-back" style={{ '--w': typeof width === 'number' ? `${width}px` : width, cursor: 'default' } as CSSProperties}>
       {label}
     </div>
   );
