@@ -14,7 +14,9 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
   - Cost curve.
   - Import text decklists (Fabrary *Copy as text*, FaB DB, Talishar) and export them.
   - Auto-build a starter deck for any hero.
-- Decks are saved in your browser's localStorage.
+- **Deck saving**: edits are kept as a draft until you press **Save** (or Ctrl+S). There's also *Revert*, *Save as copy*, *Duplicate*, an unsaved-changes warning before you leave, `.txt` download per deck, and **Backup all / Restore** as a JSON file to keep decks safe or move them to another device. Decks are stored in the browser (localStorage).
+- **Animations**: cards dealt into your hand, attacks flying onto the combat chain, blocks sliding in, pitch flashes, floating damage and heal numbers, screen shake on big hits, turn banners, and victory confetti or defeat embers. There's also card tilt with shine, page transitions, and ember particles on the home screen. Toggle them in the top bar; they are also off automatically when your OS asks for reduced motion.
+- **Match history**: every finished game vs the AI is recorded locally (heroes, deck, difficulty, result, turns). This is groundwork for a future stats board and player profile.
 
 ## Rules engine
 

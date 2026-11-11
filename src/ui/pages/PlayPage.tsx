@@ -5,6 +5,7 @@ import { autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '.
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
+import { recordMatch } from '../../stats/matches';
 import { HeroPicker } from './DecksPage';
 import CardView from '../components/CardView';
 
@@ -46,7 +47,16 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     ], Date.now() & 0x7fffffff, fmt));
   };
 
-  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} />;
+  const onGameOver = (s: GameState) => {
+    const [me, them] = s.players;
+    recordMatch({
+      format: s.format, myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId, deckId: myDeck?.id ?? null,
+      deckName: myDeck?.name ?? `${card(me.hero.cardId).name} (auto)`, difficulty: setup.difficulty,
+      won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life,
+    });
+  };
+
+  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} onGameOver={onGameOver} />;
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
   const formatDecks = decks.filter((d) => d.format === setup.format || setup.format === 'casual');

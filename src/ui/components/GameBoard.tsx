@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
   applyAction, autoPitch, availableResources, cardOf, checkDefense, currentLink, defendOptions,
@@ -10,13 +10,65 @@ import { chooseAction, describeAction } from '../../ai/bot';
 import { getScript } from '../../engine/cardScript';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
+import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
+import type { ChainLink } from '../../engine/types';
 
 const HUMAN: PlayerId = 0;
 const BOT_DELAY = 650;
 
 interface Pending { opt: PlayOption; pitch: number[]; mode?: number }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch }: { initial: GameState; tutorial: boolean; onExit: () => void; onRematch: () => void }) {
+interface Floater { id: number; player: PlayerId; amount: number }
+interface Fx { floaters: Floater[]; lifeAnim: [string, string]; lifeKey: [number, number]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
+
+const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** Watches state transitions and produces short-lived visual effects. */
+function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
+  const prev = useRef<GameState | null>(null);
+  const seq = useRef(1);
+  const [fx, setFx] = useState<Fx>({ floaters: [], lifeAnim: ['', ''], lifeKey: [0, 0], shakeKey: 0, banner: null });
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = state;
+    if (skip.current) { skip.current = false; return; }
+    const next: Partial<Fx> = {};
+    const floaters: Floater[] = [];
+    const lifeAnim: [string, string] = [...fx.lifeAnim];
+    const lifeKey: [number, number] = [...fx.lifeKey];
+    let shake = false;
+    if (before) {
+      for (const pid of [0, 1] as PlayerId[]) {
+        const d = state.players[pid].life - before.players[pid].life;
+        if (d === 0) continue;
+        floaters.push({ id: seq.current++, player: pid, amount: d });
+        lifeAnim[pid] = d < 0 ? 'hurt' : 'heal';
+        lifeKey[pid]++;
+        if (d <= -5) shake = true;
+      }
+    }
+    if (!before || before.turn !== state.turn) {
+      const mine = state.turnPlayer === HUMAN;
+      next.banner = { id: seq.current++, text: mine ? 'Your turn' : `${state.players[state.turnPlayer].name.replace(' (bot)', '')}’s turn`, mine };
+    }
+    if (floaters.length || next.banner || shake) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFx((f) => ({ ...f, ...next, lifeAnim, lifeKey, floaters: [...f.floaters, ...floaters], shakeKey: shake ? f.shakeKey + 1 : f.shakeKey }));
+      if (floaters.length) {
+        const ids = floaters.map((f) => f.id);
+        setTimeout(() => setFx((f) => ({ ...f, floaters: f.floaters.filter((x) => !ids.includes(x.id)) })), 1500);
+      }
+      if (next.banner) {
+        const id = next.banner.id;
+        setTimeout(() => setFx((f) => (f.banner?.id === id ? { ...f, banner: null } : f)), 1600);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  return fx;
+}
+
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver }: { initial: GameState; tutorial: boolean; onExit: () => void; onRematch: () => void; onGameOver?: (s: GameState) => void }) {
   const [state, setState] = useState(initial);
   const [history, setHistory] = useState<GameState[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -29,6 +81,26 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
   const [showManual, setShowManual] = useState(false);
   const [modePick, setModePick] = useState<PlayOption | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const skipFx = useRef(false);
+  const lastClick = useRef<DOMRect | null>(null);
+  const oppRef = useRef<HTMLDivElement>(null);
+  const fx = useFx(state, skipFx);
+  const colRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = colRef.current;
+    if (!el || !fx.shakeKey) return;
+    el.classList.remove('shake');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('shake');
+  }, [fx.shakeKey]);
+  const [overlay, setOverlay] = useState(false);
+  const reported = useRef(false);
+  useEffect(() => {
+    if (state.phase !== 'gameOver') return;
+    if (!reported.current) { reported.current = true; onGameOver?.(state); }
+    const t = setTimeout(() => setOverlay(true), 700);
+    return () => clearTimeout(t);
+  }, [state, onGameOver]);
 
   const me = state.players[HUMAN];
   const opp = state.players[1];
@@ -84,6 +156,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
     const prev = history[history.length - 1];
     if (!prev) return;
     setHistory(history.slice(0, -1));
+    skipFx.current = true;
     setState(prev);
     setPending(null);
     setDefendSel([]);
@@ -111,8 +184,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
   };
   const pitchTotal = pending ? me.resources + pending.pitch.reduce((a, u) => a + pitchOf(cardOf(me.hand.find((h) => h.uid === u)!)), 0) : 0;
 
+  const rememberRect = (uid: number) => {
+    lastClick.current = document.querySelector(`[data-uid="${uid}"]`)?.getBoundingClientRect() ?? null;
+  };
   const clickHand = (inst: CardInst) => {
     setError(null);
+    rememberRect(inst.uid);
     if (pending) {
       if (pending.opt.kind === 'card' && inst.uid === pending.opt.uid) return setPending(null);
       const sel = pending.pitch.includes(inst.uid) ? pending.pitch.filter((u) => u !== inst.uid) : [...pending.pitch, inst.uid];
@@ -132,6 +209,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
   };
 
   const clickArena = (inst: CardInst) => {
+    rememberRect(inst.uid);
     if (myTurn && state.phase === 'defend' && defOpts.some((d) => d.uid === inst.uid)) {
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
@@ -213,9 +291,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
 
   return (
     <div className="board">
-      <div className="col">
-        <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} />
-        <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} />
+      <div className="col" ref={colRef}>
+        <div ref={oppRef}>
+          <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
+        </div>
+        <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppRef} />
         <div className="prompt">{prompt}</div>
         {error && <div className="err small">{error}</div>}
         {hint && showHint && state.phase !== 'gameOver' && (
@@ -235,11 +315,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
           }}
           arsenalClick={clickHand}
           arsenalClass={handClass}
+          fx={fx}
         />
         <div className="hand">
-          {me.hand.map((inst) => (
-            <CardView key={inst.uid} card={cardOf(inst)} width={118} className={handClass(inst)} onClick={() => clickHand(inst)} onHover={setHover}
-              badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
+          {me.hand.map((inst, i) => (
+            <div key={inst.uid} data-uid={inst.uid} className="anim-deal" style={{ animationDelay: `${Math.min(i, 6) * 60}ms` }}>
+              <CardView card={cardOf(inst)} width={118} className={handClass(inst)} onClick={() => clickHand(inst)} onHover={setHover}
+                badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
+            </div>
           ))}
           {me.hand.length === 0 && <span className="muted small">Your hand is empty.</span>}
         </div>
@@ -264,6 +347,21 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
           </div>
         </div>
       </div>
+      {fx.banner && <TurnBanner key={fx.banner.id} text={fx.banner.text} mine={fx.banner.mine} />}
+      {overlay && state.phase === 'gameOver' && (
+        <GameOverOverlay won={state.winner === HUMAN}>
+          <h1>{state.winner === HUMAN ? 'Victory' : 'Defeat'}</h1>
+          <p style={{ fontSize: '1.1rem' }}>
+            {state.winner === HUMAN ? `You defeated ${opp.name.replace(' (bot)', '')}` : `${opp.name.replace(' (bot)', '')} wins`} on turn {state.turn}
+            {' '}· you finished on {Math.max(0, me.life)} life.
+          </p>
+          <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
+            <button className="primary" onClick={onRematch}>Rematch</button>
+            <button className="gold" onClick={onExit}>New game</button>
+            <button onClick={() => setOverlay(false)}>View board</button>
+          </div>
+        </GameOverOverlay>
+      )}
       {hover && <div className="preview"><CardView card={hover} width={260} /></div>}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
       {modePick && (
@@ -294,10 +392,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch }: { in
   );
 }
 
-function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, arsenalClick, arsenalClass }: {
+function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, arsenalClick, arsenalClass, fx }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
   onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string;
-  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string;
+  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx;
 }) {
   const active = state.turnPlayer === p.id;
   const effects = pendingEffectsText(p);
@@ -307,22 +405,25 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         <div className="hero-box">
           <CardView card={cardOf(p.hero)} width={92} onHover={onHover} onClick={() => onClickArena(p.hero)} />
           <div className="col" style={{ gap: '.2rem' }}>
-            <div className="life" title="Life">{p.life}</div>
+            <div key={fx.lifeKey[p.id]} className={`life ${fx.lifeAnim[p.id]}`} title="Life">{p.life}</div>
             <b>{p.name}</b>
             <div className="res small">
-              <span title="Floating resources">⛀ {p.resources}</span>
-              <span title="Action points">⚡ {p.actionPoints}</span>
+              <span key={`r${p.resources}`} className={p.resources ? 'anim-pulse' : ''} title="Floating resources">⛀ {p.resources}</span>
+              <span key={`a${p.actionPoints}`} className={p.actionPoints ? 'anim-pulse' : ''} style={{ '--pulse': '#f2e14e' } as React.CSSProperties} title="Action points">⚡ {p.actionPoints}</span>
             </div>
           </div>
+          {fx.floaters.filter((f) => f.player === p.id).map((f) => (
+            <span key={f.id} className={`floater ${f.amount < 0 ? 'dmg' : 'gain'}`}>{f.amount > 0 ? `+${f.amount}` : f.amount}</span>
+          ))}
         </div>
         {p.weapons.map((w) => (
-          <div className="zone" key={w.inst.uid}>
+          <div className="zone" key={w.inst.uid} data-uid={w.inst.uid}>
             <CardView card={cardOf(w.inst)} width={80} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} />
             weapon
           </div>
         ))}
         {p.equipment.map((e) => (
-          <div className="zone" key={e.inst.uid}>
+          <div className="zone" key={e.inst.uid} data-uid={e.inst.uid}>
             <CardView card={cardOf(e.inst)} width={70} onHover={onHover} onClick={() => onClickArena(e.inst)}
               className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
               badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
@@ -331,7 +432,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         <div className="grow" />
         <div className="zone">
           {p.arsenal.length ? (
-            isOpp ? <CardBack width={70} label="A" /> : <CardView card={cardOf(p.arsenal[0])} width={70} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} />
+            isOpp ? <div key={p.arsenal[0].uid} className="anim-flip"><CardBack width={70} label="A" /></div> : <div key={p.arsenal[0].uid} data-uid={p.arsenal[0].uid} className="anim-flip"><CardView card={cardOf(p.arsenal[0])} width={70} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>
           ) : <div className="card" style={{ '--w': '70px', opacity: .25, cursor: 'default' } as React.CSSProperties} />}
           arsenal
         </div>
@@ -339,11 +440,11 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           <CardBack width={60} label={p.deck.length} />deck
         </div>
         <div className="zone" onClick={() => onZone({ title: `${p.name}'s graveyard`, cards: p.graveyard })} style={{ cursor: 'pointer' }}>
-          {p.graveyard.length ? <CardView card={cardOf(p.graveyard[p.graveyard.length - 1])} width={60} badge={p.graveyard.length} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
+          {p.graveyard.length ? <CardView key={p.graveyard[p.graveyard.length - 1].uid} className="anim-fade-up" card={cardOf(p.graveyard[p.graveyard.length - 1])} width={60} badge={p.graveyard.length} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
           graveyard
         </div>
         <div className="zone" onClick={() => onZone({ title: `${p.name}'s pitch zone`, cards: p.pitch })} style={{ cursor: 'pointer' }}>
-          {p.pitch.length ? <CardView card={cardOf(p.pitch[p.pitch.length - 1])} width={60} badge={p.pitch.length} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
+          {p.pitch.length ? <CardView key={p.pitch[p.pitch.length - 1].uid} card={cardOf(p.pitch[p.pitch.length - 1])} width={60} badge={p.pitch.length} className="anim-pitch" tilt={false} /> : <div className="card" style={{ '--w': '60px', opacity: .25 } as React.CSSProperties} />}
           pitch
         </div>
         {p.banished.length > 0 && (
@@ -356,34 +457,74 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         <div className="row">
           {isOpp && <span className="muted small">Hand: {p.hand.length} card{p.hand.length === 1 ? '' : 's'}{p.intimidated.length ? ` (+${p.intimidated.length} intimidated)` : ''}</span>}
           {p.permanents.map((pm) => (
-            <CardView key={pm.inst.uid} card={cardOf(pm.inst)} width={56} onHover={onHover} onClick={() => onClickArena(pm.inst)} className={arenaClass?.(pm.inst)} />
+            <div key={pm.inst.uid} data-uid={pm.inst.uid} className="anim-pop">
+              <CardView card={cardOf(pm.inst)} width={56} onHover={onHover} onClick={() => onClickArena(pm.inst)} className={arenaClass?.(pm.inst)} />
+            </div>
           ))}
-          {effects.map((e, i) => <span key={i} className="tag">{e}</span>)}
+          {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
         </div>
       )}
     </div>
   );
 }
 
-function ChainView({ state, onHover, onClick }: { state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void }) {
+function ChainView({ state, onHover, onClick, lastClick, oppRef }: {
+  state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void;
+  lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
+}) {
   if (!state.chain.length) return <div className="chain muted small" style={{ justifyContent: 'center' }}>Combat chain is empty</div>;
   return (
     <div className="chain">
-      {state.chain.map((l, i) => (
-        <div key={i} className={`link ${l.damage !== null ? 'done' : ''}`}>
-          <CardView card={cardOf(l.inst)} width={84} onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={`⚔ ${linkPower(l)}`} />
-          {l.defenders.length > 0 && <span className="muted">vs</span>}
-          {l.defenders.map((d) => (
-            <CardView key={d.inst.uid} card={cardOf(d.inst)} width={64} onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
-          ))}
-          <div className="col small" style={{ minWidth: 70 }}>
-            <span>{state.players[l.attacker].name}</span>
-            {l.goAgain && <span className="tag">go again</span>}
-            {l.dominate && <span className="tag">dominate</span>}
-            {l.damage !== null && <b className={l.hit ? 'err' : 'muted'}>{l.hit ? `hit for ${l.damage}` : 'blocked'}</b>}
-          </div>
+      {state.chain.map((l) => (
+        <ChainLinkView key={l.inst.uid + '-' + state.chain.indexOf(l)} l={l} state={state} onHover={onHover} onClick={onClick} lastClick={lastClick} oppRef={oppRef} />
+      ))}
+    </div>
+  );
+}
+
+function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
+  l: ChainLink; state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void;
+  lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  // FLIP: fly the attacking card from where it was played (hand, weapon, or the opponent's side)
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el || !motionOk() || !el.animate) return;
+    const to = el.getBoundingClientRect();
+    let from: DOMRect | null = null;
+    const src = document.querySelector(`.side [data-uid="${l.inst.uid}"]`);
+    if (src) from = src.getBoundingClientRect();
+    else if (l.attacker === HUMAN) from = lastClick.current;
+    else from = oppRef.current?.querySelector('.hero-box')?.getBoundingClientRect() ?? null;
+    if (!from) return;
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const sc = Math.max(0.5, Math.min(1.6, from.width / to.width));
+    el.animate([
+      { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${l.attacker === HUMAN ? -8 : 8}deg)`, filter: 'brightness(1.6)', zIndex: 30 },
+      { transform: 'translate(0,0) scale(1.15) rotate(0deg)', filter: 'brightness(1.3)', offset: 0.75 },
+      { transform: 'none', filter: 'none' },
+    ], { duration: 520, easing: 'cubic-bezier(.2,.8,.3,1)' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div className={`link ${l.damage !== null ? 'done' : ''}`}>
+      <div ref={cardRef} style={{ position: 'relative', zIndex: 2 }}>
+        <CardView card={cardOf(l.inst)} width={84} onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
+      </div>
+      {l.defenders.length > 0 && <span className="muted anim-pop">vs</span>}
+      {l.defenders.map((d) => (
+        <div key={d.inst.uid} className={d.inst.owner === HUMAN ? 'anim-block-up' : 'anim-block-down'}>
+          <CardView card={cardOf(d.inst)} width={64} onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
         </div>
       ))}
+      <div className="col small" style={{ minWidth: 70 }}>
+        <span>{state.players[l.attacker].name}</span>
+        {l.goAgain && <span className="tag anim-pop">⚡ go again</span>}
+        {l.dominate && <span className="tag anim-pop">dominate</span>}
+        {l.damage !== null && <b className={`anim-pop ${l.hit ? 'err' : 'muted'}`}>{l.hit ? `💥 hit for ${l.damage}` : '🛡 blocked'}</b>}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { card, eligibleForHero, getDb, isHero, supertypes } from '../../data/cardDb';
 import type { Card } from '../../data/types';
 import { PITCH_COLOR } from '../../data/types';
@@ -11,6 +11,8 @@ import CardView from '../components/CardView';
 import CardDetail from '../components/CardDetail';
 import CardFilters from '../components/CardFilters';
 import { emptyFilter, filterCards } from '../search';
+import { downloadText, readFile, safeFileName, setNavGuard } from '../navGuard';
+import { Toast } from '../components/Fx';
 
 export function useDecks() {
   const [decks, setDecksState] = useState<Deck[]>(() => loadDecks());
@@ -25,13 +27,41 @@ export default function DecksPage({ deckId }: { deckId?: string }) {
   const [decks, setDecks] = useDecks();
   const deck = decks.find((d) => d.id === deckId);
   const update = (d: Deck) => setDecks(decks.map((x) => (x.id === d.id ? { ...d, updatedAt: Date.now() } : x)));
-  if (deckId && deck) return <DeckEditor deck={deck} onChange={update} onDelete={() => { setDecks(decks.filter((d) => d.id !== deck.id)); location.hash = 'decks'; }} />;
+  const saveAs = (d: Deck) => {
+    const copy = { ...d, id: Math.random().toString(36).slice(2, 10), name: `${d.name} (copy)`, updatedAt: Date.now() };
+    setDecks([copy, ...decks]);
+    return copy;
+  };
+  if (deckId && deck) return <DeckEditor key={deck.id} deck={deck} onChange={update} onSaveAs={saveAs} onDelete={() => { setDecks(decks.filter((d) => d.id !== deck.id)); location.hash = 'decks'; }} />;
+  if (deckId && !deck) return <div className="panel">That deck doesn’t exist any more. <a href="#decks">Back to your decks</a></div>;
   return <DeckList decks={decks} setDecks={setDecks} />;
 }
 
 function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) => void }) {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const restoreRef = useRef<HTMLInputElement>(null);
+  const backup = () => {
+    downloadText(`fab-decks-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: 'fab-trainer', version: 1, decks }, null, 2), 'application/json');
+  };
+  const restore = async (file: File) => {
+    try {
+      const json = JSON.parse(await readFile(file));
+      const incoming: Deck[] = (Array.isArray(json) ? json : json.decks).filter((d: Deck) => d && d.id && d.heroId && getDb().byId.has(d.heroId));
+      const byId = new Map(decks.map((d) => [d.id, d]));
+      incoming.forEach((d) => byId.set(d.id, d));
+      setDecks([...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt));
+      flash(`Restored ${incoming.length} deck${incoming.length === 1 ? '' : 's'}`);
+    } catch {
+      alert('That file isn’t a FaB Trainer deck backup.');
+    }
+  };
+  const flash = (t: string) => { setToast(t); setTimeout(() => setToast(null), 2300); };
+  const duplicate = (d: Deck) => {
+    setDecks([{ ...d, id: Math.random().toString(36).slice(2, 10), name: `${d.name} (copy)`, updatedAt: Date.now() }, ...decks]);
+    flash('Deck duplicated');
+  };
   const add = (d: Deck) => {
     setDecks([d, ...decks]);
     location.hash = `decks/${d.id}`;
@@ -43,8 +73,12 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
         <div className="row">
           <button className="primary" onClick={() => setCreating(true)}>+ New deck</button>
           <button onClick={() => setImporting(true)}>Import decklist</button>
+          <button onClick={backup} disabled={!decks.length} title="Download all decks as a backup file">⬇ Backup all</button>
+          <button onClick={() => restoreRef.current?.click()} title="Load decks from a backup file">⬆ Restore</button>
+          <input ref={restoreRef} type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); e.target.value = ''; }} />
         </div>
       </div>
+      <p className="muted small">Decks are saved in this browser. Use <b>Backup all</b> to keep a copy or move decks to another device.</p>
       {decks.length === 0 && (
         <div className="panel">
           <p>You don’t have any decks yet. Build one from the card database, import a list from Fabrary or FaB DB, or let the app auto-build a starter deck for any hero.</p>
@@ -56,12 +90,17 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
           const errs = validateDeck(d).filter((e) => !e.startsWith('No weapon'));
           const { main, arena } = deckCounts(d);
           return (
-            <a key={d.id} href={`#decks/${d.id}`} className="panel deck-tile tile">
+            <a key={d.id} href={`#decks/${d.id}`} className="panel deck-tile tile anim-fade-up">
               {hero && <CardView card={hero} width={70} />}
               <div className="grow">
                 <h3 style={{ margin: 0 }}>{d.name}</h3>
                 <div className="muted small">{hero?.name} · {d.format === 'cc' ? 'Classic Constructed' : d.format === 'blitz' ? 'Blitz' : 'Casual'} · {main} cards + {arena} equipment/weapons</div>
-                <div className={`small ${errs.length ? 'err' : 'ok'}`}>{errs.length ? `${errs.length} issue${errs.length > 1 ? 's' : ''}` : '✓ Legal'}</div>
+                <div className={`small ${errs.length ? 'err' : 'ok'}`}>{errs.length ? `${errs.length} issue${errs.length > 1 ? 's' : ''}` : '✓ Legal'} <span className="muted">· saved {new Date(d.updatedAt).toLocaleString()}</span></div>
+              </div>
+              <div className="row" onClick={(e) => e.preventDefault()}>
+                <button className="small" onClick={() => duplicate(d)}>Duplicate</button>
+                <button className="small" onClick={() => downloadText(`${safeFileName(d.name)}.txt`, exportDecklist(d))}>⬇ .txt</button>
+                <button className="small primary" onClick={() => { location.hash = `play/${d.id}`; }}>▶ Play</button>
               </div>
             </a>
           );
@@ -69,6 +108,7 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
       </div>
       {creating && <NewDeckDialog onClose={() => setCreating(false)} onCreate={add} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onImport={add} />}
+      {toast && <Toast text={toast} />}
     </div>
   );
 }
@@ -134,6 +174,9 @@ function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d
           Paste a text decklist. On Fabrary use <i>Copy → Copy as text</i> (FaB DB and Talishar text exports also work). Lines like
           <code> Hero: Name</code>, <code>(3) Card Name (red)</code>, <code>3x Card Name (blue)</code> and <code>Equipment: A, B</code> are recognised.
         </p>
+        <div className="row" style={{ marginBottom: '.5rem' }}>
+          <label className="small">Or load a file (.txt): <input type="file" accept=".txt,text/plain" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setText(await readFile(f)); }} /></label>
+        </div>
         <textarea rows={14} value={text} onChange={(e) => setText(e.target.value)} placeholder={'Hero: Dorinthea\nWeapons: Dawnblade\nEquipment: Braveforge Bracers\n\n(2) Ironsong Response (red)\n(2) Warrior\'s Valor (yellow)\n...'} />
         {result && (
           <div className="small" style={{ marginTop: '.5rem' }}>
@@ -149,7 +192,31 @@ function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d
   );
 }
 
-function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: Deck) => void; onDelete: () => void }) {
+function DeckEditor({ deck: saved, onChange: onSave, onSaveAs, onDelete }: { deck: Deck; onChange: (d: Deck) => void; onSaveAs: (d: Deck) => Deck; onDelete: () => void }) {
+  // Edits happen on a draft; nothing is stored until you press Save.
+  const [deck, onChange] = useState<Deck>(saved);
+  const [toast, setToast] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const sig = (d: Deck) => JSON.stringify([d.name, d.format, Object.entries(d.cards).sort()]);
+  const dirty = sig(deck) !== sig(saved);
+  const dirtyRef = useRef(dirty);
+  const flash = (t: string) => { setToast(t); setTimeout(() => setToast(null), 2300); };
+  const save = () => { onSave(deck); flash('Deck saved ✓'); };
+  const saveRef = useRef(save);
+  useLayoutEffect(() => {
+    dirtyRef.current = dirty;
+    saveRef.current = save;
+  });
+  useEffect(() => {
+    setNavGuard(() => !dirtyRef.current || confirm('You have unsaved changes to this deck. Leave without saving?'));
+    const beforeUnload = (e: BeforeUnloadEvent) => { if (dirtyRef.current) e.preventDefault(); };
+    const keys = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (dirtyRef.current) saveRef.current(); }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('keydown', keys);
+    return () => { setNavGuard(null); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('keydown', keys); };
+  }, []);
   const hero = card(deck.heroId);
   const [f, setF] = useState(emptyFilter);
   const [limit, setLimit] = useState(48);
@@ -168,6 +235,7 @@ function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: De
     if (cnt <= 0) delete cards[id];
     else cards[id] = cnt;
     onChange({ ...deck, cards });
+    setFlashId(`${id}:${cnt}`);
   };
   const entries = Object.entries(deck.cards).map(([id, cnt]) => ({ c: card(id), cnt }));
   const groups: [string, typeof entries][] = [
@@ -189,7 +257,11 @@ function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: De
           <option value="cc">Classic Constructed</option>
           <option value="casual">Casual</option>
         </select>
-        <a href={`#play/${deck.id}`}><button className="primary">▶ Play with this deck</button></a>
+        {dirty ? <span className="dirty">● Unsaved changes</span> : <span className="small ok">✓ Saved</span>}
+        <button className="gold" disabled={!dirty} onClick={save} title="Save (Ctrl+S)">💾 Save</button>
+        <button disabled={!dirty} onClick={() => onChange(saved)}>Revert</button>
+        <button onClick={() => { const c = onSaveAs(deck); onChange(saved); dirtyRef.current = false; flash('Saved as a new deck'); location.hash = `decks/${c.id}`; }}>Save as copy</button>
+        <a href={`#play/${deck.id}`}><button className="primary">▶ Play</button></a>
       </div>
       <div className="editor">
         <div>
@@ -228,7 +300,7 @@ function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: De
             <div key={label}>
               <h4 style={{ margin: '.8rem 0 .2rem' }}>{label} <span className="muted">({list.reduce((a, e) => a + e.cnt, 0)})</span></h4>
               {list.sort((a, b) => a.c.name.localeCompare(b.c.name)).map(({ c, cnt }) => (
-                <div key={c.id} className="dl-row">
+                <div key={flashId?.startsWith(c.id + ':') ? flashId : c.id} className={`dl-row ${flashId?.startsWith(c.id + ':') ? 'flash' : ''}`}>
                   {c.pitch && <span className={`pitch-${c.pitch}`}><span className="dot" /></span>}
                   <span className="nm" onClick={() => setOpen(c)}>{c.name}</span>
                   <button onClick={() => setCount(c.id, cnt - 1)}>−</button>
@@ -243,6 +315,7 @@ function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: De
           </div>
           <div className="row" style={{ marginTop: '1rem' }}>
             <button onClick={() => setShowExport(!showExport)}>Export</button>
+            <button onClick={() => downloadText(`${safeFileName(deck.name)}.txt`, exportText)}>⬇ Download .txt</button>
             <button onClick={() => { if (confirm('Replace this deck’s cards with an auto-built list?')) onChange({ ...deck, cards: autoBuildDeck(deck.heroId, deck.format, Date.now() & 0xffff).cards }); }}>Auto-build</button>
             <button onClick={() => { if (confirm(`Delete “${deck.name}”?`)) onDelete(); }}>Delete</button>
           </div>
@@ -254,6 +327,7 @@ function DeckEditor({ deck, onChange, onDelete }: { deck: Deck; onChange: (d: De
           )}
         </div>
       </div>
+      {toast && <Toast text={toast} />}
       {open && (
         <CardDetail
           card={open}

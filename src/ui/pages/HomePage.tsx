@@ -1,12 +1,14 @@
 import type { CardDb } from '../../data/cardDb';
 import { loadDecks } from '../../deck/deck';
+import { Embers } from '../components/Fx';
 
 export default function HomePage({ db }: { db: CardDb }) {
   const decks = loadDecks();
   return (
     <div>
       <div className="home-hero">
-        <h1 style={{ fontSize: '2.4rem' }}>Learn & play Flesh and Blood</h1>
+        <Embers />
+        <h1 className="title-shimmer" style={{ fontSize: 'clamp(2rem, 6vw, 3.2rem)' }}>Learn & play Flesh and Blood</h1>
         <p className="muted">Practice against AI bots, build or import decks, and browse all {db.cards.length.toLocaleString()} cards.</p>
         <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
           <a href="#learn/practice"><button className="primary">New to FaB? Start a guided game</button></a>

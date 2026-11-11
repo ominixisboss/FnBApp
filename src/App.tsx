@@ -6,6 +6,8 @@ import CardsPage from './ui/pages/CardsPage';
 import DecksPage from './ui/pages/DecksPage';
 import PlayPage from './ui/pages/PlayPage';
 import LearnPage from './ui/pages/LearnPage';
+import { animationsEnabled, setAnimations } from './ui/components/Fx';
+import { canLeave } from './ui/navGuard';
 
 const ROUTES = [
   ['', 'Home'],
@@ -18,7 +20,13 @@ const ROUTES = [
 function useHash() {
   const [hash, setHash] = useState(() => window.location.hash.slice(1));
   useEffect(() => {
-    const on = () => setHash(window.location.hash.slice(1));
+    const on = (e: HashChangeEvent) => {
+      if (!canLeave()) {
+        history.replaceState(null, '', e.oldURL); // stay on the page
+        return;
+      }
+      setHash(window.location.hash.slice(1));
+    };
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
@@ -30,9 +38,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const hash = useHash();
   const [route, ...rest] = hash.split('/');
+  const [anim, setAnim] = useState(animationsEnabled);
   useEffect(() => {
     loadCardDb().then(setDb, (e) => setError(String(e)));
   }, []);
+  useEffect(() => setAnimations(anim), [anim]);
 
   return (
     <>
@@ -43,18 +53,20 @@ export default function App() {
             <a key={r} href={`#${r}`} className={route === r ? 'active' : ''}>{label}</a>
           ))}
         </nav>
+        <div className="grow" />
+        <button className="small" title="Toggle animations" onClick={() => setAnim(!anim)}>{anim ? '✨ Animations on' : '◻ Animations off'}</button>
       </header>
       <main className="page">
         {error && <p className="err">Couldn’t load the card database: {error}</p>}
         {!db && !error && <p className="muted">Loading the card database…</p>}
         {db && (
-          <>
+          <div key={route} className="page-anim">
             {route === '' && <HomePage db={db} />}
             {route === 'learn' && <LearnPage lesson={rest[0]} />}
             {route === 'play' && <PlayPage />}
             {route === 'decks' && <DecksPage deckId={rest[0]} />}
             {route === 'cards' && <CardsPage />}
-          </>
+          </div>
         )}
       </main>
     </>
