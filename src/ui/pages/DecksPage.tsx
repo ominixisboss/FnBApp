@@ -13,6 +13,7 @@ import CardFilters from '../components/CardFilters';
 import { emptyFilter, filterCards } from '../search';
 import { downloadText, readFile, safeFileName, setNavGuard } from '../navGuard';
 import { Toast } from '../components/Fx';
+import { offlineImagesSupported, saveImagesForOffline } from '../offline';
 
 export function useDecks() {
   const [decks, setDecksState] = useState<Deck[]>(() => loadDecks());
@@ -63,6 +64,16 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
     }
   };
   const flash = (t: string) => { setToast(t); setTimeout(() => setToast(null), 2300); };
+  // pre-download the art of every card in your decks so it shows without a connection
+  const [offline, setOffline] = useState<string | null>(null);
+  const saveOffline = async () => {
+    const ids = new Set(decks.flatMap((d) => [d.heroId, ...Object.keys(d.cards)]));
+    const urls = [...ids].map((id) => getDb().byId.get(id)?.image ?? '').filter(Boolean);
+    setOffline(`0 / ${urls.length}`);
+    const ok = await saveImagesForOffline(urls, (n, total) => setOffline(`${n} / ${total}`));
+    setOffline(null);
+    flash(ok === urls.length ? `Saved ${ok} card images for offline` : `Saved ${ok} of ${urls.length} card images (check your connection)`);
+  };
   const duplicate = (d: Deck) => {
     setDecks([{ ...d, id: Math.random().toString(36).slice(2, 10), name: `${d.name} (copy)`, updatedAt: Date.now() }, ...decks]);
     flash('Deck duplicated');
@@ -80,10 +91,15 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
           <button onClick={() => setImporting(true)}>Import decklist</button>
           <button onClick={backup} disabled={!decks.length} title="Download all decks as a backup file">⬇ Backup all</button>
           <button onClick={() => restoreRef.current?.click()} title="Load decks from a backup file">⬆ Restore</button>
+          {offlineImagesSupported() && (
+            <button onClick={saveOffline} disabled={!decks.length || offline !== null} title="Download the card images of all your decks so they show without a connection">
+              {offline !== null ? `Saving images… ${offline}` : '📥 Save images for offline'}
+            </button>
+          )}
           <input ref={restoreRef} type="file" accept=".json,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); e.target.value = ''; }} />
         </div>
       </div>
-      <p className="muted small">Decks are saved in this browser. Use <b>Backup all</b> to keep a copy or move decks to another device.</p>
+      <p className="muted small">Decks are saved in this browser. Use <b>Backup all</b> to keep a copy or move decks to another device. Card images you’ve seen are kept for offline play.</p>
       {decks.length === 0 && (
         <div className="panel">
           <p>You don’t have any decks yet. Build one from the card database, import a list from Fabrary or FaB DB, or let the app auto-build a starter deck for any hero.</p>

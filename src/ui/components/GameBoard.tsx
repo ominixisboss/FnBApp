@@ -6,13 +6,16 @@ import {
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
 import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState } from '../../engine/types';
-import { chooseAction, decideOptional, describeAction } from '../../ai/bot';
+import { decideOptional, describeAction } from '../../ai/bot';
+import type { BotDecision } from '../../ai/bot';
+import { askBot } from '../../ai/botClient';
 import { getScript } from '../../engine/cardScript';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
+import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
 import type { ChainLink } from '../../engine/types';
 
@@ -41,6 +44,21 @@ function playSounds(a: GameState, b: GameState) {
   if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) sfx('pitch');
   if (b.turn !== a.turn) sfx(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
   else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) sfx('draw');
+}
+
+/** Vibration for the moments that matter to you: being hit, landing hits, blocking, playing, your turn. */
+function playHaptics(a: GameState, b: GameState) {
+  if (b.phase === 'gameOver' && a.phase !== 'gameOver') return buzz(b.winner === HUMAN ? 'win' : 'lose');
+  const myLoss = a.players[HUMAN].life - b.players[HUMAN].life;
+  const theirLoss = a.players[1].life - b.players[1].life;
+  if (myLoss >= 5) return buzz('bigHit');
+  if (myLoss > 0) return buzz('hit');
+  if (theirLoss > 0) return buzz('dealt');
+  const lastB = b.chain[b.chain.length - 1];
+  const defA = a.chain[a.chain.length - 1]?.defenders.length ?? 0;
+  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA && lastB.attacker !== HUMAN) return buzz('block');
+  if (b.players[HUMAN].turn.played.length > a.players[HUMAN].turn.played.length || (b.chain.length > a.chain.length && b.chain[b.chain.length - 1].attacker === HUMAN)) return buzz('play');
+  if (b.turn !== a.turn && b.turnPlayer === HUMAN) buzz('myTurn');
 }
 
 /**
@@ -110,7 +128,7 @@ function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
         if (d <= -5) shake = true;
       }
     }
-    if (before) playSounds(before, state);
+    if (before) { playSounds(before, state); playHaptics(before, state); }
     if (!before || before.turn !== state.turn) {
       const mine = state.turnPlayer === HUMAN;
       next.banner = { id: seq.current++, text: mine ? 'Your turn' : `${state.players[state.turnPlayer].name.replace(' (bot)', '')}’s turn`, mine };
@@ -161,6 +179,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const logRef = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
+  const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [sound, setSound] = useState(soundEnabled);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
@@ -210,7 +229,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const myTurn = state.priority === HUMAN && state.phase !== 'gameOver';
   const options = useMemo(() => (myTurn ? playOptions(state, HUMAN) : []), [state, myTurn]);
   const defOpts = useMemo(() => (myTurn ? defendOptions(state, HUMAN) : []), [state, myTurn]);
-  const hint = useMemo(() => (myTurn && showHint ? chooseAction(state, HUMAN, 'hard') : null), [state, myTurn, showHint]);
+  // hints are worked out in the background (bot worker) and shown once ready for this exact position
+  const [hintFor, setHintFor] = useState<{ state: GameState; d: BotDecision } | null>(null);
+  useEffect(() => {
+    if (!myTurn || !showHint) return;
+    let off = false;
+    void askBot(state, HUMAN, 'hard').then((d) => { if (!off) setHintFor({ state, d }); });
+    return () => { off = true; };
+  }, [state, myTurn, showHint]);
+  const hint = myTurn && showHint && hintFor?.state === state ? hintFor.d : null;
   // what the hint wants you to do, marked on the cards themselves: numbered steps, cards to pitch, blockers
   const hintMarks = useMemo(() => {
     const m = new Map<number, { kind: 'play' | 'pitch' | 'block' | 'arsenal'; label: string }>();
@@ -249,18 +276,24 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (state.phase === 'gameOver') return;
     const p = state.players[state.priority];
     if (!p.isBot) return;
+    // think in the background while the "thinking" pause plays, then apply the move
+    let cancelled = false;
+    const decision = askBot(state, state.priority);
     const t = setTimeout(() => {
-      setState((s) => {
-        if (s.phase === 'gameOver' || !s.players[s.priority].isBot) return s;
-        try {
-          return applyAction(s, chooseAction(s, s.priority).action);
-        } catch (e) {
-          console.error(e);
-          return applyAction(s, { type: 'pass' });
-        }
+      void decision.then((d) => {
+        if (cancelled) return;
+        setState((s) => {
+          if (s !== state || s.phase === 'gameOver' || !s.players[s.priority].isBot) return s; // the game moved on
+          try {
+            return applyAction(s, d.action);
+          } catch (e) {
+            console.error(e);
+            return applyAction(s, { type: 'pass' });
+          }
+        });
       });
     }, BOT_DELAY);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [state]);
 
   // settings: auto-pay (pick pitch automatically) and auto-pass (skip steps with nothing to do)
@@ -554,6 +587,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         </div>
         <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>

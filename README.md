@@ -16,6 +16,7 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
   - Auto-build a starter deck for any hero.
 - **Deck saving**: edits are kept as a draft until you press **Save** (or Ctrl+S). There's also *Revert*, *Save as copy*, *Duplicate*, an unsaved-changes warning before you leave, `.txt` download per deck, and **Backup all / Restore** as a JSON file to keep decks safe or move them to another device. Decks are stored in the browser (localStorage).
 - **Digital-client game feel**: a full-screen battlefield with no page chrome. Your hand is fanned at the bottom; hover a card to lift it, or drag it onto the battlefield to play it. The opponent's hand is fanned at the top. A big contextual action button (End Turn / No Blocks / Pass / …) sits next to a turn-phase tracker. Hovering a card shows a large preview, and the log and manual tools live in a slide-out drawer. Sound effects are synthesized in the browser and can be muted. The Play lobby has hero-art deck boxes, a matchup panel, difficulty and a big PLAY button.
+- **Smooth on phones**: the bots think in a background worker, so animations never pause while a bot decides. Effects only animate cheap properties (movement and fades).
 - **Animations**: cards dealt into your hand, attacks flying onto the combat chain, blocks sliding in, pitch flashes, floating damage and heal numbers, screen shake on big hits, turn banners, and victory confetti or defeat embers. There's also card tilt with shine, page transitions, and ember particles on the home screen. Toggle them in the top bar; they are also off automatically when your OS asks for reduced motion.
 - **Match history**: every finished game vs the AI is recorded locally (heroes, deck, difficulty, result, turns). This is groundwork for a future stats board and player profile.
 
@@ -50,6 +51,8 @@ The `android/` folder is a [Capacitor](https://capacitorjs.com) project that pac
 - **Build it yourself:** you need JDK 21 and the Android SDK (`ANDROID_HOME`). Run `npm run android:build`; the APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 - **Signing:** builds use a fixed key that is committed on purpose (`android/app/fab-trainer-debug.keystore`), so updates install over each other. It's fine for sideloading; publishing to the Play Store would need your own private release key.
 - **Full screen, landscape:** the app runs sideways and edge to edge, including the strip beside the camera, with the status and navigation bars hidden. Swipe in from an edge to see them for a moment. Buttons and cards stay clear of the camera.
+- **Offline:** games against the bots work without a connection. Card images you've seen are kept on the phone, and **Decks → Save images for offline** downloads the art for every card in your decks.
+- **Vibration:** the phone buzzes when you're hit (harder for big hits), and gives lighter taps when you land damage, block or play a card. Turn it off under ☰ → Vibration.
 - **Phone layout:** a compact header with icon tabs, and a game board with two rows per side so the cards are bigger. Extra game buttons are under ☰. Tap a card to see its details, and tap it again to play it. In a phone browser held upright, the tabs move to a bottom bar.
 
 ## Rules engine
