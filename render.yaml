@@ -1,0 +1,17 @@
+# One-click deploy on Render (render.com → New → Blueprint → pick this repo).
+# The persistent disk keeps accounts, decks and match history between deploys.
+services:
+  - type: web
+    name: fab-trainer
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATA_DIR
+        value: /data
+    disk:
+      name: fab-data
+      mountPath: /data
+      sizeGB: 1
