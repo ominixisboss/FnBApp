@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FaB Trainer</string>
+    <string name="title_activity_main">FaB Trainer</string>
+    <string name="package_name">com.fabtrainer.app</string>
+    <string name="custom_url_scheme">com.fabtrainer.app</string>
+</resources>

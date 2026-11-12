@@ -12,9 +12,13 @@
     "update-cards": "node scripts/build-cards.mjs",
     "server": "tsx server/index.ts",
     "start": "tsx server/index.ts",
-    "typecheck": "tsc -b && tsc -p tsconfig.server.json"
+    "typecheck": "tsc -b && tsc -p tsconfig.server.json",
+    "android:build": "tsc -b && vite build --mode android && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -22,6 +26,7 @@
     "ws": "^8.22.2"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",

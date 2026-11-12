@@ -9,7 +9,8 @@ export type AttackFilter =
   | { kind: 'attackAction' }
   | { kind: 'weapon' }
   | { kind: 'subtype'; value: string } // dagger, sword, arrow, ...
-  | { kind: 'class'; value: string }; // Warrior, Ninja, ...
+  | { kind: 'class'; value: string } // Warrior, Ninja, ...
+  | { kind: 'anyClass'; values: string[] }; // "Assassin or Mystic"
 
 export type Effect =
   | { kind: 'arcane'; amount: number }
@@ -75,6 +76,9 @@ export interface CardScript {
   temper: boolean;
   boost: boolean;
   phantasm: boolean;
+  steam: number; // enters the arena with N steam counters
+  steamUpkeep: boolean; // start of turn: destroy unless you remove a steam counter
+  destroyAt?: 'actionPhase' | 'startOfTurn';
   bloodDebt: boolean;
   costLessPer?: string; // token name: "costs {r} less for each X you control"
   intimidateOnAttack: boolean;
@@ -98,7 +102,7 @@ const SUBTYPES = [
 ];
 const CLASS_WORDS = [
   'Warrior', 'Guardian', 'Ninja', 'Brute', 'Assassin', 'Ranger', 'Runeblade', 'Mechanologist',
-  'Wizard', 'Illusionist', 'Pirate', 'Draconic', 'Light', 'Shadow', 'Earth', 'Ice', 'Lightning',
+  'Wizard', 'Illusionist', 'Pirate', 'Draconic', 'Light', 'Shadow', 'Earth', 'Ice', 'Lightning', 'Mystic', 'Royal',
 ];
 
 function parseFilter(words: string): AttackFilter | null {
@@ -109,6 +113,8 @@ function parseFilter(words: string): AttackFilter | null {
   if (sub) return { kind: 'subtype', value: sub };
   const cls = CLASS_WORDS.find((c) => w === c);
   if (cls) return { kind: 'class', value: cls };
+  const either = w.split(/\s+or\s+/);
+  if (either.length > 1 && either.every((x) => CLASS_WORDS.includes(x))) return { kind: 'anyClass', values: either };
   return null;
 }
 
@@ -152,7 +158,7 @@ export function parseEffect(raw: string): Effect[] | null {
     const f = parseFilter(m[1] ?? '');
     return f ? [{ kind: 'nextAttackGoAgain', filter: f }] : null;
   }
-  if ((m = s.match(/^target (?:(\w+) )?attack(?: action card)? gets \+(\d+)\{p\}(?: and go again)?$/i))) {
+  if ((m = s.match(/^target (?:(\w+(?: or \w+)?) )?attack(?: action card)? gets \+(\d+)\{p\}(?: and go again)?$/i))) {
     const f = parseFilter(m[1] ?? '');
     if (!f) return null;
     const out: Effect[] = [{ kind: 'targetAttackPower', amount: +m[2], filter: f }];
@@ -205,7 +211,7 @@ export function parseEffect(raw: string): Effect[] | null {
 function emptyScript(): CardScript {
   return {
     goAgain: false, dominate: false, overpower: false, piercing: 0, ward: 0, arcaneBarrier: 0,
-    spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false,
+    spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false, steam: 0, steamUpkeep: false,
     intimidateOnAttack: false, additionalCost: {}, onPlay: [], onAttack: [], onHit: [],
     conditional: [], activations: [], modes: [], unparsed: [], coverage: 'full',
   };
@@ -237,6 +243,10 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^stealth$/i.test(s)) return true; // only referenced by other effects
   if (/^phantasm$/i.test(s)) return (sc.phantasm = true);
   if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
+  if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
+  if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
+  if (/^at the beginning of your action phase, destroy this$/i.test(s)) { sc.destroyAt = 'actionPhase'; return true; }
+  if (/^at the start of your turn, destroy this$/i.test(s)) { sc.destroyAt = 'startOfTurn'; return true; }
   if ((m = s.match(/^piercing (\d+)$/i))) return !!(sc.piercing = +m[1]);
   if ((m = s.match(/^ward (\d+)$/i))) return !!(sc.ward = +m[1]);
   if ((m = s.match(/^arcane barrier (\d+)$/i))) return !!(sc.arcaneBarrier = +m[1]);
@@ -391,5 +401,6 @@ export function describeFilter(f: AttackFilter): string {
     case 'weapon': return 'weapon attack';
     case 'subtype': return `${f.value} attack`;
     case 'class': return `${f.value} attack`;
+    case 'anyClass': return `${f.values.join(' or ')} attack`;
   }
 }
