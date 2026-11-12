@@ -11,8 +11,16 @@ export interface CardDb {
 let db: CardDb | null = null;
 let loading: Promise<CardDb> | null = null;
 
+/** Placeholder for cards a player isn't allowed to see in online games. */
+export const HIDDEN_ID = '__hidden__';
+export const HIDDEN_CARD: Card = {
+  id: HIDDEN_ID, name: 'Hidden card', pitch: null, cost: null, power: null, defense: null, health: null,
+  intellect: null, arcane: null, types: [], traits: [], keywords: [], text: '', typeText: '', legal: [],
+  rarity: '', sets: [], printId: '', image: '',
+};
+
 export function makeDb(cards: Card[], builtAt = ''): CardDb {
-  const byId = new Map<string, Card>();
+  const byId = new Map<string, Card>([[HIDDEN_ID, HIDDEN_CARD]]);
   const byName = new Map<string, Card[]>();
   for (const c of cards) {
     byId.set(c.id, c);

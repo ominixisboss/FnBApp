@@ -16,6 +16,11 @@ import { Toast } from '../components/Fx';
 
 export function useDecks() {
   const [decks, setDecksState] = useState<Deck[]>(() => loadDecks());
+  useEffect(() => {
+    const reload = () => setDecksState(loadDecks());
+    window.addEventListener('fab-synced', reload);
+    return () => window.removeEventListener('fab-synced', reload);
+  }, []);
   const setDecks = (d: Deck[]) => {
     setDecksState(d);
     saveDecks(d);

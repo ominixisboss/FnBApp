@@ -85,8 +85,20 @@ function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
   return fx;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver }: { initial: GameState; tutorial: boolean; onExit: () => void; onRematch: () => void; onGameOver?: (s: GameState) => void }) {
-  const [state, setState] = useState(initial);
+export interface OnlineLink {
+  state: GameState;
+  send(a: Action): void;
+  opponent: { name: string; connected: boolean } | null;
+  error: string | null;
+}
+
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online }: {
+  initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState) => void;
+  /** when set, the game is played on the server: state comes from it and actions are sent to it */
+  online?: OnlineLink;
+}) {
+  const [localState, setState] = useState(initial);
+  const state = online ? online.state : localState;
   const [history, setHistory] = useState<GameState[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [defendSel, setDefendSel] = useState<number[]>([]);
@@ -139,8 +151,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   const act = (a: Action, snapshot = true) => {
     try {
-      if (snapshot) setHistory((h) => [...h.slice(-30), state]);
-      setState(applyAction(state, a));
+      const next = applyAction(state, a); // validates the move (throws if illegal)
+      if (online) online.send(a);
+      else {
+        if (snapshot) setHistory((h) => [...h.slice(-30), state]);
+        setState(next);
+      }
       setPending(null);
       setDefendSel([]);
       setError(null);
@@ -169,11 +185,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, [state]);
 
   // auto-pass reactions when there is nothing to respond with
+  const sendOnline = online?.send;
   useEffect(() => {
     if (!myTurn || state.phase !== 'reaction' || options.length > 0) return;
-    const t = setTimeout(() => setState((s) => (s.priority === HUMAN && s.phase === 'reaction' ? applyAction(s, { type: 'pass' }) : s)), 450);
+    const t = setTimeout(() => {
+      if (sendOnline) sendOnline({ type: 'pass' });
+      else setState((s) => (s.priority === HUMAN && s.phase === 'reaction' ? applyAction(s, { type: 'pass' }) : s));
+    }, 450);
     return () => clearTimeout(t);
-  }, [state, myTurn, options.length]);
+  }, [state, myTurn, options.length, sendOnline]);
 
   useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
@@ -299,7 +319,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     prompt = (
       <>
         <span className="msg"><b>{state.winner === HUMAN ? '🏆 Victory!' : '💀 Defeat.'}</b> {state.players[state.winner ?? 0].name} wins on turn {state.turn}.</span>
-        <button className="primary" onClick={onRematch}>Rematch</button>
+        {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
         <button onClick={onExit}>New game</button>
       </>
     );
@@ -374,12 +394,17 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       <div className="arena-bar">
         <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
         <div className="grow" />
-        <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>
-        <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>
+        {online && (
+          <span className={`online-badge ${online.opponent?.connected === false ? 'warn' : ''}`}>
+            ● Online{online.opponent?.connected === false ? ' · opponent disconnected (they forfeit in 2 min)' : ''}
+          </span>
+        )}
+        {!online && <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
+        {!online && <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
         <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
-        <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>
+        {!online && <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>}
         <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}</button>
-        <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || !myTurn}>⚑<span>Concede</span></button>
+        <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
       </div>
 
@@ -446,7 +471,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           ))}
         </div>
         <div className={`prompt ${myTurn ? 'your-move' : ''}`}>{prompt}</div>
-        {error && <div className="dock-error">{error}</div>}
+        {(error || online?.error) && <div className="dock-error">{error ?? online?.error}</div>}
       </div>
 
       {hint && showHint && state.phase !== 'gameOver' && (
@@ -481,7 +506,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             {' '}· you finished on {Math.max(0, me.life)} life.
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
-            <button className="primary" onClick={onRematch}>Rematch</button>
+            {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
             <button className="gold" onClick={onExit}>New game</button>
             <button onClick={() => setOverlay(false)}>View board</button>
           </div>

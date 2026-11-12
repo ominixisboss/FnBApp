@@ -530,3 +530,45 @@ html.in-game .preview .card { --w: clamp(200px, 19vw, 300px) !important; width: 
   .hc-name { font-size: 1.05rem; }
   .hc-text { font-size: .92rem; }
 }
+
+/* ===================================================== profile, account, online */
+.avatar { border-radius: 50%; background-color: #2a211a; background-size: 230%; background-position: 50% 22%; border: 2px solid #a57c46;
+  display: grid; place-items: center; flex-shrink: 0; box-shadow: 0 2px 8px #000a; color: #8d7d68; font-weight: 700; }
+.avatar-btn { padding: 0; border: 0; background: none; border-radius: 50%; }
+.avatar-btn:hover .avatar { border-color: var(--accent); }
+.me-chip { display: flex; align-items: center; gap: .4rem; text-decoration: none; color: var(--text); padding: .15rem .6rem .15rem .15rem; border-radius: 999px; border: 1px solid var(--line); background: #0006; font-size: .85rem; }
+.me-chip:hover { border-color: var(--accent); }
+.profile-head { display: flex; gap: 1.2rem; align-items: center; }
+.name-input { font: 700 1.6rem Cinzel, Georgia, serif; background: transparent; border: 1px solid transparent; padding: .1em .3em; max-width: 100%; }
+.name-input:hover, .name-input:focus { border-color: var(--line); }
+.stat-tiles { margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.stat-tile { display: flex; flex-direction: column; gap: .2rem; }
+.stat-tile small { color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-size: .7rem; }
+.stat-tile b { font-size: 1.7rem; font-variant-numeric: tabular-nums; }
+.profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr 3em 3.5em; gap: .5rem; align-items: center; font-size: .85rem; }
+.bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { position: relative; height: 12px; background: #ffffff0d; border-radius: 4px; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #d9a441; border-radius: 0 4px 4px 0; transition: width .4s ease-out; }
+.bar-row:hover .bar-fill { background: #f0bf5c; }
+.bar-value { text-align: right; font-variant-numeric: tabular-nums; }
+.bar-games { text-align: right; font-size: .78rem; font-variant-numeric: tabular-nums; }
+.bar-tip { position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); white-space: nowrap; z-index: 5; background: #0d0a08; border: 1px solid var(--line); border-radius: 6px; padding: .2em .5em; font-size: .75rem; pointer-events: none; }
+.form-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.form-pip { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; font-weight: 800; font-size: .75rem; }
+.form-pip.w { background: #1f3b24; color: #9fe0a8; border: 1px solid #5fae6b; }
+.form-pip.l { background: #3b1f1f; color: #ffaaa3; border: 1px solid #b8322a; }
+table.history { width: 100%; border-collapse: collapse; font-size: .85rem; }
+table.history th, table.history td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #ffffff10; }
+table.history th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+table.history tr.me-row td { background: #d9a4411a; }
+@media (max-width: 640px) { table.history th:nth-child(5), table.history td:nth-child(5), table.history th:nth-child(7), table.history td:nth-child(7) { display: none; } }
+.account { max-width: 520px; margin: 1rem auto; }
+.server-status { font-size: .85rem; }
+.room-code { font: 700 2.4rem/1 Cinzel, Georgia, serif; letter-spacing: .2em; color: #f6d58e; }
+.searching { font-family: Cinzel, Georgia, serif; color: #f6d58e; }
+.dots::after { content: ''; animation: dots 1.4s steps(4) infinite; }
+@keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+.online-badge { font-size: .8rem; color: var(--good); background: #0008; border: 1px solid #5fae6b55; border-radius: 999px; padding: .2em .7em; }
+.online-badge.warn { color: var(--yellow); border-color: #e2c23b88; }

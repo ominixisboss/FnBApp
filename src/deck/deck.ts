@@ -283,10 +283,20 @@ export function loadDecks(): Deck[] {
   }
 }
 
-export function saveDecks(decks: Deck[]) {
+/** Save decks locally without notifying the sync layer (used by sync itself). */
+export function saveDecksLocal(decks: Deck[]) {
   try {
     localStorage.setItem(KEY, JSON.stringify(decks));
   } catch {
     /* storage unavailable */
   }
+}
+
+/** Save decks and let the sync layer push them to the server when signed in. */
+export function saveDecks(decks: Deck[]) {
+  const before = new Set(loadDecks().map((d) => d.id));
+  const now = new Set(decks.map((d) => d.id));
+  const removed = [...before].filter((id) => !now.has(id));
+  saveDecksLocal(decks);
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fab-decks', { detail: { removed } }));
 }
