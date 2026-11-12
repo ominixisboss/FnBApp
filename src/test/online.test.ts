@@ -119,6 +119,32 @@ describe('online play', () => {
     cb.ws.close();
   }, 60_000);
 
+  it('sandbox rooms allow manual moves of your own cards only; normal rooms refuse them', async () => {
+    const a = await account('frank');
+    const b = await account('gina');
+    const ca = await connect(a.token);
+    const cb = await connect(b.token);
+    const deck = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
+    ca.ws.send(JSON.stringify({ t: 'host', deck, format: 'blitz', sandbox: true }));
+    await wait(300);
+    cb.ws.send(JSON.stringify({ t: 'join', code: ca.waiting!.code, deck }));
+    await wait(400);
+    // gina (seat 1) moves a card from her hand to her graveyard, speaking as "player 0" from her own view
+    const mine = cb.states.at(-1)!.players[0].hand[0];
+    cb.ws.send(JSON.stringify({ t: 'act', action: { type: 'manual', op: 'move', player: 0, uid: mine.uid, to: 'graveyard' } }));
+    await wait(300);
+    expect(cb.states.at(-1)!.players[0].graveyard.some((g) => g.uid === mine.uid)).toBe(true);
+    expect(ca.states.at(-1)!.players[1].graveyard.some((g) => g.uid === mine.uid)).toBe(true); // frank sees it too
+    // she can't touch frank's cards
+    const his = ca.states.at(-1)!.players[0].hand[0];
+    const errs = cb.errors.length;
+    cb.ws.send(JSON.stringify({ t: 'act', action: { type: 'manual', op: 'move', player: 1, uid: his.uid, to: 'graveyard' } }));
+    await wait(300);
+    expect(cb.errors.length).toBe(errs + 1);
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
+
   it('ranked quick match moves ratings; friends and presence', async () => {
     const a = await account('dana');
     const b = await account('eve');

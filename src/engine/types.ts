@@ -1,7 +1,8 @@
 import type { AttackFilter, Effect } from './cardScript';
 
 export type PlayerId = 0 | 1;
-export type Difficulty = 'easy' | 'normal' | 'hard';
+/** 'goldfish' = an opponent that never acts (for testing decks in the sandbox) */
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'goldfish';
 
 export interface CardInst {
   uid: number;

@@ -5,7 +5,7 @@ import {
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
-import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState } from '../../engine/types';
+import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState, Zone } from '../../engine/types';
 import { decideOptional, describeAction } from '../../ai/bot';
 import type { BotDecision } from '../../ai/bot';
 import { askBot } from '../../ai/botClient';
@@ -169,6 +169,8 @@ export interface OnlineLink {
   send(a: Action): void;
   opponent: { name: string; connected: boolean } | null;
   error: string | null;
+  /** private room where manual moves are allowed (like a tabletop) */
+  sandbox?: boolean;
   /** the opponent's latest emote, and sending your own */
   emote?: { id: string; at: number } | null;
   sendEmote?: (id: string) => void;
@@ -181,7 +183,7 @@ function EmoteBubble({ id, mine }: { id: string; mine?: boolean }) {
   return <div className={`emote-bubble ${mine ? 'mine' : 'theirs'}`}><span>{e[1]}</span> {e[2]}</div>;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel }: {
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel, sandbox }: {
   initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats, replay?: { initial: GameState; actions: Action[] }) => void;
   /** the player's equipped card sleeve and playmat */
   cosmetics?: { sleeve?: string; mat?: string };
@@ -191,6 +193,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   watch?: (s: GameState) => void;
   /** what to call the opponent screen's rematch button */
   rematchLabel?: string;
+  /** sandbox: start with manual moves on */
+  sandbox?: boolean;
   /** when set, the game is played on the server: state comes from it and actions are sent to it */
   online?: OnlineLink;
 }) {
@@ -216,6 +220,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
   const [pitchOrderOn, setPitchOrderOn] = useState(() => readSetting('pitchorder', false));
+  // manual moves (sandbox): tap any card to move it anywhere
+  const manualAllowed = !online || !!online.sandbox;
+  const [manual, setManual] = useState(!!sandbox);
+  const [moveMenu, setMoveMenu] = useState<{ inst: CardInst; player: PlayerId } | null>(null);
   const [ordering, setOrdering] = useState<{ action: Action; order: number[] } | null>(null);
   const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [emoteOpen, setEmoteOpen] = useState(false);
@@ -486,6 +494,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   };
   const clickHand = (inst: CardInst, rect?: DOMRect) => {
     setError(null);
+    if (manual && !pending) return setMoveMenu({ inst, player: HUMAN });
     if (rect) lastClick.current = rect;
     else rememberRect(inst.uid);
     if (pending) {
@@ -510,6 +519,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   const clickArena = (inst: CardInst) => {
     rememberRect(inst.uid);
+    if (manual) return setMoveMenu({ inst, player: HUMAN });
     if (myTurn && state.phase === 'defend' && defOpts.some((d) => d.uid === inst.uid)) {
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
@@ -694,6 +704,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
@@ -711,7 +722,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       <div className="arena-board" ref={colRef}>
         <div className="mat">
           <div ref={oppRef}>
-            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
+            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => (manual && !online ? setMoveMenu({ inst: i, player: 1 }) : setDetail(cardOf(i)))} onZone={setZone} fx={fx} onDeck={manual && !online ? () => setMoveMenu({ inst: opp.hero, player: 1 }) : undefined} />
           </div>
           <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
           {!!state.stack?.length && (
@@ -737,6 +748,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             }}
             marker={(inst) => hintMarker(inst.uid)}
             arsenalClick={(i) => clickHand(i)}
+            onDeck={manual ? () => setMoveMenu({ inst: me.hero, player: HUMAN }) : undefined}
             arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
           />
@@ -844,6 +856,56 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {onGameOver && <ProgressGains before={progressBefore} />}
         </GameOverOverlay>
       )}
+      {manual && <div className="manual-banner">✋ Manual moves on: tap a card to move it · <button className="small" onClick={() => setManual(false)}>Done</button></div>}
+      {moveMenu && (() => {
+        const pl = state.players[moveMenu.player];
+        const isHero = moveMenu.inst.uid === pl.hero.uid;
+        const eq = pl.equipment.find((e) => e.inst.uid === moveMenu.inst.uid);
+        const wp = pl.weapons.find((w) => w.inst.uid === moveMenu.inst.uid);
+        const pm = pl.permanents.find((x) => x.inst.uid === moveMenu.inst.uid);
+        const go = (a: Action) => { act(a); setMoveMenu(null); };
+        const move = (to: Zone, bottom?: boolean) => go({ type: 'manual', op: 'move', player: moveMenu.player, uid: moveMenu.inst.uid, to, bottom });
+        return (
+          <div className="modal-bg" onClick={() => setMoveMenu(null)}>
+            <div className="modal move-menu" onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ margin: 0 }}>{isHero ? `${pl.name}: deck & hero` : cardOf(moveMenu.inst).name}</h3>
+              {isHero ? (
+                <div className="row">
+                  <button onClick={() => go({ type: 'manual', op: 'draw', player: moveMenu.player })}>Draw a card</button>
+                  <button onClick={() => go({ type: 'manual', op: 'shuffle', player: moveMenu.player })}>Shuffle deck</button>
+                  <button onClick={() => { setMoveMenu(null); setZone({ title: `${pl.name}'s deck (top first)`, cards: pl.deck }); }}>Search deck</button>
+                  <button onClick={() => go({ type: 'manual', op: 'life', player: moveMenu.player, amount: -1 })}>−1 ♥</button>
+                  <button onClick={() => go({ type: 'manual', op: 'life', player: moveMenu.player, amount: 1 })}>+1 ♥</button>
+                </div>
+              ) : eq || wp ? (
+                <div className="row">
+                  {eq && <button onClick={() => go({ type: 'manual', op: 'equipment', player: moveMenu.player, uid: eq.inst.uid, destroyed: !eq.destroyed })}>{eq.destroyed ? 'Restore' : 'Destroy'}</button>}
+                  <button onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: moveMenu.inst.uid, amount: 1 })}>+1 counter</button>
+                  <button onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: moveMenu.inst.uid, amount: -1 })}>−1 counter</button>
+                </div>
+              ) : (
+                <>
+                  <div className="small muted">Move to</div>
+                  <div className="move-grid">
+                    {([['hand', '✋ Hand'], ['arsenal', '🎯 Arsenal'], ['pitch', '⛀ Pitch'], ['graveyard', '🪦 Graveyard'], ['banished', '🚫 Banished'], ['arena', '✨ Arena (aura / item / ally)'], ['soul', '☀ Soul']] as [Zone, string][]).map(([z, label]) => (
+                      <button key={z} onClick={() => move(z)}>{label}</button>
+                    ))}
+                    <button onClick={() => move('deck')}>⬆ Top of deck</button>
+                    <button onClick={() => move('deck', true)}>⬇ Bottom of deck</button>
+                  </div>
+                  {pm && (
+                    <div className="row"><span className="small">Counters: {pm.counters ?? 0}</span>
+                      <button className="small" onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: pm.inst.uid, amount: 1 })}>+1</button>
+                      <button className="small" onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: pm.inst.uid, amount: -1 })}>−1</button>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="row"><button className="small" onClick={() => { setDetail(cardOf(moveMenu.inst)); setMoveMenu(null); }}>Card details</button><button className="small" onClick={() => setMoveMenu(null)}>Cancel</button></div>
+            </div>
+          </div>
+        );
+      })()}
       {ordering && (
         <div className="modal-bg">
           <div className="modal" style={{ maxWidth: 560 }}>
@@ -939,7 +1001,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <button className="close small" onClick={() => setZone(null)}>✕</button>
             <h2>{zone.title} ({zone.cards.length})</h2>
-            <div className="grid">{zone.cards.map((c) => <CardView key={c.uid} card={cardOf(c)} onClick={() => setDetail(cardOf(c))} />)}</div>
+            <div className="grid">{zone.cards.map((c) => (
+              <div key={c.uid}>
+                <CardView card={cardOf(c)} onClick={() => setDetail(cardOf(c))} />
+                {manual && (c.owner === HUMAN || !online) && <button className="small" style={{ width: '100%', marginTop: 4 }} onClick={() => { setZone(null); setMoveMenu({ inst: c, player: c.owner }); }}>Move…</button>}
+              </div>
+            ))}</div>
           </div>
         </div>
       )}
@@ -962,10 +1029,10 @@ function Slot({ area, label, filled, onClick, className = '', children, uid, cou
   );
 }
 
-function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx }: {
+function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx, onDeck }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
   onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string; marker?: (i: CardInst) => string | undefined;
-  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx;
+  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx; onDeck?: () => void;
 }) {
   const active = state.turnPlayer === p.id;
   const effects = pendingEffectsText(p);
@@ -1036,7 +1103,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           ? <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid} data-from="opphand"><CardBack width={SLOT} label="A" /></div>
           : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} marker={marker?.(p.arsenal[0])} /></div>)}
       </Slot>
-      <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
+      <Slot area="deck" label="Deck" filled={p.deck.length > 0} onClick={onDeck} className={onDeck ? 'clickable' : ''}>
         {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
       </Slot>
       {pile('pitch', 'Pitch', p.pitch, 'anim-pitch', `${p.name}'s pitch zone`)}

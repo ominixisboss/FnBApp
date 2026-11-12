@@ -517,6 +517,11 @@ function planArsenal(s: GameState, pid: PlayerId): BotDecision {
 
 export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficulty): BotDecision {
   const diff = difficulty ?? s.players[pid].difficulty;
+  if (diff === 'goldfish') {
+    // a practice dummy: never plays, never blocks
+    const a: Action = s.phase === 'defend' ? { type: 'defend', uids: [] } : s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' };
+    return { action: a, reason: 'Goldfish: does nothing.' };
+  }
   if (s.phase === 'action' && s.stack?.length) return planStackResponse(s, pid, diff);
   switch (s.phase) {
     case 'defend': return planDefense(s, pid, diff);

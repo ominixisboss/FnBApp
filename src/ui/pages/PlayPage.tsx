@@ -27,6 +27,8 @@ interface Setup {
   oppHeroId: string; // hero id or 'random'
   difficulty: Difficulty;
   tutorial: boolean;
+  /** sandbox: manual moves on, results not recorded */
+  sandbox?: boolean;
 }
 
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
@@ -48,6 +50,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const net = useOnline();
   const auth = useAuth();
   const [rating, setRating] = useState<MyRating | null>(null);
+  const [roomSandbox, setRoomSandbox] = useState(false);
   useEffect(() => { if (auth.user && auth.available && mode === 'online') myRating().then(setRating, () => setRating(null)); }, [auth.user, auth.available, mode, net.status]);
   // (re)connect when signed in, so an online game in progress resumes after a reload
   useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
@@ -95,7 +98,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         initial={g}
         tutorial={false}
         cosmetics={loadProfile().cosmetics}
-        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error, emote: net.emote, sendEmote: online.emote }}
+        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error, emote: net.emote, sendEmote: online.emote, sandbox: net.sandbox }}
         extraResult={net.rated ? <div className="rated-result">{net.matchId?.startsWith('online-') ? 'Ranked' : ''} rating {net.rated.before} → <b className={net.rated.after >= net.rated.before ? 'ok' : 'err'}>{net.rated.after}</b> ({net.rated.after >= net.rated.before ? '+' : ''}{net.rated.after - net.rated.before})</div> : undefined}
         onExit={() => { if (g.phase === 'gameOver') online.done(); else online.leave(); }}
         onGameOver={(s, stats) => {
@@ -110,7 +113,10 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     );
   }
 
-  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} onGameOver={onGameOver} cosmetics={loadProfile().cosmetics} />;
+  if (game) {
+    const practice = setup.sandbox || setup.difficulty === 'goldfish';
+    return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} sandbox={setup.sandbox} onExit={() => setGame(null)} onRematch={start} onGameOver={practice ? undefined : onGameOver} cosmetics={loadProfile().cosmetics} />;
+  }
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
   const formatDecks = decks.filter((d) => d.format === setup.format || setup.format === 'casual');
@@ -199,7 +205,8 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                   )}
                   {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}
                   <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
-                  <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format); }}>Create private room</button>
+                  <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                  <label className="row small" title="Both players can move cards by hand, like a tabletop (for cards the simulator doesn't automate). Every move shows in the log."><input type="checkbox" checked={roomSandbox} onChange={(e) => setRoomSandbox(e.target.checked)} /> Allow manual moves in my room</label>
                   <div className="row">
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />
                     <button disabled={!selectedHero || joinCode.length < 5} onClick={() => { const d = deckForOnline(); if (d) online.join(joinCode, d); }}>Join</button>
@@ -227,10 +234,13 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         {setup.oppHeroId !== 'random' && <button className="small" onClick={() => setSetup({ ...setup, oppHeroId: 'random' })}>🎲 Random opponent</button>}
         <div className="lobby-label">Difficulty</div>
         <div className="seg">
-          {(['easy', 'normal', 'hard'] as Difficulty[]).map((d) => (
-            <button key={d} className={setup.difficulty === d ? 'on' : ''} onClick={() => setSetup({ ...setup, difficulty: d })}>{d[0].toUpperCase() + d.slice(1)}</button>
+          {(['easy', 'normal', 'hard', 'goldfish'] as Difficulty[]).map((d) => (
+            <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d[0].toUpperCase() + d.slice(1)}</button>
           ))}
         </div>
+        <label className="row small" title="Tap any card to move it anywhere: play cards the simulator doesn't automate, test lines, set up positions. Sandbox games aren't recorded.">
+          <input type="checkbox" checked={!!setup.sandbox} onChange={(e) => setSetup({ ...setup, sandbox: e.target.checked })} /> 🛠 Sandbox (manual moves, not recorded)
+        </label>
         <label className="row small">
           <input type="checkbox" checked={setup.tutorial} onChange={(e) => setSetup({ ...setup, tutorial: e.target.checked })} /> Show move suggestions
         </label>

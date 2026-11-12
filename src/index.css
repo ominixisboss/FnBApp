@@ -1251,3 +1251,10 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .rule-tip { margin: .1rem 0 .3rem .6rem; font-size: .78em; color: #c9b896; }
 .rule-tip summary { cursor: pointer; color: var(--accent); list-style: none; display: inline; }
 .rule-tip[open] { background: #0005; border-left: 2px solid #a57c46; padding: .2rem .5rem; border-radius: 4px; }
+
+/* ===================================================== sandbox / manual moves */
+.manual-banner { position: absolute; z-index: 35; left: 50%; top: calc(46px + var(--sa-t)); transform: translateX(-50%); padding: .3rem .8rem; border-radius: 999px;
+  background: #2a1e0aee; border: 1px solid var(--accent); font-size: .8rem; display: flex; gap: .5rem; align-items: center; }
+.move-menu { max-width: 460px; display: flex; flex-direction: column; gap: .6rem; }
+.move-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.move-grid button { text-align: left; }

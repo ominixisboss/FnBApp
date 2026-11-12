@@ -11,7 +11,7 @@ import { viewFor } from '../src/online/view';
 import { store } from './db';
 
 export type ClientMsg =
-  | { t: 'host'; deck: DeckList; format: DeckFormat }
+  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean }
   | { t: 'join'; code: string; deck: DeckList }
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
   | { t: 'cancel' }
@@ -24,7 +24,7 @@ export type ClientMsg =
 export type ServerMsg =
   | { t: 'hello'; user: string; inGame: boolean }
   | { t: 'waiting'; code?: string; format: string; queue?: boolean }
-  | { t: 'state'; code: string; state: GameState; opponent: { name: string; avatar: string | null; connected: boolean }; matchId: string }
+  | { t: 'state'; code: string; state: GameState; opponent: { name: string; avatar: string | null; connected: boolean }; matchId: string; sandbox?: boolean }
   | { t: 'opponent'; connected: boolean }
   | { t: 'error'; message: string }
   | { t: 'cancelled' }
@@ -55,6 +55,8 @@ interface Room {
   state: GameState | null;
   isPrivate: boolean;
   ended: boolean;
+  /** manual moves allowed (private rooms only, chosen by the host) */
+  sandbox?: boolean;
   /** for replays: the starting position and every action in order (concessions note who conceded) */
   initial?: GameState;
   actions: { a: Action; by?: PlayerId }[];
@@ -118,7 +120,7 @@ function broadcast(room: Room) {
     const opp = room.seats[1 - i];
     send(seat.ws, {
       t: 'state', code: room.code, state: viewFor(room.state!, i as PlayerId), matchId: `online-${room.code}`,
-      opponent: { name: opp.name, avatar: opp.avatar, connected: !!opp.ws },
+      opponent: { name: opp.name, avatar: opp.avatar, connected: !!opp.ws }, sandbox: !!room.sandbox,
     });
   });
 }
@@ -260,7 +262,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           return;
         }
       }
-      const room: Room = { code: newCode(), format, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [] };
+      const room: Room = { code: newCode(), format, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       if (msg.t === 'queue') queues.set(format, room);
@@ -301,7 +303,18 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (!room?.state || room.ended) return err('You’re not in a game.');
       const i = seatOf(room, user.id) as PlayerId;
       const a = msg.action;
-      if (!a || typeof a !== 'object' || a.type === 'manual') return err('That action isn’t allowed online.');
+      if (!a || typeof a !== 'object') return err('That action isn’t allowed online.');
+      if (a.type === 'manual') {
+        // tabletop rooms: you may move your own cards and change your own counters; everyone sees it in the log
+        if (!room.sandbox) return err('Manual moves aren’t allowed in this room.');
+        if (a.op === 'power') return err('Use the attack’s own cards to change its power.');
+        // each client sees itself as player 0: translate to the real seat
+        const real = 'player' in a ? { ...a, player: (a.player === 0 ? i : 1 - i) as PlayerId } : a;
+        if ('player' in real && real.player !== i) return err('You can only move your own cards.');
+        try { room.state = applyAction(room.state, real); room.actions.push({ a: real }); } catch (e) { return err(e instanceof Error ? e.message : String(e)); }
+        broadcast(room);
+        return;
+      }
       try {
         if (a.type === 'concede') concede(room, i);
         else {

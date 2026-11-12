@@ -75,3 +75,23 @@ describe('the stack and priority', () => {
     expect(me.deck.slice(-2).map((c) => c.uid)).toEqual([y.uid, b.uid]); // the end of the deck array is the bottom
   });
 });
+
+describe('sandbox moves and the goldfish', () => {
+  it('moves any card to any zone and back', async () => {
+    const { chooseAction } = await import('../ai/bot');
+    let s = setup([]);
+    const c = s.players[0].hand[0];
+    s = applyAction(s, { type: 'manual', op: 'move', player: 0, uid: c.uid, to: 'banished' });
+    expect(s.players[0].banished.some((b) => b.uid === c.uid)).toBe(true);
+    s = applyAction(s, { type: 'manual', op: 'move', player: 0, uid: c.uid, to: 'deck', bottom: true });
+    expect(s.players[0].deck.at(-1)!.uid).toBe(c.uid);
+    s = applyAction(s, { type: 'manual', op: 'move', player: 0, uid: c.uid, to: 'arena' });
+    expect(s.players[0].permanents.some((p) => p.inst.uid === c.uid)).toBe(true);
+    s = applyAction(s, { type: 'manual', op: 'counter', player: 0, uid: c.uid, amount: 2 });
+    expect(s.players[0].permanents.find((p) => p.inst.uid === c.uid)!.counters).toBe(2);
+    // a goldfish never acts
+    s.players[1].difficulty = 'goldfish';
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    if (s.phase === 'defend') expect(chooseAction(s, 1).action).toEqual({ type: 'defend', uids: [] });
+  });
+});
