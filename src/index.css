@@ -923,3 +923,67 @@ table.history tr.me-row td { background: #d9a4411a; }
 }
 /* popups stay clear of the camera cut-out */
 .modal-bg { padding-left: max(1rem, var(--sa-l)); padding-right: max(1rem, var(--sa-r)); padding-top: max(1rem, var(--sa-t)); }
+
+/* ===================================================== move suggestions on the cards */
+/* gold + number = play these, in this order; blue ⛀ = pitch these to pay; 🛡 = block with these; A = arsenal */
+.card .hint-marker {
+  position: absolute; top: 4%; left: 6%; z-index: 6; pointer-events: none;
+  width: clamp(18px, calc(var(--w, 150px) * .26), 34px); aspect-ratio: 1; border-radius: 50%;
+  display: grid; place-items: center; font: 800 clamp(11px, calc(var(--w, 150px) * .15), 19px)/1 Inter, system-ui, sans-serif;
+  color: #1b1307; background: radial-gradient(circle at 35% 30%, #fff3c4, #f0b542 60%, #a8741d);
+  border: 2px solid #fff8dd; box-shadow: 0 0 0 2px #0009, 0 0 14px #f6c35a; animation: hintPop .35s cubic-bezier(.2,1.6,.4,1) both;
+}
+@keyframes hintPop { from { transform: scale(0); } to { transform: scale(1); } }
+.card.hint-play { box-shadow: 0 0 0 3px #f6d58e, 0 0 22px 6px #f0b542cc !important; animation: hintGlow 1.3s ease-in-out infinite !important; }
+@keyframes hintGlow { 50% { box-shadow: 0 0 0 3px #fff1c2, 0 0 34px 10px #f6c35aee; } }
+.card.hint-pitch { box-shadow: 0 0 0 3px #8fc1ff, 0 0 18px 4px #4a8bffaa !important; }
+.card.hint-pitch .hint-marker { color: #fff; background: radial-gradient(circle at 35% 30%, #cfe4ff, #4a8bff 60%, #1d4f9a); border-color: #e2efff; box-shadow: 0 0 0 2px #0009, 0 0 14px #4a8bff; }
+.card.hint-block { box-shadow: 0 0 0 3px #8fe0a0, 0 0 20px 5px #5fae6bcc !important; animation: hintGlowG 1.3s ease-in-out infinite !important; }
+@keyframes hintGlowG { 50% { box-shadow: 0 0 0 3px #d4ffdc, 0 0 32px 9px #5fae6bee; } }
+.card.hint-block .hint-marker { background: radial-gradient(circle at 35% 30%, #e4ffe9, #5fae6b 60%, #2c6a37); border-color: #e4ffe9; box-shadow: 0 0 0 2px #0009, 0 0 14px #5fae6b; }
+.card.hint-arsenal { box-shadow: 0 0 0 3px #d6b3ff, 0 0 20px 5px #9b6bffaa !important; }
+.card.hint-arsenal .hint-marker { color: #fff; background: radial-gradient(circle at 35% 30%, #f0e4ff, #9b6bff 60%, #5a2fae); border-color: #f0e4ff; }
+/* hand cards: lift the suggested ones a little so they stand out even in the collapsed phone hand */
+.fan-card:has(.card.hint-play) > div, .fan-card:has(.card.hint-block) > div, .fan-card:has(.card.hint-arsenal) > div { transform: translateY(-12px); }
+.no-anim .card.hint-play, .no-anim .card.hint-block { animation: none !important; }
+
+/* ===================================================== smoothness: animate only transform / opacity
+   (box-shadow, filter and backdrop blur force the browser to repaint every frame, which is what stutters on phones) */
+.arena .mat { backdrop-filter: none; background: radial-gradient(ellipse at 50% 50%, #2b2219e6 0%, #17120ee6 75%); }
+.hovercard { backdrop-filter: none; background: linear-gradient(160deg, #2a2119fc, #14100cfc); }
+.nav { backdrop-filter: none !important; }
+
+/* pulsing glows: a static outer glow + an inner glow layer that only fades in and out */
+.card.playable { animation: none; box-shadow: 0 0 0 2px var(--good), 0 0 14px #5fae6b99; }
+.card.hint-play, .card.hint-block { animation: none !important; }
+.card.playable::after, .card.hint-play::after, .card.hint-block::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 4;
+  opacity: 0; animation: glowFade 1.6s ease-in-out infinite; will-change: opacity;
+}
+.card.playable::after { box-shadow: inset 0 0 0 2px #c6f7cf, inset 0 0 18px #5fae6bcc; }
+.card.hint-play::after { box-shadow: inset 0 0 0 2px #fff1c2, inset 0 0 22px #f6c35add; animation-duration: 1.3s; }
+.card.hint-block::after { box-shadow: inset 0 0 0 2px #d4ffdc, inset 0 0 22px #5fae6bdd; animation-duration: 1.3s; }
+@keyframes glowFade { 50% { opacity: 1; } }
+
+/* the big buttons pulse the same way */
+.arena .prompt.your-move button.primary, .play-big { animation: none; position: relative; }
+.arena .prompt.your-move button.primary::after, .play-big:not(:disabled)::after {
+  content: ''; position: absolute; inset: -3px; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 30px 4px #ff8a4fcc; opacity: 0; animation: glowFade 1.8s ease-in-out infinite; will-change: opacity;
+}
+
+/* lunging attackers glow while they fly */
+.chain-card.lunging .card { box-shadow: 0 0 0 2px #ffb36b, 0 0 26px 6px #ff8a3dcc; }
+
+/* hand: smoother, springier movement on dedicated layers */
+.fan-card { will-change: translate, scale; transition: translate .24s cubic-bezier(.2,.9,.25,1.05), rotate .24s cubic-bezier(.2,.9,.25,1), scale .24s cubic-bezier(.2,.9,.25,1.05); }
+@media (orientation: landscape) and (max-height: 560px) {
+  /* raise the phone hand with a transform instead of moving its bottom edge (no layout per frame) */
+  .hand-fan, .hand-fan.open { bottom: calc(var(--peek) - var(--hw) * 1.3956); transition: translate .28s cubic-bezier(.2,.9,.25,1); will-change: translate; }
+  .hand-fan.open { translate: 0 calc(var(--hw) * -1.3956 + var(--peek) - 6px); }
+}
+
+/* drifting dust: one composited layer, smaller */
+.arena::after { inset: -25%; will-change: transform; contain: strict; }
+.no-anim .card.playable::after, .no-anim .card.hint-play::after, .no-anim .card.hint-block::after,
+.no-anim .prompt button.primary::after, .no-anim .play-big::after { display: none; }

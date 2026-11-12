@@ -47,7 +47,7 @@ function playSounds(a: GameState, b: GameState) {
  * "Magic move": after every render, any card element that is new in the DOM glides from where the
  * same card was last seen (another zone), or from its source pile (your deck, the opponent's hand).
  */
-function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>) {
+function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>, state: GameState) {
   const rects = useRef(new Map<string, DOMRect>());
   const seen = useRef(new WeakSet<Element>());
   useLayoutEffect(() => {
@@ -76,13 +76,14 @@ function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>) {
       const sc = Math.max(0.25, Math.min(2.5, prev.width / r.width));
       const delay = fromDeck ? 90 * drawn++ : 0;
       el.animate([
-        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${fromDeck ? -14 : 0}deg)`, filter: 'brightness(1.5)', opacity: fromDeck ? 0.4 : 1 },
-        { transform: 'translate(0, 0) scale(1.06)', filter: 'brightness(1.15)', opacity: 1, offset: 0.8 },
-        { transform: 'none', filter: 'none', opacity: 1 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${fromDeck ? -14 : 0}deg)`, opacity: fromDeck ? 0.4 : 1 },
+        { transform: 'translate(0, 0) scale(1.04)', opacity: 1, offset: 0.82 },
+        { transform: 'none', opacity: 1 },
       ], { duration: fromDeck ? 520 : 440, delay, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
     }
     rects.current = next;
-  });
+    // only when the game changes: measuring every card forces a layout, so skip renders where nothing moved
+  }, [state, oppHandRef]);
 }
 
 /** Watches state transitions and produces short-lived visual effects. */
@@ -164,7 +165,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
-  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement } | null>(null);
+  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
@@ -186,7 +187,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const showcase = useShowcase(state);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setHandOpen(false); }, [state]);
-  useZoneGlide(oppHandRef);
+  useZoneGlide(oppHandRef, state);
   const colRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = colRef.current;
@@ -210,6 +211,20 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const options = useMemo(() => (myTurn ? playOptions(state, HUMAN) : []), [state, myTurn]);
   const defOpts = useMemo(() => (myTurn ? defendOptions(state, HUMAN) : []), [state, myTurn]);
   const hint = useMemo(() => (myTurn && showHint ? chooseAction(state, HUMAN, 'hard') : null), [state, myTurn, showHint]);
+  // what the hint wants you to do, marked on the cards themselves: numbered steps, cards to pitch, blockers
+  const hintMarks = useMemo(() => {
+    const m = new Map<number, { kind: 'play' | 'pitch' | 'block' | 'arsenal'; label: string }>();
+    if (!hint || state.phase === 'gameOver') return m;
+    const a = hint.action;
+    if (hint.plan?.length) hint.plan.forEach((uid, i) => { if (!m.has(uid)) m.set(uid, { kind: 'play', label: String(i + 1) }); });
+    else if (a.type === 'play' || a.type === 'activate') m.set(a.uid, { kind: 'play', label: '1' });
+    for (const uid of hint.planPitch ?? (a.type === 'play' || a.type === 'activate' ? a.pitch : [])) if (!m.has(uid)) m.set(uid, { kind: 'pitch', label: '⛀' });
+    if (a.type === 'defend') a.uids.forEach((uid) => m.set(uid, { kind: 'block', label: '🛡' }));
+    if (a.type === 'arsenal' && a.uid !== null) m.set(a.uid, { kind: 'arsenal', label: 'A' });
+    return m;
+  }, [hint, state.phase]);
+  const hintClass = (uid: number) => { const k = hintMarks.get(uid); return k ? ` hint-${k.kind}` : ''; };
+  const hintMarker = (uid: number) => hintMarks.get(uid)?.label;
   const link = currentLink(state);
 
   const act = (a: Action, snapshot = true) => {
@@ -394,11 +409,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       d.el.setPointerCapture(e.pointerId);
       d.el.classList.add('dragging');
       setDragging(true);
+      d.handTop = handRef.current?.getBoundingClientRect().top ?? window.innerHeight; // measured once, not per move
     }
     d.el.style.setProperty('--dx', `${dx}px`);
     d.el.style.setProperty('--dy', `${dy}px`);
-    const top = handRef.current?.getBoundingClientRect().top ?? window.innerHeight;
-    d.el.classList.toggle('will-play', e.clientY < top - 30);
+    d.el.classList.toggle('will-play', e.clientY < (d.handTop ?? window.innerHeight) - 30);
   };
   const dragReset = (el: HTMLElement) => {
     el.classList.remove('dragging', 'will-play');
@@ -564,11 +579,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             onClickArena={clickArena}
             onZone={setZone}
             arenaClass={(inst) => {
-              if (myTurn && state.phase === 'defend') return defendSel.includes(inst.uid) ? 'sel' : '';
-              return myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '';
+              if (myTurn && state.phase === 'defend') return (defendSel.includes(inst.uid) ? 'sel' : '') + hintClass(inst.uid);
+              return (myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '') + hintClass(inst.uid);
             }}
+            marker={(inst) => hintMarker(inst.uid)}
             arsenalClick={(i) => clickHand(i)}
-            arsenalClass={handClass}
+            arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
           />
         </div>
@@ -593,7 +609,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               onMouseEnter={() => sfx('hover')}
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
-                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
+                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid)} marker={hintMarker(inst.uid)} tilt={false}
                   onInspect={() => { if (compactTouch()) setHandOpen(true); }}
                   onClick={() => {
                     if (suppressClick.current) { suppressClick.current = false; return; }
@@ -754,9 +770,9 @@ function Slot({ area, label, filled, onClick, className = '', children, uid, cou
   );
 }
 
-function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, arsenalClick, arsenalClass, fx }: {
+function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
-  onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string;
+  onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string; marker?: (i: CardInst) => string | undefined;
   arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx;
 }) {
   const active = state.turnPlayer === p.id;
@@ -780,15 +796,15 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
     <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
       {e && (
         <CardView key={`${e.inst.uid}-${e.destroyed}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
-          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
+          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
           badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
     </Slot>
   );
   const weaponSlot = (area: string, w?: { inst: CardInst; usedThisTurn: boolean }, e?: EquipState) => (
     <Slot area={area} label="Weapon" filled={!!(w || e)} uid={w?.inst.uid ?? e?.inst.uid}>
-      {w && <CardView card={cardOf(w.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} />}
-      {!w && e && <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)} className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} />}
+      {w && <CardView card={cardOf(w.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} marker={marker?.(w.inst)} />}
+      {!w && e && <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)} className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)} />}
     </Slot>
   );
   const pile = (area: string, label: string, cards: CardInst[], anim: string, title: string) => {
@@ -813,8 +829,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className="hero-box">
-        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)}
-          className={state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} />
+        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
+          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -825,7 +841,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       <Slot area="arsenal" label="Arsenal" filled={p.arsenal.length > 0} uid={p.arsenal[0]?.uid}>
         {p.arsenal[0] && (isOpp
           ? <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid} data-from="opphand"><CardBack width={SLOT} label="A" /></div>
-          : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>)}
+          : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} marker={marker?.(p.arsenal[0])} /></div>)}
       </Slot>
       <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
         {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
@@ -849,7 +865,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
         {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
           <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop">
-            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} />
+            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
           </div>
         ))}
       </div>
@@ -898,9 +914,13 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     el.animate([
       { transform: 'none' },
       { transform: `translate(${-dx * 0.08}px, ${-dy * 0.08}px) scale(1.08) rotate(${-tilt / 2}deg)`, offset: 0.25 },
-      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, filter: 'brightness(1.6) drop-shadow(0 0 18px #ff8a3d)', offset: 0.55 },
-      { transform: 'none', filter: 'none' },
+      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, offset: 0.55 },
+      { transform: 'none' },
     ], { duration: l.hit ? 620 : 520, easing: 'cubic-bezier(.3,.7,.2,1)' });
+    // a fiery glow while it lunges (a static class, so the browser only moves a layer instead of repainting)
+    el.classList.add('lunging');
+    const t = setTimeout(() => el.classList.remove('lunging'), l.hit ? 620 : 520);
+    return () => clearTimeout(t);
   }, [l.damage, l.attacker, l.hit]);
   // FLIP: fly the attacking card from where it was played (hand, weapon, or the opponent's side)
   useLayoutEffect(() => {
@@ -917,9 +937,9 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     const dy = from.top + from.height / 2 - (to.top + to.height / 2);
     const sc = Math.max(0.5, Math.min(1.6, from.width / to.width));
     el.animate([
-      { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${l.attacker === HUMAN ? -8 : 8}deg)`, filter: 'brightness(1.6)', zIndex: 30 },
-      { transform: 'translate(0,0) scale(1.15) rotate(0deg)', filter: 'brightness(1.3)', offset: 0.75 },
-      { transform: 'none', filter: 'none' },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${l.attacker === HUMAN ? -8 : 8}deg)`, zIndex: 30 },
+      { transform: 'translate(0,0) scale(1.12) rotate(0deg)', offset: 0.75 },
+      { transform: 'none' },
     ], { duration: 520, easing: 'cubic-bezier(.2,.8,.3,1)' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
