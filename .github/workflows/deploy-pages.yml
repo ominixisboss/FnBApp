@@ -1,10 +1,11 @@
-# Builds the app, runs the tests and publishes it to GitHub Pages.
-# One-time setup: repo Settings → Pages → Source: "GitHub Actions".
+# Builds the app and runs the tests on every pull request; publishes to GitHub Pages
+# from main only. One-time setup: repo Settings → Pages → Source: "GitHub Actions".
 name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, master, ccr-67a79f7b-8vj0uh]
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -33,6 +34,7 @@ jobs:
           path: dist
 
   deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:

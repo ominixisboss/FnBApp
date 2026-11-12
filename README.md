@@ -29,7 +29,7 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 
 There are two ways to host it:
 
-1. **Static only (GitHub Pages)**: `.github/workflows/deploy-pages.yml` builds, tests and publishes the app on every push. One-time setup: repo **Settings → Pages → Source: GitHub Actions**. To deploy from a branch other than the default, also allow it under **Settings → Environments → github-pages → Deployment branches**. Everything works except accounts and online play. You can point it at a server under *Account → Server settings*.
+1. **Static only (GitHub Pages)**: `.github/workflows/deploy-pages.yml` builds and tests every pull request and publishes the app on every push to `main`. One-time setup: repo **Settings → Pages → Source: GitHub Actions**. Everything works except accounts and online play. You can point it at a server under *Account → Server settings*.
 2. **Full app with accounts and online play**: run the Node server, which also serves the app.
    - **Render**: New → Blueprint → this repo (uses `render.yaml`: Docker, a 1 GB persistent disk for the database, and a generated `SESSION_SECRET`).
    - **Any Docker host**: `docker build -t fab-trainer . && docker run -p 8787:8787 -v fab-data:/data fab-trainer`
