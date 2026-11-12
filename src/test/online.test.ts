@@ -85,6 +85,8 @@ describe('online play', () => {
 
     let steps = 0;
     for (; steps < 3000; steps++) {
+      // both players get every update; wait until the mover has seen the latest one
+      for (let i = 0; i < 200 && ca.states.length !== cb.states.length; i++) await wait(5);
       const sa = ca.states.at(-1)!;
       if (sa.phase === 'gameOver') break;
       const mover = sa.priority === 0 ? ca : cb;

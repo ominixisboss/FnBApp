@@ -23,6 +23,9 @@ interface Pending { opt: PlayOption; pitch: number[]; mode?: number }
 interface Floater { id: number; player: PlayerId; amount: number }
 interface Fx { floaters: Floater[]; lifeAnim: [string, string]; lifeKey: [number, number]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
 
+const readSetting = (k: string, def: boolean) => { try { const v = localStorage.getItem(`fab-trainer.${k}`); return v === null ? def : v === '1'; } catch { return def; } };
+const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fab-trainer.${k}`, v ? '1' : '0'); } catch { /* ignore */ } };
+
 const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 function playSounds(a: GameState, b: GameState) {
@@ -37,6 +40,48 @@ function playSounds(a: GameState, b: GameState) {
   if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) sfx('pitch');
   if (b.turn !== a.turn) sfx(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
   else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) sfx('draw');
+}
+
+/**
+ * "Magic move": after every render, any card element that is new in the DOM glides from where the
+ * same card was last seen (another zone), or from its source pile (your deck, the opponent's hand).
+ */
+function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>) {
+  const rects = useRef(new Map<string, DOMRect>());
+  const seen = useRef(new WeakSet<Element>());
+  useLayoutEffect(() => {
+    const els = Array.from(document.querySelectorAll<HTMLElement>('.arena [data-flip]'));
+    const next = new Map<string, DOMRect>();
+    const motion = motionOk();
+    const fallback = (from?: string): DOMRect | null => {
+      if (from === 'mydeck') return document.querySelector('.mat-side.me [data-area="deck"]')?.getBoundingClientRect() ?? null;
+      if (from === 'opphand') return oppHandRef.current?.getBoundingClientRect() ?? null;
+      return null;
+    };
+    let drawn = 0;
+    for (const el of els) {
+      const key = el.dataset.flip!;
+      const r = el.getBoundingClientRect();
+      next.set(key, r);
+      if (seen.current.has(el)) continue;
+      seen.current.add(el);
+      if (!motion || !el.animate || r.width === 0) continue;
+      const fromDeck = !rects.current.has(key) && el.dataset.from === 'mydeck';
+      const prev = rects.current.get(key) ?? fallback(el.dataset.from);
+      if (!prev || prev.width === 0) continue;
+      const dx = prev.left + prev.width / 2 - (r.left + r.width / 2);
+      const dy = prev.top + prev.height / 2 - (r.top + r.height / 2);
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) continue;
+      const sc = Math.max(0.25, Math.min(2.5, prev.width / r.width));
+      const delay = fromDeck ? 90 * drawn++ : 0;
+      el.animate([
+        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${fromDeck ? -14 : 0}deg)`, filter: 'brightness(1.5)', opacity: fromDeck ? 0.4 : 1 },
+        { transform: 'translate(0, 0) scale(1.06)', filter: 'brightness(1.15)', opacity: 1, offset: 0.8 },
+        { transform: 'none', filter: 'none', opacity: 1 },
+      ], { duration: fromDeck ? 520 : 440, delay, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    }
+    rects.current = next;
+  });
 }
 
 /** Watches state transitions and produces short-lived visual effects. */
@@ -124,6 +169,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  useZoneGlide(oppHandRef);
   const colRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = colRef.current;
@@ -184,6 +230,30 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     return () => clearTimeout(t);
   }, [state]);
 
+  // settings: auto-pay (pick pitch automatically) and auto-pass (skip steps with nothing to do)
+  const [autoPay, setAutoPay] = useState(() => readSetting('autopay', true));
+  const [autoPass, setAutoPass] = useState(() => readSetting('autopass', true));
+  const shiftHeld = useRef(false);
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { shiftHeld.current = e.shiftKey; };
+    window.addEventListener('keydown', on);
+    window.addEventListener('keyup', on);
+    return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on); };
+  }, []);
+  // auto end turn when nothing can be played, and auto "no block" when nothing can block
+  useEffect(() => {
+    if (!autoPass || !myTurn || pending) return;
+    const nothingToPlay = state.phase === 'action' && options.length === 0;
+    const nothingToBlock = state.phase === 'defend' && defOpts.length === 0;
+    if (!nothingToPlay && !nothingToBlock) return;
+    const t = setTimeout(() => {
+      if (sendOnline) sendOnline(nothingToBlock ? { type: 'defend', uids: [] } : { type: 'pass' });
+      else setState((s) => (s.priority === HUMAN && s.phase === state.phase ? applyAction(s, nothingToBlock ? { type: 'defend', uids: [] } : { type: 'pass' }) : s));
+    }, nothingToPlay ? 1100 : 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, myTurn, options.length, defOpts.length, autoPass, pending]);
+
   // auto-pass reactions when there is nothing to respond with
   const sendOnline = online?.send;
   useEffect(() => {
@@ -222,6 +292,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     const exclude = opt.kind === 'card' ? [opt.uid] : [];
     if (me.resources >= opt.cost) return act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch: [], mode } : { type: 'activate', uid: opt.uid, index: opt.index, pitch: [] });
     if (availableResources(me, exclude) < opt.cost) return setError('Not enough resources.');
+    if (autoPay && !shiftHeld.current) {
+      // like auto-tapping mana: pick the cheapest cards to pitch automatically (hold Shift to choose)
+      const auto = autoPitch(me, opt.cost, exclude);
+      if (auto) return act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch: auto, mode } : { type: 'activate', uid: opt.uid, index: opt.index, pitch: auto });
+    }
     setPending({ opt, pitch: [], mode });
   };
   const finishPay = (pitch: number[]) => {
@@ -403,6 +478,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         {!online && <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
         <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
         {!online && <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>}
+        <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
+        <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
         <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}</button>
         <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
@@ -445,6 +522,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <div
               key={inst.uid}
               data-uid={inst.uid}
+              data-flip={inst.uid}
+              data-from="mydeck"
               className="fan-card"
               style={{ rotate: `${off * Math.min(5, 26 / Math.max(n, 1))}deg`, translate: `0 ${Math.abs(off) * Math.abs(off) * 4}px`, zIndex: i + 1 }}
               onPointerDown={(e) => dragStart(e, inst)}
@@ -453,7 +532,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               onPointerCancel={dragCancel}
               onMouseEnter={() => sfx('hover')}
             >
-              <div className="anim-deal" style={{ animationDelay: `${Math.min(i, 6) * 60}ms` }}>
+              <div className={motionOk() ? '' : 'anim-deal'}>
                 <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
                   onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } clickHand(inst); }}
                   onHover={setHover}
@@ -497,6 +576,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           )}
         </div>
       )}
+      <AttackArrow state={state} />
+      {fx.lifeAnim[HUMAN] === 'hurt' && fx.lifeKey[HUMAN] > 0 && <div key={`vig${fx.lifeKey[HUMAN]}`} className="hurt-vignette" />}
       {fx.banner && <TurnBanner key={fx.banner.id} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
@@ -548,7 +629,7 @@ function Slot({ area, label, filled, onClick, className = '', children, uid, cou
   area: string; label: string; filled: boolean; onClick?: () => void; className?: string; children?: React.ReactNode; uid?: number; count?: number;
 }) {
   return (
-    <div className={`slot ${filled ? 'filled' : ''} ${className}`} style={{ gridArea: area }} onClick={onClick} data-uid={uid}>
+    <div className={`slot ${filled ? 'filled' : ''} ${className}`} style={{ gridArea: area }} onClick={onClick} data-uid={uid} data-flip={uid} data-area={area}>
       {!filled && <span className="slot-label">{label}</span>}
       {children}
       {filled && <span className="slot-tag">{label}{count !== undefined ? ` · ${count}` : ''}</span>}
@@ -597,7 +678,11 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
     const top = cards[cards.length - 1];
     return (
       <Slot area={area} label={label} filled={!!top} count={cards.length} onClick={() => onZone({ title, cards })} className="clickable">
-        {top && <CardView key={top.uid} card={cardOf(top)} width={SLOT} className={anim} tilt={false} />}
+        {top && (
+          <div key={top.uid} className="flip-wrap" data-flip={top.uid} data-from={isOpp ? 'opphand' : undefined}>
+            <CardView card={cardOf(top)} width={SLOT} className={anim} tilt={false} />
+          </div>
+        )}
       </Slot>
     );
   };
@@ -612,22 +697,24 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className="hero-box">
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} />
-        <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life">{p.life}</div>
+        <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
+        {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} />}
+        {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
         {fx.floaters.filter((f) => f.player === p.id).map((f) => (
           <span key={f.id} className={`floater ${f.amount < 0 ? 'dmg' : 'gain'}`}>{f.amount > 0 ? `+${f.amount}` : f.amount}</span>
         ))}
       </Slot>
       <Slot area="arsenal" label="Arsenal" filled={p.arsenal.length > 0} uid={p.arsenal[0]?.uid}>
         {p.arsenal[0] && (isOpp
-          ? <div key={p.arsenal[0].uid} className="anim-flip"><CardBack width={SLOT} label="A" /></div>
-          : <div key={p.arsenal[0].uid} className="anim-flip"><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>)}
+          ? <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid} data-from="opphand"><CardBack width={SLOT} label="A" /></div>
+          : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>)}
       </Slot>
       <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
         {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
       </Slot>
       {pile('pitch', 'Pitch', p.pitch, 'anim-pitch', `${p.name}'s pitch zone`)}
-      {pile('grave', 'Graveyard', p.graveyard, 'anim-fade-up', `${p.name}'s graveyard`)}
-      {pile('banish', 'Banished', p.banished, 'anim-fade-up', `${p.name}'s banished zone`)}
+      {pile('grave', 'Graveyard', p.graveyard, '', `${p.name}'s graveyard`)}
+      {pile('banish', 'Banished', p.banished, '', `${p.name}'s banished zone`)}
 
       <div className="mat-info" style={{ gridArea: 'info' }}>
         <div className="mat-name">{active && <span className="turn-dot" title="Their turn" />}{p.name}</div>
@@ -642,7 +729,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       </div>
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
         {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
-          <div key={inst.uid} data-uid={inst.uid} className="anim-pop">
+          <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop">
             <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} />
           </div>
         ))}
@@ -699,13 +786,14 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
   }, []);
   return (
     <div className={`link ${l.damage !== null ? 'done' : ''}`}>
-      <div ref={cardRef} style={{ position: 'relative', zIndex: 2 }}>
-        <CardView card={cardOf(l.inst)} width="calc(var(--slot) * .95)" onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
+      <div ref={cardRef} style={{ position: 'relative', zIndex: 2 }} className="chain-card">
+        <span className="land-ring" />
+        <CardView card={cardOf(l.inst)} width="calc(var(--slot) * .86)" onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
       </div>
       {l.defenders.length > 0 && <span className="muted anim-pop">vs</span>}
       {l.defenders.map((d) => (
-        <div key={d.inst.uid} className={d.inst.owner === HUMAN ? 'anim-block-up' : 'anim-block-down'}>
-          <CardView card={cardOf(d.inst)} width="calc(var(--slot) * .75)" onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
+        <div key={d.inst.uid} className="defender" data-flip={d.inst.uid} data-from={d.inst.owner === HUMAN ? undefined : 'opphand'}>
+          <CardView card={cardOf(d.inst)} width="calc(var(--slot) * .7)" onHover={onHover} onClick={() => onClick(cardOf(d.inst))} badge={`⛨${d.defense}`} />
         </div>
       ))}
       <div className="col small" style={{ minWidth: 70 }}>
@@ -745,5 +833,90 @@ function ManualTools({ state, act }: { state: GameState; act: (a: Action, snapsh
         <button className="small" onClick={() => act({ type: 'manual', op: 'token', player: 0, name: token })}>Create token</button>
       </div>
     </div>
+  );
+}
+
+/** Number that counts toward its new value (life totals). */
+function RollingNumber({ value }: { value: number }) {
+  const [shown, setShown] = useState(value);
+  const from = useRef(value);
+  useEffect(() => {
+    const start = from.current;
+    if (start === value || !motionOk()) { from.current = value; setShown(value); return; }
+    const t0 = performance.now();
+    const dur = Math.min(900, 120 * Math.abs(value - start) + 200);
+    let raf = 0;
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - t0) / dur);
+      const eased = 1 - Math.pow(1 - k, 3);
+      setShown(Math.round(start + (value - start) * eased));
+      if (k < 1) raf = requestAnimationFrame(tick);
+      else from.current = value;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); from.current = value; };
+  }, [value]);
+  return <>{shown}</>;
+}
+
+/** Sparks bursting out of a hero when it takes damage (or soft motes when it heals). */
+function ImpactBurst({ heal }: { heal?: boolean }) {
+  const sparks = useMemo(() => Array.from({ length: 14 }, (_, i) => {
+    const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
+    const d = 40 + Math.random() * 50;
+    return { x: Math.cos(a) * d, y: Math.sin(a) * d, s: 4 + Math.random() * 5, delay: Math.random() * 80 };
+  }), []);
+  return (
+    <span className={`impact ${heal ? 'heal' : ''}`} aria-hidden>
+      <span className="impact-ring" />
+      {sparks.map((p, i) => (
+        <span key={i} className="spark" style={{ '--x': `${p.x}px`, '--y': `${p.y}px`, width: p.s, height: p.s, animationDelay: `${p.delay}ms` } as React.CSSProperties} />
+      ))}
+    </span>
+  );
+}
+
+/** Curved targeting arrow from the attacking card to the hero it attacks, while the attack is pending. */
+function AttackArrow({ state }: { state: GameState }) {
+  const link = currentLink(state);
+  const [path, setPath] = useState<{ d: string; tip: [number, number]; angle: number } | null>(null);
+  const active = !!link && (state.phase === 'defend' || state.phase === 'reaction');
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!active || !link) { setPath(null); return; }
+    const measure = () => {
+      const from = document.querySelector('.chain-links .link:last-child .chain-card')?.getBoundingClientRect();
+      const to = document.querySelector(`.mat-side.${link.attacker === HUMAN ? 'opp' : 'me'} .hero-box`)?.getBoundingClientRect();
+      if (!from || !to) return setPath(null);
+      const x1 = from.left + from.width / 2;
+      const y1 = link.attacker === HUMAN ? from.top + 6 : from.bottom - 6;
+      const x2 = to.left + to.width / 2;
+      const y2 = link.attacker === HUMAN ? to.bottom - to.height * 0.25 : to.top + to.height * 0.25;
+      const cx = (x1 + x2) / 2 + (x2 > x1 ? -1 : 1) * Math.min(160, Math.abs(y2 - y1) * 0.4);
+      const cy = (y1 + y2) / 2;
+      const angle = Math.atan2(y2 - cy, x2 - cx) * 180 / Math.PI;
+      setPath({ d: `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`, tip: [x2, y2], angle });
+    };
+    const id = requestAnimationFrame(() => requestAnimationFrame(measure)); // after glide animations settle
+    const late = setTimeout(measure, 600);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(id); clearTimeout(late); window.removeEventListener('resize', measure); };
+  }, [active, link, state]);
+  if (!path) return null;
+  const mine = link?.attacker === HUMAN;
+  return (
+    <svg className={`attack-arrow ${mine ? 'mine' : 'theirs'}`} aria-hidden>
+      <defs>
+        <linearGradient id="arrowGrad" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor={mine ? '#ffb347' : '#7fb3ff'} stopOpacity="0.15" />
+          <stop offset="1" stopColor={mine ? '#ff5a3a' : '#4a8bff'} stopOpacity="1" />
+        </linearGradient>
+      </defs>
+      <path d={path.d} className="arrow-glow" />
+      <path d={path.d} className="arrow-line" />
+      <g transform={`translate(${path.tip[0]} ${path.tip[1]}) rotate(${path.angle})`}>
+        <path d="M 0 0 L -22 -12 L -16 0 L -22 12 Z" className="arrow-head" />
+      </g>
+    </svg>
   );
 }

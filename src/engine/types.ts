@@ -24,6 +24,7 @@ export interface WeaponState {
 export interface PermanentState {
   inst: CardInst;
   ward: number;
+  steam?: number; // Mechanologist steam counters
 }
 
 export type TurnEffect =

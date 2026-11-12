@@ -163,6 +163,7 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
     case 'weapon': return l.fromWeapon;
     case 'subtype': return c.types.some((t) => t.toLowerCase() === f.value);
     case 'class': return c.types.includes(f.value);
+    case 'anyClass': return f.values.some((v) => c.types.includes(v));
   }
 }
 
@@ -257,7 +258,14 @@ function startTurn(s: GameState) {
     else if (name === 'Might') { destroy(); p.effects.push({ kind: 'nextAttackPower', amount: 1, filter: { kind: 'any' }, source: name }); }
     else if (name === 'Vigor') { destroy(); p.resources += 1; }
     else if (['Embodiment of Earth', 'Sigil of Fate', 'Seismic Surge'].includes(name)) destroy();
-    else if (getScript(cardOf(pm.inst)).unparsed.some((u) => /^at the beginning of your action phase, destroy this\.?$/i.test(u))) destroy();
+    else {
+      const sc = getScript(cardOf(pm.inst));
+      if (sc.destroyAt) destroy();
+      else if (sc.steamUpkeep) {
+        if ((pm.steam ?? 0) > 0) { pm.steam = (pm.steam ?? 0) - 1; log(s, p.id, `${name}: a steam counter is removed (${pm.steam} left).`); }
+        else destroy();
+      }
+    }
   }
   ability(p)?.startOfTurn?.(heroCtx(s, p));
 }
@@ -542,7 +550,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number) {
   resolveEffects(s, p, sc.onPlay, inst);
   if (fromArsenal) for (const cnd of sc.conditional) if (cnd.when === 'fromArsenal') resolveEffects(s, p, cnd.effects, inst);
   if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
-    p.permanents.push({ inst, ward: sc.ward });
+    p.permanents.push({ inst, ward: sc.ward, steam: sc.steam || undefined });
   } else {
     p.graveyard.push(inst);
   }
