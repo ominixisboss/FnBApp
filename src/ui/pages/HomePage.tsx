@@ -23,6 +23,7 @@ export default function HomePage({ db }: { db: CardDb }) {
         <a className="panel tile" href="#decks"><h3>🃏 Decks</h3><p className="muted">{decks.length ? `${decks.length} saved deck${decks.length > 1 ? 's' : ''}. ` : ''}Build with live legality checks, import from Fabrary/FaB DB text, export, or auto-build.</p></a>
         <a className="panel tile" href="#cards"><h3>🔎 Card database</h3><p className="muted">Search every card by name, text, class, type, pitch and format.</p></a>
         <a className="panel tile" href="#puzzles"><h3>🧩 Lethal puzzles</h3><p className="muted">Win this turn: positions even the bots can’t solve.</p></a>
+        <a className="panel tile" href="#tools"><h3>🧰 Table tools</h3><p className="muted">Life counter, sample hands and a printable decklist for games with real cards.</p></a>
         <a className="panel tile" href="#tournament"><h3>🏅 Armory night</h3><p className="muted">A Swiss tournament against 7 bot heroes, then a Top 4 cut.</p></a>
         <a className="panel tile" href="#gauntlet"><h3>🏟 Gauntlet</h3><p className="muted">Eight opponents in a row, Easy to Hard. One loss ends the run.</p></a>
         <a className="panel tile" href="#limited"><h3>📦 Sealed &amp; Draft</h3><p className="muted">Open packs or draft against bots, build a deck and play it.</p></a>

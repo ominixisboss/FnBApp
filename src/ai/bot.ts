@@ -212,6 +212,20 @@ function findSourceInst(p: PlayerState, uid: number) {
 }
 
 /** Value of holding a card in hand for defense / next turn. */
+// ---------------------------------------------------------------- personalities
+
+export type Personality = 'aggressive' | 'balanced' | 'patient';
+const AGGRESSIVE = ['Brute', 'Ninja', 'Assassin', 'Pirate', 'Ranger'];
+const PATIENT = ['Guardian', 'Wizard', 'Illusionist', 'Mechanologist'];
+/** How a bot plays its hero: aggressive heroes race and keep fewer blockers, patient ones block and build up. */
+export function personalityOf(hero: Card): Personality {
+  if (hero.types.some((t) => AGGRESSIVE.includes(t))) return 'aggressive';
+  if (hero.types.some((t) => PATIENT.includes(t))) return 'patient';
+  return 'balanced';
+}
+const KEEP_W: Record<Personality, number> = { aggressive: 0.75, balanced: 1, patient: 1.2 };
+const BLOCK_W: Record<Personality, number> = { aggressive: 0.85, balanced: 1, patient: 1.15 };
+
 function keepValue(c: Card, threat: number, life: number): number {
   const d = defenseOf(c) ?? 0;
   const w = threat >= life ? 1.3 : life <= 8 ? 1.0 : 0.65;
@@ -271,8 +285,9 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     }
     if (!bestPitch) return;
     const kept = rest.filter((r) => !bestPitch!.uids.includes(r.uid));
+    const keepW = KEEP_W[personalityOf(cardOf(p.hero))];
     // holding cards to block has diminishing returns: you rarely need 3-4 blockers, so don't sit on a full hand
-    const keptValue = kept.map((k) => keepValue(k.c, threat, p.life)).sort((x, y) => y - x).reduce((a, v, i) => a + v * ([1, 0.75, 0.45, 0.25][i] ?? 0.15), 0);
+    const keptValue = keepW * kept.map((k) => keepValue(k.c, threat, p.life)).sort((x, y) => y - x).reduce((a, v, i) => a + v * ([1, 0.75, 0.45, 0.25][i] ?? 0.15), 0);
     const arsenalBonus = p.arsenal.length === 0 && kept.some((k) => pitchOf(k.c) !== 3 && cardPlayValue(k.c) > 1) ? 1 : 0;
     let value = plan.reduce((a, i) => a + i.value, 0);
     // attacks into a hand that can block: big attacks tend to be blocked
@@ -392,7 +407,7 @@ function planDefense(s: GameState, pid: PlayerId, difficulty: Difficulty): BotDe
     const taken = Math.max(0, power - def);
     const overkill = Math.max(0, def - power);
     const lifeAfter = p.life - taken;
-    let lifeW = p.life <= 10 ? 1.3 : 1;
+    let lifeW = (p.life <= 10 ? 1.3 : 1) * BLOCK_W[personalityOf(cardOf(p.hero))];
     if (difficulty === 'hard') lifeW *= lifeAfter <= opponentThreat(s, p) * 0.5 ? 1.3 : 1;
     const score = taken * lifeW + cost + overkill * 0.4 + (lifeAfter <= 0 ? 1000 : 0);
     if (score < best.score) best = { uids, score };

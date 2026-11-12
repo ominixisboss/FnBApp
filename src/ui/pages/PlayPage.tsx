@@ -8,6 +8,7 @@ import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import type { MatchStats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
+import { personalityOf } from '../../ai/bot';
 import { DiceRoll, Loadout, poolHasChoices } from '../components/MatchFlow';
 import type { DeckList } from '../../engine/game';
 import type { PlayerId } from '../../engine/types';
@@ -265,7 +266,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
           <div className="vs">VS</div>
           <div className="matchup-hero" onClick={() => setPicking('opp')} style={{ cursor: 'pointer' }} title="Choose opponent">
             {setup.oppHeroId !== 'random' ? <CardView card={card(setup.oppHeroId)} width="100%" /> : <div className="matchup-empty">?<small>Random hero</small></div>}
-            <span>{setup.oppHeroId !== 'random' ? card(setup.oppHeroId).name : 'Random opponent'} <button className="small" onClick={(e) => { e.stopPropagation(); setPicking('opp'); }}>change</button></span>
+            <span>{setup.oppHeroId !== 'random' ? card(setup.oppHeroId).name : 'Random opponent'}{setup.oppHeroId !== 'random' && <span className={`tag persona ${personalityOf(card(setup.oppHeroId))}`} title="How this bot plays">{({ aggressive: '🔥 Aggressive', balanced: '⚖ Balanced', patient: '🛡 Patient' } as const)[personalityOf(card(setup.oppHeroId))]}</span>} <button className="small" onClick={(e) => { e.stopPropagation(); setPicking('opp'); }}>change</button></span>
           </div>
         </div>
         {setup.oppHeroId !== 'random' && <button className="small" onClick={() => setSetup({ ...setup, oppHeroId: 'random' })}>🎲 Random opponent</button>}
