@@ -17,6 +17,8 @@ export default function LearnPage({ lesson }: { lesson?: string }) {
         <a href="#learn/glossary" className={lesson === 'glossary' ? 'active' : ''}>Keyword glossary</a>
         <hr style={{ borderColor: 'var(--line)' }} />
         <button className="primary" style={{ width: '100%' }} onClick={() => setPractice(true)}>▶ Guided practice game</button>
+        <a href="#puzzles" className="learn-extra">🧩 Lethal puzzles</a>
+        <a href="#gauntlet" className="learn-extra">🏟 Gauntlet</a>
       </div>
       <div className="lesson">
         {cur ? (

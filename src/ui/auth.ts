@@ -175,6 +175,18 @@ export function pushProfile(p: Profile) {
 
 export interface LeaderRow { name: string; username: string; avatarHeroId: string | null; wins: number; games: number }
 export const leaderboard = () => call<LeaderRow[]>('/api/leaderboard');
+export interface LadderRow { name: string; username: string; avatarHeroId: string | null; rating: number; games: number; tier: string }
+export const ladder = () => call<LadderRow[]>('/api/ladder');
+export interface MyRating { rating: number; games: number; tier: string }
+export const myRating = async () => (await call<{ rating: MyRating | null }>('/api/me')).rating;
+export interface FriendRow { username: string; name: string; avatarHeroId: string | null; status: 'offline' | 'online' | 'in-game' }
+export const friends = {
+  list: () => call<FriendRow[]>('/api/friends'),
+  add: (username: string) => call('/api/friends', { method: 'POST', body: JSON.stringify({ username }) }),
+  remove: (username: string) => call(`/api/friends?username=${encodeURIComponent(username)}`, { method: 'DELETE' }),
+};
+export interface ServerReplay { matchId: string; date: number; format: string; ranked: boolean; users: number[]; names: string[]; initial: import('../engine/types').GameState; actions: { a: import('../engine/types').Action; by?: 0 | 1 }[] }
+export const fetchReplay = (matchId: string) => call<ServerReplay>(`/api/replay?match=${encodeURIComponent(matchId)}`);
 
 export function useAuth() {
   const s = useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f); }, () => state);

@@ -14,10 +14,18 @@ export interface OnlineState {
   matchId: string | null;
   opponent: { name: string; avatar: string | null; connected: boolean } | null;
   error: string | null;
+  /** the opponent's latest emote */
+  emote: { id: string; at: number } | null;
+  /** a friend challenged you */
+  challenge: { from: string; username: string; code: string; format: string } | null;
+  /** rating change after a ranked game */
+  rated: { before: number; after: number } | null;
+  /** info line (e.g. a friend declined) */
+  notice: string | null;
 }
 
 let ws: WebSocket | null = null;
-let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null };
+let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null };
 const subs = new Set<() => void>();
 const set = (p: Partial<OnlineState>) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
 let pending: object | null = null;
@@ -38,7 +46,11 @@ function connect() {
     switch (msg.t) {
       case 'hello': if (!msg.inGame && state.status === 'connecting') set({ status: 'idle' }); break;
       case 'waiting': set({ status: 'waiting', code: msg.code ?? null, queue: !!msg.queue, format: msg.format, error: null }); break;
-      case 'state': set({ status: 'playing', game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
+      case 'emote': set({ emote: { id: msg.id, at: Date.now() } }); break;
+      case 'challenged': set({ challenge: { from: msg.from, username: msg.username, code: msg.code, format: msg.format } }); break;
+      case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
+      case 'rated': set({ rated: { before: msg.before, after: msg.after } }); break;
+      case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
       case 'opponent': if (state.opponent) set({ opponent: { ...state.opponent, connected: msg.connected } }); break;
       case 'cancelled': set({ status: 'idle', code: null, queue: false, game: null, opponent: null }); break;
       case 'error': set({ error: msg.message, status: state.status === 'connecting' ? 'idle' : state.status }); break;
@@ -74,7 +86,11 @@ export const online = {
   cancel: () => sendMsg({ t: 'cancel' }),
   act: (action: Action) => sendMsg({ t: 'act', action }),
   leave: () => { sendMsg({ t: 'leave' }); set({ status: 'idle', game: null, opponent: null, code: null }); },
-  clearError: () => set({ error: null }),
+  clearError: () => set({ error: null, notice: null }),
+  emote: (id: string) => sendMsg({ t: 'emote', id }),
+  challenge: (to: string, deck: DeckList, format: DeckFormat) => sendMsg({ t: 'challenge', to, deck, format }),
+  accept: (deck: DeckList) => { const c = state.challenge; if (c) { sendMsg({ t: 'join', code: c.code, deck }); set({ challenge: null }); } },
+  decline: () => { const c = state.challenge; if (c) { sendMsg({ t: 'decline', code: c.code }); set({ challenge: null }); } },
   /** after a finished game, go back to the lobby */
   done: () => set({ status: 'idle', game: null, opponent: null, code: null, matchId: null }),
 };

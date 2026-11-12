@@ -11,8 +11,16 @@ import { canLeave } from './ui/navGuard';
 import { HoverCardLayer } from './ui/components/HoverCard';
 import ProfilePage, { Avatar } from './ui/pages/ProfilePage';
 import AccountPage from './ui/pages/AccountPage';
+import PuzzlesPage from './ui/pages/PuzzlesPage';
+import GauntletPage from './ui/pages/GauntletPage';
+import LimitedPage from './ui/pages/LimitedPage';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
+import { loadMatches } from './stats/matches';
+import { online, useOnline } from './online/client';
+import ReplayPage from './ui/pages/ReplayPage';
+import PrivacyPage from './ui/pages/PrivacyPage';
+import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
 const ROUTES = [
@@ -52,7 +60,18 @@ export default function App() {
   useEffect(() => setAnimations(anim), [anim]);
   useEffect(() => { void checkServer(); }, []);
   const auth = useAuth();
+  // stay connected while signed in, so friends see you online and challenges reach you on any page
+  const net = useOnline();
+  useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
   const [profile, setProfile] = useState(loadProfile);
+  const [level, setLevel] = useState<number | null>(null);
+  useEffect(() => {
+    if (!db) return;
+    const on = () => setLevel(computeProgress(loadMatches()).level);
+    on();
+    for (const e of ['fab-match', 'fab-synced', 'fab-feats']) window.addEventListener(e, on);
+    return () => { for (const e of ['fab-match', 'fab-synced', 'fab-feats']) window.removeEventListener(e, on); };
+  }, [db]);
   useEffect(() => {
     const on = () => setProfile(loadProfile());
     window.addEventListener('fab-profile', on);
@@ -76,7 +95,8 @@ export default function App() {
         <div className="grow" />
         {db && (
           <a href={auth.user ? '#profile' : '#account'} className="me-chip" title={auth.user ? `Signed in as ${auth.user.username}` : 'Sign in to sync and play online'}>
-            <Avatar heroId={profile.avatarHeroId} size={28} />
+            <Avatar heroId={profile.avatarHeroId} size={28} frame={profile.cosmetics?.frame} />
+            {level !== null && <span className="lvl-badge" title={`Level ${level}`}>{level}</span>}
             <span className="anim-label">{auth.user ? profile.displayName : auth.available ? 'Sign in' : profile.displayName}</span>
           </a>
         )}
@@ -94,9 +114,21 @@ export default function App() {
             {route === 'cards' && <CardsPage />}
             {route === 'profile' && <ProfilePage />}
             {route === 'account' && <AccountPage />}
+            {route === 'puzzles' && <PuzzlesPage id={rest[0]} />}
+            {route === 'gauntlet' && <GauntletPage />}
+            {route === 'limited' && <LimitedPage />}
+            {route === 'replay' && <ReplayPage id={rest[0]} />}
+            {route === 'privacy' && <PrivacyPage />}
           </div>
         )}
       </main>
+      {net.challenge && route !== 'play' && (
+        <div className="challenge-toast" role="alert">
+          <b>⚔ {net.challenge.from}</b> challenges you!
+          <a className="btn-link" href="#play/online">Open</a>
+          <button className="small" onClick={() => online.decline()}>Decline</button>
+        </div>
+      )}
       <HoverCardLayer />
     </>
   );

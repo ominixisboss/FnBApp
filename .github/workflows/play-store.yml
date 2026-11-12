@@ -1,0 +1,61 @@
+# Google Play release build (AAB), signed with your private upload key.
+# Run it from the Actions tab ("Run workflow") or by pushing a tag like v1.2.0. Setup: docs/PLAY_STORE.md
+name: Play Store release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION_CODE: ${{ github.run_number }}0
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    steps:
+      - name: Check the signing key is set up
+        if: env.HAS_KEY != 'true'
+        run: |
+          echo "::error::Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets first (see docs/PLAY_STORE.md)."
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npx tsc -b && npx vite build --mode android && npx cap sync android
+      - name: Restore the upload key
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.keystore"
+      - name: Build the signed app bundle
+        working-directory: android
+        env:
+          RELEASE_KEYSTORE: ${{ runner.temp }}/upload.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+      - run: cp android/app/build/outputs/bundle/release/app-release.aab fab-trainer.aab && rm -f "$RUNNER_TEMP/upload.keystore"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fab-trainer-aab
+          path: fab-trainer.aab
+      - name: Upload to Google Play (internal testing)
+        # only once a service account is connected; the very first upload has to be done by hand in Play Console
+        if: env.HAS_PLAY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.fabtrainer.app
+          releaseFiles: fab-trainer.aab
+          track: internal
+          status: draft

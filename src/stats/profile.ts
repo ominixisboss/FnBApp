@@ -3,6 +3,8 @@ export interface Profile {
   displayName: string;
   avatarHeroId: string | null;
   createdAt: number;
+  /** equipped cosmetics (unlocked through progression) */
+  cosmetics?: { sleeve?: string; mat?: string; frame?: string };
 }
 
 const KEY = 'fab-trainer.profile.v1';

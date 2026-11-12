@@ -11,7 +11,8 @@ import './setup';
 import { findCard } from '../data/cardDb';
 import { autoBuildDeck, toDeckList } from '../deck/deck';
 import { chooseAction } from '../ai/bot';
-import type { GameState } from '../engine/types';
+import type { Action, GameState } from '../engine/types';
+import { applyAction } from '../engine/game';
 
 const PORT = 18787 + Math.floor(Math.random() * 1000);
 const BASE = `http://localhost:${PORT}`;
@@ -105,9 +106,45 @@ describe('online play', () => {
     expect(ma.matches[0].mode).toBe('online');
     const board = await (await fetch(`${BASE}/api/leaderboard`)).json();
     expect(board.length).toBe(2);
+    // the replay rebuilds exactly the same game
+    const rep = await (await fetch(`${BASE}/api/replay?match=online-${ca.waiting!.code}`, { headers: { authorization: `Bearer ${a.token}` } })).json();
+    let rs = rep.initial as GameState;
+    for (const st of rep.actions as { a: Action; by?: 0 | 1 }[]) rs = st.by !== undefined ? applyAction({ ...rs, priority: st.by }, st.a) : applyAction(rs, st.a);
+    expect(rs.phase).toBe('gameOver');
+    expect(rs.winner).toBe(end.winner); // alice hosted, so she is player 0 in the full game too
+    expect(rep.users.length).toBe(2);
+    // private room: no rating change
+    expect((await (await fetch(`${BASE}/api/ladder`)).json()).length).toBe(0);
     ca.ws.close();
     cb.ws.close();
   }, 60_000);
+
+  it('ranked quick match moves ratings; friends and presence', async () => {
+    const a = await account('dana');
+    const b = await account('eve');
+    const auth = (t: string) => ({ 'content-type': 'application/json', authorization: `Bearer ${t}` });
+    // friends
+    expect((await fetch(`${BASE}/api/friends`, { method: 'POST', headers: auth(a.token), body: JSON.stringify({ username: 'eve' }) })).status).toBe(200);
+    const ca = await connect(a.token);
+    const cb = await connect(b.token);
+    const fl = await (await fetch(`${BASE}/api/friends`, { headers: auth(b.token) })).json();
+    expect(fl).toEqual([expect.objectContaining({ username: 'dana', status: 'online' })]);
+    // ranked game: both queue, one concedes
+    const deck = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
+    ca.ws.send(JSON.stringify({ t: 'queue', deck, format: 'blitz' }));
+    await wait(200);
+    cb.ws.send(JSON.stringify({ t: 'queue', deck, format: 'blitz' }));
+    await wait(400);
+    expect(ca.states.length).toBeGreaterThan(0);
+    cb.ws.send(JSON.stringify({ t: 'act', action: { type: 'concede' } }));
+    await wait(600);
+    const lad = await (await fetch(`${BASE}/api/ladder`)).json();
+    const byName = Object.fromEntries(lad.map((r: { username: string; rating: number }) => [r.username, r.rating]));
+    expect(byName.dana).toBeGreaterThan(1000);
+    expect(byName.eve).toBeLessThan(1000);
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
 
   it('syncs decks with newest-wins merging', async () => {
     const c = await account('carol');

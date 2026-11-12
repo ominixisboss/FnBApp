@@ -16,7 +16,10 @@ export type ClientMsg =
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
   | { t: 'cancel' }
   | { t: 'act'; action: Action }
-  | { t: 'leave' };
+  | { t: 'leave' }
+  | { t: 'emote'; id: string }
+  | { t: 'challenge'; to: string; deck: DeckList; format: DeckFormat }
+  | { t: 'decline'; code: string };
 
 export type ServerMsg =
   | { t: 'hello'; user: string; inGame: boolean }
@@ -24,7 +27,17 @@ export type ServerMsg =
   | { t: 'state'; code: string; state: GameState; opponent: { name: string; avatar: string | null; connected: boolean }; matchId: string }
   | { t: 'opponent'; connected: boolean }
   | { t: 'error'; message: string }
-  | { t: 'cancelled' };
+  | { t: 'cancelled' }
+  | { t: 'emote'; id: string }
+  | { t: 'challenged'; from: string; username: string; code: string; format: string }
+  | { t: 'declined'; by: string }
+  | { t: 'rated'; before: number; after: number };
+
+/** The emotes players can send in online games. */
+export const EMOTES = ['hello', 'gg', 'nice', 'thinking', 'oops', 'wow'];
+/** Ranked tiers by rating. */
+export const tierOf = (r: number) => (r >= 1700 ? 'Mythic' : r >= 1550 ? 'Diamond' : r >= 1400 ? 'Platinum' : r >= 1250 ? 'Gold' : r >= 1100 ? 'Silver' : 'Bronze');
+const START_RATING = 1000;
 
 interface Seat {
   userId: number;
@@ -42,12 +55,31 @@ interface Room {
   state: GameState | null;
   isPrivate: boolean;
   ended: boolean;
+  /** for replays: the starting position and every action in order (concessions note who conceded) */
+  initial?: GameState;
+  actions: { a: Action; by?: PlayerId }[];
 }
 
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS ?? 120_000);
 const rooms = new Map<string, Room>();
 const userRoom = new Map<number, string>();
 const queues = new Map<string, Room>(); // format -> public room waiting for an opponent
+const sockets = new Map<number, WebSocket>(); // user -> their live connection (for presence and challenges)
+const lastEmote = new Map<number, number>();
+
+/** Friends list presence. */
+export function presence(userId: number): 'offline' | 'online' | 'in-game' {
+  const code = userRoom.get(userId);
+  const room = code ? rooms.get(code) : undefined;
+  if (room?.state && !room.ended) return 'in-game';
+  return sockets.has(userId) ? 'online' : 'offline';
+}
+
+/** Concede for seat i (records it for the replay). */
+function concede(room: Room, i: PlayerId) {
+  room.state = applyAction({ ...room.state!, priority: i }, { type: 'concede' });
+  room.actions.push({ a: { type: 'concede' }, by: i });
+}
 
 const send = (ws: WebSocket | null, msg: ServerMsg) => {
   if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -106,11 +138,37 @@ function record(room: Room): Promise<unknown> {
   }));
 }
 
+/** Ranked games (quick match) move both players' Elo ratings. */
+async function rate(room: Room) {
+  if (room.isPrivate || !room.state || room.state.winner === null) return;
+  const [a, b] = await Promise.all(room.seats.map((s) => store.getRating(s.userId)));
+  const ra = a?.rating ?? START_RATING;
+  const rb = b?.rating ?? START_RATING;
+  const ea = 1 / (1 + 10 ** ((rb - ra) / 400));
+  const sa = room.state.winner === 0 ? 1 : 0;
+  const k = (games: number) => (games < 10 ? 40 : 24); // settle in faster for new players
+  const na = Math.round(ra + k(a?.games ?? 0) * (sa - ea));
+  const nb = Math.round(rb + k(b?.games ?? 0) * ((1 - sa) - (1 - ea)));
+  await store.setRating(room.seats[0].userId, na, (a?.games ?? 0) + 1);
+  await store.setRating(room.seats[1].userId, nb, (b?.games ?? 0) + 1);
+  send(room.seats[0].ws, { t: 'rated', before: ra, after: na });
+  send(room.seats[1].ws, { t: 'rated', before: rb, after: nb });
+}
+
+function saveReplay(room: Room) {
+  if (!room.initial || !room.state) return Promise.resolve();
+  const json = JSON.stringify({
+    matchId: `online-${room.code}`, date: Date.now(), format: room.format, ranked: !room.isPrivate,
+    users: room.seats.map((s) => s.userId), names: room.seats.map((s) => s.name), initial: room.initial, actions: room.actions,
+  });
+  return store.putReplay(`online-${room.code}`, json).catch((e) => console.error('could not save replay', e));
+}
+
 function finish(room: Room) {
   if (room.ended) return;
   room.ended = true;
   // save the result first, so stats and the leaderboard are up to date when players see "game over"
-  void record(room).finally(() => broadcast(room));
+  void Promise.all([record(room), saveReplay(room)]).finally(() => { broadcast(room); void rate(room).catch((e) => console.error('rating failed', e)); });
   room.seats.forEach((s) => { if (s.leaveTimer) clearTimeout(s.leaveTimer); userRoom.delete(s.userId); });
   setTimeout(() => rooms.delete(room.code), 60_000);
 }
@@ -121,6 +179,8 @@ function start(room: Room) {
     { name: a.name, isBot: false, deck: a.deck },
     { name: b.name, isBot: false, deck: b.deck },
   ], Math.floor(Math.random() * 2 ** 31), room.format);
+  room.initial = room.state;
+  room.actions = [];
   broadcast(room);
 }
 
@@ -135,6 +195,7 @@ async function profileOf(userId: number, username: string) {
 }
 
 export function onConnect(ws: WebSocket, user: { id: number; username: string }) {
+  sockets.set(user.id, ws);
   const code = userRoom.get(user.id);
   const room = code ? rooms.get(code) : undefined;
   if (room && !room.ended) {
@@ -154,6 +215,7 @@ export function onConnect(ws: WebSocket, user: { id: number; username: string })
 }
 
 export function onDisconnect(ws: WebSocket, userId: number) {
+  if (sockets.get(userId) === ws) sockets.delete(userId);
   const code = userRoom.get(userId);
   const room = code ? rooms.get(code) : undefined;
   if (!room) return;
@@ -171,7 +233,7 @@ export function onDisconnect(ws: WebSocket, userId: number) {
   send(room.seats[1 - i].ws, { t: 'opponent', connected: false });
   room.seats[i].leaveTimer = setTimeout(() => {
     if (room.seats[i].ws || room.ended || !room.state) return;
-    room.state = applyAction({ ...room.state, priority: i as PlayerId }, { type: 'concede' });
+    concede(room, i as PlayerId);
     finish(room);
   }, RECONNECT_GRACE_MS);
 }
@@ -198,7 +260,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           return;
         }
       }
-      const room: Room = { code: newCode(), format, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false };
+      const room: Room = { code: newCode(), format, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [] };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       if (msg.t === 'queue') queues.set(format, room);
@@ -223,7 +285,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (!room) return send(ws, { t: 'cancelled' });
       if (room.state && !room.ended) {
         const i = seatOf(room, user.id);
-        room.state = applyAction({ ...room.state, priority: i as PlayerId }, { type: 'concede' });
+        concede(room, i as PlayerId);
         room.seats[i].ws = null; // they left: only the opponent gets the final state
         finish(room);
       } else {
@@ -241,16 +303,55 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       const a = msg.action;
       if (!a || typeof a !== 'object' || a.type === 'manual') return err('That action isn’t allowed online.');
       try {
-        if (a.type === 'concede') room.state = applyAction({ ...room.state, priority: i }, a);
+        if (a.type === 'concede') concede(room, i);
         else {
           if (room.state.priority !== i) return err('It’s not your move.');
           room.state = applyAction(room.state, a);
+          room.actions.push({ a });
         }
       } catch (e) {
         return err(e instanceof Error ? e.message : String(e));
       }
       if (room.state.phase === 'gameOver') finish(room);
       else broadcast(room);
+      return;
+    }
+    case 'emote': {
+      const room = current ? rooms.get(current) : undefined;
+      if (!room?.state || !EMOTES.includes(msg.id)) return;
+      const now = Date.now();
+      if (now - (lastEmote.get(user.id) ?? 0) < 2000) return; // no spamming
+      lastEmote.set(user.id, now);
+      const i = seatOf(room, user.id);
+      send(room.seats[1 - i]?.ws ?? null, { t: 'emote', id: msg.id });
+      return;
+    }
+    case 'challenge': {
+      if (current && rooms.get(current) && !rooms.get(current)!.ended) return err('You’re already in a game.');
+      const target = await store.userByName(String(msg.to ?? ''));
+      if (!target) return err('No player with that name.');
+      if (!(await store.friends(user.id)).some((f) => f.id === target.id)) return err('You can only challenge friends.');
+      const tws = sockets.get(target.id);
+      if (!tws) return err(`${target.username} isn’t online right now.`);
+      if (presence(target.id) === 'in-game') return err(`${target.username} is in a game.`);
+      const format: DeckFormat = ['blitz', 'cc', 'casual'].includes(msg.format) ? msg.format : 'blitz';
+      const bad = checkDeck(msg.deck, format);
+      if (bad) return err(bad);
+      const p = await profileOf(user.id, user.username);
+      const room: Room = { code: newCode(), format, seats: [{ userId: user.id, name: p.name, avatar: p.avatar, deck: msg.deck, ws }], state: null, isPrivate: true, ended: false, actions: [] };
+      rooms.set(room.code, room);
+      userRoom.set(user.id, room.code);
+      send(ws, { t: 'waiting', code: room.code, format, queue: false });
+      send(tws, { t: 'challenged', from: p.name, username: user.username, code: room.code, format });
+      return;
+    }
+    case 'decline': {
+      const room = rooms.get(String(msg.code ?? '').toUpperCase());
+      if (!room || room.state) return;
+      send(room.seats[0].ws, { t: 'declined', by: user.username });
+      rooms.delete(room.code);
+      userRoom.delete(room.seats[0].userId);
+      send(room.seats[0].ws, { t: 'cancelled' });
       return;
     }
     default:

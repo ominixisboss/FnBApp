@@ -14,6 +14,8 @@ export interface MatchRecord {
   lifeLeft: number;
   oppLifeLeft: number;
   mode?: 'ai' | 'online';
+  /** damage, attacks, blocks… for quests and achievements (games before this existed don't have it) */
+  stats?: import('./progress').MatchStats;
   opponentName?: string;
 }
 

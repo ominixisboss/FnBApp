@@ -55,3 +55,16 @@ describe('bot vs bot simulations', () => {
     }
   });
 });
+
+describe('background bot', () => {
+  it('askBot gives the same decision as the bot itself (main-thread fallback when workers are unavailable)', async () => {
+    const { askBot } = await import('../ai/botClient');
+    const heroes = heroesFor('blitz');
+    const a = toDeckList(autoBuildDeck(heroes[0].id, 'blitz'));
+    const b = toDeckList(autoBuildDeck(heroes[1].id, 'blitz'));
+    const s = createGame([{ name: 'A', isBot: true, deck: a }, { name: 'B', isBot: true, deck: b }], 7, 'blitz');
+    const d = await askBot(s, s.priority, 'hard');
+    expect(d.action).toEqual(chooseAction(s, s.priority, 'hard').action);
+    expect(() => applyAction(s, d.action)).not.toThrow();
+  });
+});

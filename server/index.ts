@@ -9,7 +9,7 @@ import { makeDb, setDb } from '../src/data/cardDb';
 import { ephemeral, initStore, store } from './db';
 import type { UserRow } from './db';
 import { checkPassword, hashPassword, makeToken, userFromToken, validateCredentials } from './auth';
-import { onConnect, onDisconnect, onMessage, roomCount } from './rooms';
+import { onConnect, onDisconnect, onMessage, presence, roomCount, tierOf } from './rooms';
 import type { ClientMsg } from './rooms';
 
 const ROOT = process.cwd();
@@ -62,6 +62,7 @@ const publicUser = (u: UserRow) => ({ id: u.id, username: u.username, createdAt:
 
 // ---------------------------------------------------------------- API
 async function api(req: IncomingMessage, res: ServerResponse, path: string) {
+  const url = new URL(req.url ?? "/", "http://x");
   res.setHeader('access-control-allow-origin', '*');
   res.setHeader('access-control-allow-headers', 'authorization, content-type');
   res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
@@ -100,13 +101,24 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       }));
     }
 
+    if (path === '/api/ladder' && req.method === 'GET') {
+      const rows = await store.ladder();
+      return json(res, 200, rows.map((r) => {
+        let p: { displayName?: string; avatarHeroId?: string } = {};
+        try { p = r.profile ? JSON.parse(r.profile) : {}; } catch { /* ignore */ }
+        return { name: p.displayName || r.username, username: r.username, avatarHeroId: p.avatarHeroId ?? null, rating: r.rating, games: r.games, tier: tierOf(r.rating) };
+      }));
+    }
+
     // everything below needs a signed-in user
     const user = await userFromToken(bearer(req));
     if (!user) return json(res, 401, { error: 'Please sign in again.' });
 
     if (path === '/api/me' && req.method === 'GET') {
       const row = await store.getProfile(user.id);
-      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row) : null });
+      const r = await store.getRating(user.id);
+      const rating = r ? { rating: r.rating, games: r.games, tier: tierOf(r.rating) } : null;
+      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row) : null, rating });
     }
     if (path === '/api/profile' && req.method === 'PUT') {
       const p = (await readBody(req)) as Record<string, unknown>;
@@ -114,6 +126,9 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         displayName: String(p.displayName ?? user.username).slice(0, 24),
         avatarHeroId: typeof p.avatarHeroId === 'string' ? p.avatarHeroId.slice(0, 40) : null,
         createdAt: Number(p.createdAt) || user.created_at,
+        // equipped cosmetics: short ids only
+        cosmetics: Object.fromEntries(Object.entries((p.cosmetics ?? {}) as Record<string, unknown>)
+          .filter(([k, v]) => ['sleeve', 'mat', 'frame'].includes(k) && typeof v === 'string' && v.length <= 20)),
       };
       await store.putProfile(user.id, JSON.stringify(clean));
       return json(res, 200, { profile: clean });
@@ -142,6 +157,34 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         await store.putMatch(user.id, m.id.slice(0, 60), JSON.stringify(m), Number(m.date) || Date.now(), 'ai', !!m.won);
       }
       return json(res, 200, { ok: true });
+    }
+    if (path === '/api/friends' && req.method === 'GET') {
+      const rows = await store.friends(user.id);
+      return json(res, 200, rows.map((f) => {
+        let p: { displayName?: string; avatarHeroId?: string } = {};
+        try { p = f.profile ? JSON.parse(f.profile) : {}; } catch { /* ignore */ }
+        return { username: f.username, name: p.displayName || f.username, avatarHeroId: p.avatarHeroId ?? null, status: presence(f.id) };
+      }));
+    }
+    if (path === '/api/friends' && req.method === 'POST') {
+      const { username } = (await readBody(req)) as { username?: string };
+      const other = await store.userByName(String(username ?? '').trim());
+      if (!other) return json(res, 404, { error: 'No player with that username.' });
+      if (other.id === user.id) return json(res, 400, { error: 'That’s you!' });
+      await store.addFriend(user.id, other.id);
+      return json(res, 200, { ok: true });
+    }
+    if (path === '/api/friends' && req.method === 'DELETE') {
+      const other = await store.userByName(String(url.searchParams.get('username') ?? ''));
+      if (other) await store.removeFriend(user.id, other.id);
+      return json(res, 200, { ok: true });
+    }
+    if (path === '/api/replay' && req.method === 'GET') {
+      const raw = await store.getReplay(String(url.searchParams.get('match') ?? ''));
+      if (!raw) return json(res, 404, { error: 'This replay is no longer available.' });
+      const r = JSON.parse(raw) as { users: number[] };
+      if (!r.users.includes(user.id)) return json(res, 403, { error: 'You weren’t in that game.' });
+      return json(res, 200, r);
     }
     return json(res, 404, { error: 'Not found' });
   } catch (e) {
