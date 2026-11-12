@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { hideHover, newHoverOwner, showHover } from './HoverCard';
+import { hideHover, isPinnedFor, newHoverOwner, showHover } from './HoverCard';
 import type { CSSProperties, ReactNode } from 'react';
 import type { Card } from '../../data/types';
 
@@ -15,6 +15,8 @@ interface Props {
   tilt?: boolean;
   /** don't show the readable pop-out for this card */
   noPopout?: boolean;
+  /** called when a tap opens this card's details (touch screens) */
+  onInspect?: () => void;
 }
 
 function onTilt(e: React.MouseEvent<HTMLDivElement>) {
@@ -28,7 +30,7 @@ function onTilt(e: React.MouseEvent<HTMLDivElement>) {
   el.style.setProperty('--my', `${y * 100}%`);
 }
 
-export default function CardView({ card, width = 150, className = '', badge, count, onClick, onHover, title, tilt = true, noPopout }: Props) {
+export default function CardView({ card, width = 150, className = '', badge, count, onClick, onHover, title, tilt = true, noPopout, onInspect }: Props) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const style = { '--w': typeof width === 'number' ? `${width}px` : width } as CSSProperties;
@@ -36,6 +38,7 @@ export default function CardView({ card, width = 150, className = '', badge, cou
   const press = useRef<{ t: ReturnType<typeof setTimeout> | null; fired: boolean }>({ t: null, fired: false });
   useEffect(() => () => hideHover(owner), [owner]);
   const popout = !noPopout;
+  const lastPointer = useRef<string>('mouse');
   return (
     <div
       tabIndex={popout ? 0 : undefined}
@@ -58,8 +61,15 @@ export default function CardView({ card, width = 150, className = '', badge, cou
       onContextMenu={(e) => { if (press.current.fired) e.preventDefault(); }}
       className={`card ${tilt ? 'tilt' : ''} ${card.pitch ? `pitch-${card.pitch}` : ''} ${className}`}
       style={style}
-      onClick={() => {
+      onPointerDown={(e) => { lastPointer.current = e.pointerType; }}
+      onClick={(e) => {
         if (press.current.fired) { press.current.fired = false; return; }
+        // touch: the first tap shows the card's details; tapping it again does its normal action
+        if (popout && lastPointer.current === 'touch' && !isPinnedFor(owner)) {
+          showHover(card, e.currentTarget, owner, { delay: 0, pinned: true });
+          onInspect?.();
+          return;
+        }
         onClick?.();
       }}
       onMouseMove={tilt ? onTilt : undefined}

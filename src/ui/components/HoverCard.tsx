@@ -9,7 +9,7 @@ import { GLOSSARY } from '../../learn/lessons';
 import { heroAutomation } from '../../engine/heroes';
 import CardView from './CardView';
 
-interface HoverState { card: Card; rect: DOMRect; owner: number; pinned: boolean }
+interface HoverState { card: Card; rect: DOMRect; owner: number; pinned: boolean; el: Element }
 
 let current: HoverState | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -22,11 +22,16 @@ export function showHover(card: Card, el: Element, owner: number, opts: { delay?
   if (document.querySelector('.fan-card.dragging')) return;
   if (timer) clearTimeout(timer);
   const go = () => {
-    current = { card, rect: el.getBoundingClientRect(), owner, pinned: !!opts.pinned };
+    current = { card, rect: el.getBoundingClientRect(), owner, pinned: !!opts.pinned, el };
     emit();
   };
   if (opts.delay === 0 || current) go(); // moving between cards: no delay
   else timer = setTimeout(go, opts.delay ?? 160);
+}
+
+/** Is this card's pop-out currently pinned open (e.g. after a tap)? */
+export function isPinnedFor(owner: number): boolean {
+  return !!current && current.pinned && current.owner === owner;
 }
 
 export function hideHover(owner?: number) {
@@ -129,7 +134,8 @@ export function HoverCardLayer() {
   useLayoutEffect(() => {
     if (!h) return;
     const off = () => { current = null; emit(); };
-    const onDown = (e: Event) => { if (!ref.current?.contains(e.target as Node)) off(); };
+    // tapping the pop-out itself, or the card it belongs to (to act on it), keeps it open
+    const onDown = (e: Event) => { const t = e.target as Node; if (!ref.current?.contains(t) && !current?.el.contains(t)) off(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') off(); };
     window.addEventListener('pointerdown', onDown, true);
     window.addEventListener('scroll', off, true);
@@ -159,6 +165,7 @@ export function HoverCardLayer() {
       style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: 'hidden' }}
       role="tooltip"
       key={c.id}
+      onClick={() => { if (h.pinned) { current = null; emit(); } }}
     >
       <div className="hc-img"><CardView card={c} width="100%" tilt={false} noPopout /></div>
       <div className="hc-body">

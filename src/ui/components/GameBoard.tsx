@@ -164,6 +164,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
   const compactTouch = () => !!window.matchMedia?.('(orientation: landscape) and (max-height: 560px) and (pointer: coarse)').matches;
+  // Android back button while in a game
+  useEffect(() => {
+    const back = () => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); };
+    window.addEventListener('fab-back', back);
+    return () => window.removeEventListener('fab-back', back);
+  }, [state.phase, onExit]);
   useEffect(() => {
     document.documentElement.classList.add('in-game');
     return () => document.documentElement.classList.remove('in-game');
@@ -540,6 +546,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
                 <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
+                  onInspect={() => { if (compactTouch()) setHandOpen(true); }}
                   onClick={() => {
                     if (suppressClick.current) { suppressClick.current = false; return; }
                     if (!handOpen && compactTouch()) { setHandOpen(true); return; }

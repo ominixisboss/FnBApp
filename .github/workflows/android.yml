@@ -1,0 +1,47 @@
+# Builds the Android app (APK). Pull requests: build only. Pushes to main also publish
+# a GitHub Release, so the newest APK is always at:
+#   https://github.com/<owner>/<repo>/releases/latest/download/fab-trainer.apk
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run android:build
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk fab-trainer.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fab-trainer-apk
+          path: fab-trainer.apk
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v1.0.${{ github.run_number }}
+          name: FaB Trainer for Android 1.0.${{ github.run_number }}
+          make_latest: true
+          files: fab-trainer.apk
+          body: |
+            Install on Android: download `fab-trainer.apk` on your phone, open it, and allow installing from this source when asked.
+            New versions install over the old one; your decks and stats are kept.

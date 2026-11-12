@@ -709,3 +709,15 @@ table.history tr.me-row td { background: #d9a4411a; }
   .floater { font-size: 1.5rem; }
   .gameover h1 { font-size: 2.6rem; }
 }
+/* short landscape screens: card details sit compactly at the top so the raised hand stays tappable */
+@media (orientation: landscape) and (max-height: 560px) {
+  .hovercard { top: 4px !important; left: 50% !important; translate: -50% 0; width: min(560px, 72vw);
+    max-height: calc(100vh - 182px); padding: 8px; gap: 10px; }
+  .hc-img { width: clamp(70px, 24vh, 110px); }
+  .hc-name { font-size: .95rem; }
+  .hc-type { font-size: .72rem; }
+  .hc-stats > span { min-width: 2.8em; padding: .1em .35em; }
+  .hc-stats b { font-size: .85rem; }
+  .hc-text { font-size: .8rem; padding: .4rem .55rem; line-height: 1.4; }
+  .hc-help, .hc-auto { font-size: .65rem; }
+}
