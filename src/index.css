@@ -1279,3 +1279,4 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .pairing { display: grid; grid-template-columns: auto 1fr auto 1fr auto; gap: .5rem; align-items: center; padding: .4rem .5rem; border-radius: 8px; }
 .pairing.mine { background: #2a1e0a99; border: 1px solid #a57c46; }
 .tour-hero { display: inline-block; }
+.official-rules { display: flex; flex-direction: column; gap: .3rem; padding: .5rem .7rem; border-radius: 8px; background: #0005; border-left: 3px solid #a57c46; }

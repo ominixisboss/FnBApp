@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { card } from '../../data/cardDb';
 import type { DeckFormat } from '../../deck/deck';
-import { FORMAT_RULES, autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
+import { FORMATS, FORMAT_RULES, autoBuildDeck, formatName, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
@@ -166,7 +166,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         <div className="lobby-head">
           <h1>{tutorial ? 'Guided practice' : 'Play'}</h1>
           <div className="seg">
-            {([['blitz', 'Blitz'], ['cc', 'Classic Constructed'], ['casual', 'Casual']] as [DeckFormat, string][]).map(([f, label]) => (
+            {FORMATS.map(([f, label]) => (
               <button key={f} className={setup.format === f ? 'on' : ''} onClick={() => setSetup({ ...setup, format: f, myDeckId: '', oppHeroId: 'random' })}>{label}</button>
             ))}
           </div>
@@ -232,7 +232,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                 <>
                   {net.challenge && (
                     <div className="panel challenge-box">
-                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({net.challenge.format === 'cc' ? 'Classic Constructed' : net.challenge.format})</span>
+                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({formatName(net.challenge.format)})</span>
                       <div className="row" style={{ marginTop: '.4rem' }}>
                         <button className="primary" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.accept(d); }}>Accept with this deck</button>
                         <button onClick={() => online.decline()}>Decline</button>
@@ -248,7 +248,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />
                     <button disabled={!selectedHero || joinCode.length < 5} onClick={() => { const d = deckForOnline(); if (d) online.join(joinCode, d); }}>Join</button>
                   </div>
-                  <div className="small muted">Format: {setup.format === 'cc' ? 'Classic Constructed' : setup.format === 'blitz' ? 'Blitz' : 'Casual'}. Blitz and CC need a legal deck. Ranked matches move your rating; private rooms and friend challenges don’t.</div>
+                  <div className="small muted">Format: {formatName(setup.format)}. Every format except Casual needs a legal deck. Ranked matches move your rating; private rooms and friend challenges don’t.</div>
                   <FriendsPanel canChallenge={!!selectedHero} onChallenge={(u) => { const d = deckForOnline(); if (d) online.challenge(u, d, setup.format); }} />
                 </>
               )

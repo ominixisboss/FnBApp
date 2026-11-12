@@ -8,7 +8,7 @@ import { getScript } from '../engine/cardScript';
 import { archetypeFor } from './archetypes';
 import type { Archetype } from './archetypes';
 
-export type DeckFormat = 'blitz' | 'cc' | 'casual';
+export type DeckFormat = 'blitz' | 'cc' | 'll' | 'sage' | 'commoner' | 'casual';
 
 export interface Deck {
   id: string;
@@ -23,10 +23,24 @@ export interface Deck {
 export const FORMAT_RULES: Record<DeckFormat, { minDeck: number; maxDeck: number; copies: number; young: boolean | null; legalKey: string | null }> = {
   blitz: { minDeck: 40, maxDeck: 40, copies: 2, young: true, legalKey: 'blitz' },
   cc: { minDeck: 60, maxDeck: 80, copies: 3, young: false, legalKey: 'cc' },
+  // which heroes are allowed comes from the official legality data for these formats
+  ll: { minDeck: 60, maxDeck: 80, copies: 3, young: null, legalKey: 'll' },
+  sage: { minDeck: 40, maxDeck: 40, copies: 2, young: null, legalKey: 'sage' },
+  commoner: { minDeck: 40, maxDeck: 40, copies: 2, young: null, legalKey: 'commoner' },
   casual: { minDeck: 20, maxDeck: 200, copies: 99, young: null, legalKey: null },
 };
 
 export const isArenaCard = (c: Card) => isWeapon(c) || isEquipment(c);
+
+export const FORMATS: [DeckFormat, string, string][] = [
+  ['blitz', 'Blitz', 'young hero, 40 cards, max 2 copies'],
+  ['cc', 'Classic Constructed', 'adult hero, 60+ cards, max 3 copies'],
+  ['ll', 'Living Legend', 'Classic Constructed rules with the Living Legend card pool'],
+  ['sage', 'Silver Age', 'commons and rares, 40 cards, max 2 copies'],
+  ['commoner', 'Commoner', 'only common cards, 40 cards, max 2 copies'],
+  ['casual', 'Casual', 'no restrictions'],
+];
+export const formatName = (f: string) => FORMATS.find((x) => x[0] === f)?.[1] ?? f;
 
 export function newDeck(heroId: string, format: DeckFormat, name?: string): Deck {
   return {
@@ -169,7 +183,7 @@ export function importDecklist(text: string, format?: DeckFormat): ImportResult 
 
 export function exportDecklist(d: Deck): string {
   const hero = card(d.heroId);
-  const lines = [`Name: ${d.name}`, `Hero: ${hero.name}`, `Format: ${d.format === 'cc' ? 'Classic Constructed' : d.format === 'blitz' ? 'Blitz' : 'Casual'}`];
+  const lines = [`Name: ${d.name}`, `Hero: ${hero.name}`, `Format: ${formatName(d.format)}`];
   const entries = Object.entries(d.cards).map(([id, cnt]) => ({ c: card(id), cnt }));
   const weapons = entries.filter((e) => isWeapon(e.c));
   const equipment = entries.filter((e) => isEquipment(e.c) && !isWeapon(e.c));

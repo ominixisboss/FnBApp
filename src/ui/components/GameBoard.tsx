@@ -10,6 +10,7 @@ import { decideOptional, describeAction } from '../../ai/bot';
 import type { BotDecision } from '../../ai/bot';
 import { askBot } from '../../ai/botClient';
 import { getScript } from '../../engine/cardScript';
+import { formatName } from '../../deck/deck';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
@@ -712,7 +713,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   return (
     <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
       <div className="arena-bar">
-        <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
+        <span className="arena-title">{formatName(state.format)} · Turn {state.turn}</span>
         <div className="grow" />
         {!!clock && !online && (
           <span className="chess-clock" title="Chess clock: your time runs while it's your decision">

@@ -5,7 +5,7 @@ import { getDb, isHero } from '../src/data/cardDb';
 import { applyAction, createGame } from '../src/engine/game';
 import type { DeckList } from '../src/engine/game';
 import type { Action, GameState, PlayerId } from '../src/engine/types';
-import { validateDeck } from '../src/deck/deck';
+import { formatName, validateDeck } from '../src/deck/deck';
 import type { Deck, DeckFormat } from '../src/deck/deck';
 import { viewFor } from '../src/online/view';
 import { store } from './db';
@@ -107,7 +107,7 @@ export function checkDeck(deck: DeckList, format: DeckFormat): string | null {
   for (const id of [...deck.weaponIds, ...deck.equipmentIds, ...deck.cardIds]) cards[id] = (cards[id] ?? 0) + 1;
   const d: Deck = { id: 'x', name: 'x', format, heroId: deck.heroId, cards, updatedAt: 0 };
   const errs = validateDeck(d).filter((e) => !e.startsWith('No weapon'));
-  return errs.length ? `Deck isn’t legal for ${format === 'cc' ? 'Classic Constructed' : 'Blitz'}: ${errs[0]}` : null;
+  return errs.length ? `Deck isn’t legal for ${formatName(format)}: ${errs[0]}` : null;
 }
 
 function seatOf(room: Room, userId: number): number {
@@ -248,7 +248,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
     case 'host':
     case 'queue': {
       if (current && rooms.get(current) && !rooms.get(current)!.ended) return err('You’re already in a game.');
-      const format: DeckFormat = ['blitz', 'cc', 'casual'].includes(msg.format) ? msg.format : 'blitz';
+      const format: DeckFormat = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(msg.format) ? msg.format : 'blitz';
       const bad = checkDeck(msg.deck, format);
       if (bad) return err(bad);
       const seat: Seat = { userId: user.id, name: prof.name, avatar: prof.avatar, deck: msg.deck, ws };
@@ -347,7 +347,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       const tws = sockets.get(target.id);
       if (!tws) return err(`${target.username} isn’t online right now.`);
       if (presence(target.id) === 'in-game') return err(`${target.username} is in a game.`);
-      const format: DeckFormat = ['blitz', 'cc', 'casual'].includes(msg.format) ? msg.format : 'blitz';
+      const format: DeckFormat = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(msg.format) ? msg.format : 'blitz';
       const bad = checkDeck(msg.deck, format);
       if (bad) return err(bad);
       const p = await profileOf(user.id, user.username);
