@@ -23,7 +23,7 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
   const seen = new WeakSet<CardInst>();
   const swap = (c: CardInst) => { if (!seen.has(c)) { seen.add(c); c.owner = r(c.owner); } };
   for (const p of s.players) {
-    [p.hero, ...p.deck, ...p.hand, ...p.arsenal, ...p.pitch, ...p.graveyard, ...p.banished, ...p.intimidated,
+    [p.hero, ...p.deck, ...p.hand, ...p.arsenal, ...p.pitch, ...p.graveyard, ...p.banished, ...p.intimidated, ...(p.soul ?? []),
       ...p.weapons.map((w) => w.inst), ...p.equipment.map((e) => e.inst), ...p.permanents.map((x) => x.inst)].forEach(swap);
   }
   for (const l of s.chain) {

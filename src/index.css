@@ -721,3 +721,5 @@ table.history tr.me-row td { background: #d9a4411a; }
   .hc-text { font-size: .8rem; padding: .4rem .55rem; line-height: 1.4; }
   .hc-help, .hc-auto { font-size: .65rem; }
 }
+.boost-toggle { display: flex; gap: .4rem; align-items: flex-start; font-size: .8rem; text-align: left; background: #0006; border: 1px solid #4a3520; border-radius: 8px; padding: .3rem .45rem; cursor: pointer; }
+.boost-toggle input { margin-top: .15rem; accent-color: var(--accent); }

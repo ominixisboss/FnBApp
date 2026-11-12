@@ -56,6 +56,8 @@ export interface PlayerState {
   effects: TurnEffect[];
   marked: boolean;
   turn: TurnInfo;
+  /** cards put into the soul (Light heroes); public */
+  soul?: CardInst[];
 }
 
 /** Per-turn bookkeeping (reset for both players at the start of every turn). */
@@ -67,6 +69,13 @@ export interface TurnInfo {
   drew: boolean;
   boosted: boolean;
   flags: Record<string, number>;
+  auraPlayed?: boolean;
+  arcaneDealt?: boolean;
+  discardedPower?: number; // highest power discarded this turn
+  itemDestroyed?: boolean;
+  weaponAttacked?: boolean;
+  intimidated?: boolean;
+  attackedTimes?: number; // attacks made against this player this turn
 }
 
 export interface Defender {
@@ -92,6 +101,10 @@ export interface ChainLink {
   hit: boolean;
   extraOnHit: Effect[];
   noHandDefense?: boolean;
+  noEquipDefense?: boolean;
+  instants?: number; // instants the attacker played on this link
+  reactionCount?: number; // attack reactions played on this link
+  destination?: 'soul' | 'deckBottom';
 }
 
 export type Phase = 'action' | 'defend' | 'reaction' | 'arsenal' | 'gameOver';
@@ -119,10 +132,10 @@ export interface GameState {
 }
 
 export type Action =
-  | { type: 'play'; uid: number; pitch: number[]; mode?: number }
+  | { type: 'play'; uid: number; pitch: number[]; mode?: number; optional?: OptionalChoice }
   | { type: 'activate'; uid: number; index: number; pitch: number[] }
   | { type: 'pass' }
-  | { type: 'defend'; uids: number[] }
+  | { type: 'defend'; uids: number[]; boosts?: number[]; pitch?: number[] }
   | { type: 'arsenal'; uid: number | null }
   | { type: 'concede' }
   | ManualAction;
@@ -136,3 +149,12 @@ export type ManualAction =
   | { type: 'manual'; op: 'discard'; player: PlayerId; uid: number }
   | { type: 'manual'; op: 'returnFromGraveyard'; player: PlayerId; uid: number }
   | { type: 'manual'; op: 'token'; player: PlayerId; name: string };
+
+/** The player's answer to a card's "you may <cost>. If you do, <effect>" when playing it. */
+export interface OptionalChoice {
+  accept: boolean;
+  /** the card from hand used to pay (discard / put on the bottom / banish) */
+  uid?: number;
+  /** for "discard a card or destroy the top card of your deck": true = destroy the top card */
+  top?: boolean;
+}
