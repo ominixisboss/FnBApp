@@ -159,6 +159,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [boostSel, setBoostSel] = useState<number[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
   const [sound, setSound] = useState(soundEnabled);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
@@ -531,12 +532,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         )}
         {!online && <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
         {!online && <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
-        <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
-        {!online && <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>}
-        <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
-        <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
-        <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}</button>
-        <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
+        <button className={`icon-btn more-btn ${menuOpen ? 'on' : ''}`} title="More" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰<span>More</span></button>
+        <div className={`bar-more ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen(false)}>
+          <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
+          {!online && <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>}
+          <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
+          <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
+          <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
+        </div>
         <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
       </div>
 

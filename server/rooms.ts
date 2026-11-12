@@ -91,9 +91,10 @@ function broadcast(room: Room) {
   });
 }
 
-function record(room: Room) {
+/** Save the result to both players' histories (resolves once both writes have finished). */
+function record(room: Room): Promise<unknown> {
   const s = room.state!;
-  room.seats.forEach((seat, i) => {
+  return Promise.all(room.seats.map((seat, i) => {
     const me = s.players[i];
     const them = s.players[1 - i];
     const m = {
@@ -101,15 +102,15 @@ function record(room: Room) {
       deckId: null, deckName: 'Online deck', difficulty: 'online', won: s.winner === i, turns: s.turn,
       lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: room.seats[1 - i].name,
     };
-    store.putMatch(seat.userId, m.id, JSON.stringify(m), m.date, 'online', m.won).catch((e) => console.error('could not record match', e));
-  });
+    return store.putMatch(seat.userId, m.id, JSON.stringify(m), m.date, 'online', m.won).catch((e) => console.error('could not record match', e));
+  }));
 }
 
 function finish(room: Room) {
   if (room.ended) return;
   room.ended = true;
-  record(room);
-  broadcast(room);
+  // save the result first, so stats and the leaderboard are up to date when players see "game over"
+  void record(room).finally(() => broadcast(room));
   room.seats.forEach((s) => { if (s.leaveTimer) clearTimeout(s.leaveTimer); userRoom.delete(s.userId); });
   setTimeout(() => rooms.delete(room.code), 60_000);
 }
@@ -223,6 +224,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (room.state && !room.ended) {
         const i = seatOf(room, user.id);
         room.state = applyAction({ ...room.state, priority: i as PlayerId }, { type: 'concede' });
+        room.seats[i].ws = null; // they left: only the opponent gets the final state
         finish(room);
       } else {
         rooms.delete(room.code);

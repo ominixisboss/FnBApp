@@ -783,3 +783,143 @@ table.history tr.me-row td { background: #d9a4411a; }
   background-size: 340px 340px, 420px 420px, 290px 290px, 510px 510px; animation: dust 60s linear infinite; }
 @keyframes dust { to { transform: translate(120px, -160px); } }
 .no-anim .showcase, .no-anim .arena::after, .no-anim .defender::after { display: none; }
+
+/* ===================================================== phones: edge-to-edge, compact shell, 2-row playmat */
+/* safe areas (camera cut-out, rounded corners). The app draws edge to edge (viewport-fit=cover);
+   only content that must stay readable/tappable is kept clear of the cut-out. */
+:root {
+  /* env() from the browser; --safe-area-inset-* are also set by the Android app (Capacitor) */
+  --sa-l: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --sa-r: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+  --sa-t: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --sa-b: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+}
+.topbar { padding-left: calc(1rem + var(--sa-l)); padding-right: calc(1rem + var(--sa-r)); padding-top: calc(.6rem + var(--sa-t)); }
+.page { padding-left: calc(1rem + var(--sa-l)); padding-right: calc(1rem + var(--sa-r)); }
+.nav a { display: inline-flex; align-items: center; gap: .35em; }
+.nav-ic, .nav-lb-short { display: none; }
+.more-btn { display: none !important; }
+.bar-more { display: contents; }
+.arena-bar { padding-left: calc(10px + var(--sa-l)); padding-right: calc(10px + var(--sa-r)); top: var(--sa-t); }
+
+/* ---- phones held sideways (short screens) */
+@media (orientation: landscape) and (max-height: 560px) {
+  /* compact one-line header with icon tabs */
+  .topbar { gap: .4rem; padding-top: calc(.3rem + var(--sa-t)); padding-bottom: .3rem; }
+  .brand { font-size: 1rem; }
+  .nav { gap: 2px; }
+  .nav a { padding: .35em .7em; font-size: .82rem; }
+  .nav-ic { display: inline; font-size: .95em; }
+  .nav-lb { display: none; }
+  .nav-lb-short { display: inline; }
+  .anim-label { display: none; }
+  .topbar > button.small { padding: .3em .55em; }
+  .nav { overflow: visible; }
+  .nav a { flex-shrink: 0; }
+  .page { padding-top: .6rem; padding-bottom: calc(.8rem + var(--sa-b)); }
+  /* play lobby fills the screen: the deck list scrolls on the left, the match panel fits on the right
+     and its PLAY button is pinned to the bottom, whatever the screen height */
+  #root:has(.lobby) { height: 100dvh; display: flex; flex-direction: column; }
+  .page:has(.lobby) { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding-bottom: calc(.5rem + var(--sa-b)); }
+  .page-anim:has(.lobby) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .lobby { flex: 1; min-height: 0; grid-template-columns: 1fr clamp(220px, 30vw, 280px) !important; grid-template-rows: minmax(0, 1fr); gap: .8rem; }
+  .lobby { align-items: stretch !important; }
+  .lobby-main { min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+  .lobby-side { position: relative !important; top: 0; height: 100%; max-height: none; overflow-y: auto; padding: .5rem .6rem 0; gap: .4rem; }
+  .lobby-side .play-big { position: sticky; bottom: .5rem; margin-top: auto; margin-bottom: .5rem; flex-shrink: 0; z-index: 2; }
+  .lobby-side::after { content: ""; position: sticky; bottom: 0; display: block; flex-shrink: 0; height: 0; box-shadow: 0 0 22px 34px #15110d; margin-top: -1px; z-index: 1; pointer-events: none; }
+  .lobby-matchup { gap: .3rem; }
+  .matchup-hero { font-size: .66rem; gap: .2rem; }
+  .matchup-hero .card, .matchup-empty { max-width: clamp(38px, calc((100dvh - 290px) * .7), 80px); margin: 0 auto; }
+  .matchup-empty { font-size: .7rem; }
+  .vs { font-size: 1rem; }
+  .lobby-side .seg button { padding: .25em .7em; font-size: .78rem; }
+  .lobby-side .lobby-label { font-size: .66rem; }
+  .lobby-side > label { font-size: .75rem; }
+  .play-big { font-size: 1.2rem; padding: .55em; }
+  .lobby-head h1 { font-size: 1.5rem; }
+  .lobby-sub { margin: .6rem 0 .4rem; }
+  .deckbox-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: .6rem; }
+
+  /* game: board edge to edge, clear of the camera; controls in the right column */
+  .arena { --rcol: clamp(150px, 19vw, 190px); --peek: 40px; --boardH: calc(100vh - var(--peek) - 6px); }
+  .arena-bar { left: auto; right: 0; top: var(--sa-t); width: calc(var(--rcol) + var(--sa-r)); padding: 4px calc(4px + var(--sa-r)) 4px 4px;
+    flex-wrap: nowrap; justify-content: flex-end; gap: 4px; }
+  .arena-bar .icon-btn { width: 36px; height: 32px; padding: 0; justify-content: center; font-size: .9rem; }
+  .more-btn { display: inline-flex !important; }
+  .arena-bar:has(.bar-more.open) { z-index: 45; }
+  .bar-more { display: none; }
+  .bar-more.open { display: flex; flex-direction: column; gap: 4px; position: absolute; top: 40px; right: calc(4px + var(--sa-r)); z-index: 30;
+    min-width: 170px; padding: 6px; border-radius: 12px; background: #15110df5; border: 1px solid var(--bronze-lo, #4a3520); box-shadow: 0 12px 30px #000c;
+    animation: fadeUp .15s ease-out; }
+  .bar-more.open .icon-btn { width: 100%; height: 38px; justify-content: flex-start; padding: 0 .7em; gap: .6em; border-radius: 10px; font-size: .85rem; }
+  .bar-more.open .icon-btn span { display: inline; }
+  .online-badge { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .opp-hand { left: calc(var(--sa-l) + (100vw - var(--sa-l) - var(--rcol) - var(--sa-r)) / 2); }
+  .arena-board { top: 2px; bottom: var(--peek); left: calc(var(--sa-l) + 2px); right: calc(var(--rcol) + var(--sa-r) + 2px); }
+  .arena .mat { transform: none; padding: 2px 6px; gap: 1px; }
+  .hand-fan { left: calc(var(--sa-l) + (100vw - var(--sa-l) - var(--rcol) - var(--sa-r)) / 2); }
+  .dock { right: calc(4px + var(--sa-r)); width: calc(var(--rcol) - 8px); bottom: calc(4px + var(--sa-b)); }
+  .arena-hint { right: calc(4px + var(--sa-r)); top: 42px; }
+  .drawer { right: calc(4px + var(--sa-r)); }
+  .hovercard { margin-left: calc(var(--sa-l) / 2); }
+
+  /* the playmat in two rows per side, so every card is much bigger:
+     equipment pairs on the outside, weapons + hero (+ arsenal below) in the middle, piles on the far side */
+  .arena .mat-side, .arena .mat-chain {
+    --gap: 3px;
+    --base: max(30px, min(calc((100cqi - 8 * var(--gap) - 120px) / 7), calc((var(--boardH) - 30px) / 5.9)));
+    --slot: var(--base);
+  }
+  .arena .mat-side { grid-template-rows: repeat(2, calc(var(--slot) * 1.3956)); padding: 1px 2px;
+    grid-template-columns: var(--slot) var(--slot) 1fr var(--slot) var(--slot) var(--slot) 1fr var(--slot) var(--slot); }
+  .arena .mat-side.me {
+    grid-template-areas:
+      "head chest perm weapL hero weapR info grave deck"
+      "arms legs perm . arsenal . fx banish pitch";
+  }
+  .arena .mat-side.opp {
+    --slot: calc(var(--base) * 0.74);
+    grid-template-areas:
+      "pitch banish fx . arsenal . perm legs arms"
+      "deck grave info weapR hero weapL perm chest head";
+  }
+  .arena .mat-chain { --slot: calc(var(--base) * 0.7); }
+  .arena .mat-info { align-self: center; }
+  .arena .mat-effects { align-self: start; max-height: 100%; overflow: hidden; }
+  .arena .mat-side.opp .mat-effects { align-self: end; }
+  .arena .mat-perms { gap: 3px; }
+  .arena .slot-label { font-size: max(7px, calc(var(--slot) * .14)); }
+  .arena .mat-name { font-size: .72rem; }
+  .arena .life-orb { font-size: max(12px, calc(var(--slot) * .3)) !important; min-width: max(22px, calc(var(--slot) * .55)); height: max(22px, calc(var(--slot) * .55)); }
+}
+
+@media (orientation: landscape) and (max-height: 560px) and (max-width: 860px) {
+  .brand-name, .nav-lb-short { display: none !important; }
+  .nav a { padding: .35em .75em; font-size: 1rem; }
+  .nav { flex: 1; justify-content: space-evenly; }
+}
+/* ---- phones held upright: icons in a bottom tab bar */
+@media (max-width: 640px) and (orientation: portrait) {
+  .topbar { padding-top: calc(.5rem + var(--sa-t)); }
+  .brand { font-size: 1.1rem; }
+  .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; display: grid; grid-template-columns: repeat(6, 1fr); gap: 0; overflow: visible;
+    background: #0e0c0af5; border-top: 1px solid var(--line); padding: 4px calc(4px + var(--sa-r)) calc(4px + var(--sa-b)) calc(4px + var(--sa-l)); backdrop-filter: blur(8px); }
+  .nav a { flex-direction: column; gap: 1px; padding: .3em 0; font-size: .66rem; border-radius: 10px; }
+  .nav-ic { display: block; font-size: 1.25rem; line-height: 1.2; }
+  .nav-lb { display: none; }
+  .nav-lb-short { display: block; }
+  .nav a.active { color: var(--accent); background: #ffffff0d; }
+  .page { padding-bottom: calc(80px + var(--sa-b)); }
+  html.in-game .nav { display: none; }
+  .arena-bar { padding-top: 4px; }
+  .arena-bar .icon-btn { padding: .3em .55em; }
+  .more-btn { display: inline-flex !important; }
+  .bar-more { display: none; }
+  .bar-more.open { display: flex; flex-direction: column; gap: 4px; position: absolute; top: 42px; right: 8px; z-index: 30; min-width: 180px; padding: 6px;
+    border-radius: 12px; background: #15110df5; border: 1px solid #4a3520; box-shadow: 0 12px 30px #000c; animation: fadeUp .15s ease-out; }
+  .bar-more.open .icon-btn { width: 100%; height: 40px; justify-content: flex-start; padding: 0 .8em; gap: .6em; }
+  .bar-more.open .icon-btn span { display: inline; }
+}
+/* popups stay clear of the camera cut-out */
+.modal-bg { padding-left: max(1rem, var(--sa-l)); padding-right: max(1rem, var(--sa-r)); padding-top: max(1rem, var(--sa-t)); }

@@ -1,4 +1,5 @@
-# Builds the Android app (APK). Pull requests: build only. Pushes to main also publish
+# Builds the Android app (APK). Pull requests publish a pre-release test build
+# (android-pr-<number>). Pushes to main publish
 # a GitHub Release, so the newest APK is always at:
 #   https://github.com/<owner>/<repo>/releases/latest/download/fab-trainer.apk
 name: Android APK
@@ -45,3 +46,17 @@ jobs:
           body: |
             Install on Android: download `fab-trainer.apk` on your phone, open it, and allow installing from this source when asked.
             New versions install over the old one; your decks and stats are kept.
+      - name: Publish test build for this pull request
+        # a pre-release per PR with a direct download link, so a change can be tried on a phone before merging
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-pr-${{ github.event.pull_request.number }}
+          target_commitish: ${{ github.event.pull_request.head.sha }}
+          name: "Test build: PR #${{ github.event.pull_request.number }}"
+          prerelease: true
+          make_latest: false
+          files: fab-trainer.apk
+          body: |
+            Test build of pull request #${{ github.event.pull_request.number }} (not the stable version).
+            Install it the same way as a normal release; it installs over your current app and keeps your decks and stats.
