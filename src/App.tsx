@@ -14,13 +14,14 @@ import AccountPage from './ui/pages/AccountPage';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
 
+// [route, label, short label (phones), icon]
 const ROUTES = [
-  ['', 'Home'],
-  ['learn', 'Learn'],
-  ['play', 'Play'],
-  ['decks', 'Decks'],
-  ['cards', 'Card Database'],
-  ['profile', 'Profile'],
+  ['', 'Home', 'Home', '🏠'],
+  ['learn', 'Learn', 'Learn', '📖'],
+  ['play', 'Play', 'Play', '⚔'],
+  ['decks', 'Decks', 'Decks', '🃏'],
+  ['cards', 'Card Database', 'Cards', '🔎'],
+  ['profile', 'Profile', 'Profile', '👤'],
 ] as const;
 
 function useHash() {
@@ -62,10 +63,14 @@ export default function App() {
   return (
     <>
       <header className="topbar">
-        <a href="#" className="brand" style={{ textDecoration: 'none' }}>⚔ FaB Trainer</a>
+        <a href="#" className="brand" style={{ textDecoration: 'none' }}>⚔<span className="brand-name"> FaB Trainer</span></a>
         <nav className="nav">
-          {ROUTES.map(([r, label]) => (
-            <a key={r} href={`#${r}`} className={route === r ? 'active' : ''}>{label}</a>
+          {ROUTES.map(([r, label, short, icon]) => (
+            <a key={r} href={`#${r}`} className={route === r ? 'active' : ''} aria-label={label}>
+              <span className="nav-ic" aria-hidden>{icon}</span>
+              <span className="nav-lb">{label}</span>
+              <span className="nav-lb-short" aria-hidden>{short}</span>
+            </a>
           ))}
         </nav>
         <div className="grow" />
