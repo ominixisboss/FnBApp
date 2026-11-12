@@ -14,6 +14,7 @@ import AccountPage from './ui/pages/AccountPage';
 import PuzzlesPage from './ui/pages/PuzzlesPage';
 import GauntletPage from './ui/pages/GauntletPage';
 import LimitedPage from './ui/pages/LimitedPage';
+import TournamentPage from './ui/pages/TournamentPage';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
 import { loadMatches } from './stats/matches';
@@ -117,6 +118,7 @@ export default function App() {
             {route === 'puzzles' && <PuzzlesPage id={rest[0]} />}
             {route === 'gauntlet' && <GauntletPage />}
             {route === 'limited' && <LimitedPage />}
+            {route === 'tournament' && <TournamentPage />}
             {route === 'replay' && <ReplayPage id={rest[0]} />}
             {route === 'privacy' && <PrivacyPage />}
           </div>

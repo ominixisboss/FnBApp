@@ -16,7 +16,7 @@ export interface MatchStats {
 
 // ---------------------------------------------------------------- feats (puzzles, gauntlet)
 
-export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number }
+export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number; tournamentWins?: number; tournamentTop?: number }
 const FEATS_KEY = 'fab-trainer.feats.v1';
 export function loadFeats(): Feats {
   try { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0, ...JSON.parse(localStorage.getItem(FEATS_KEY) ?? '{}') }; } catch { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0 }; }
@@ -123,6 +123,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'puzzle-all', icon: '🧠', name: 'Grandmaster', text: 'Solve 8 lethal puzzles', goal: 8, reward: 500, check: (_m, f) => f.puzzles.length },
   { id: 'gauntlet', icon: '🏟', name: 'Gauntlet Champion', text: 'Beat every opponent in the Gauntlet', goal: 1, reward: 600, check: (_m, f) => f.gauntletWins },
   { id: 'limited', icon: '📦', name: 'Pack Master', text: 'Win a Sealed or Draft game', goal: 1, reward: 300, check: (_m, f) => f.sealedWins + f.draftWins },
+  { id: 'top4', icon: '🎟', name: 'Top Cut', text: 'Make the Top 4 of an Armory tournament', goal: 1, reward: 300, check: (_m, f) => f.tournamentTop ?? 0 },
+  { id: 'armory', icon: '🏅', name: 'Armory Champion', text: 'Win an Armory tournament', goal: 1, reward: 700, check: (_m, f) => f.tournamentWins ?? 0 },
 ];
 
 // ---------------------------------------------------------------- cosmetics

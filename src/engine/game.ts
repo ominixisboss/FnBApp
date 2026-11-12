@@ -190,7 +190,8 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
 
 // ---------------------------------------------------------------- setup
 
-export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() & 0x7fffffff, format = 'blitz'): GameState {
+/** `first`: who takes the first turn (decided by a die roll before the game); random if not given. */
+export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId): GameState {
   const s: GameState = {
     seed, nextUid: 1, turn: 1, turnPlayer: 0, phase: 'action', priority: 0, passes: 0,
     players: [null!, null!], chain: [], chainOpen: false, winner: null, log: [], format,
@@ -231,7 +232,8 @@ export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() 
     s.players[id] = p;
   });
   for (const p of s.players) ability(p)?.setup?.(heroCtx(s, p));
-  s.turnPlayer = rand(s) < 0.5 ? 0 : 1;
+  const coin = rand(s) < 0.5 ? 0 : 1; // always drawn, so the rest of the game is the same whoever goes first
+  s.turnPlayer = first ?? coin;
   s.priority = s.turnPlayer;
   log(s, null, `${pname(s, s.turnPlayer)} goes first.`);
   for (const p of s.players) drawUpTo(s, p);

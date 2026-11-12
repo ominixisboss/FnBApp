@@ -183,7 +183,7 @@ function EmoteBubble({ id, mine }: { id: string; mine?: boolean }) {
   return <div className={`emote-bubble ${mine ? 'mine' : 'theirs'}`}><span>{e[1]}</span> {e[2]}</div>;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel, sandbox }: {
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel, sandbox, clock }: {
   initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats, replay?: { initial: GameState; actions: Action[] }) => void;
   /** the player's equipped card sleeve and playmat */
   cosmetics?: { sleeve?: string; mat?: string };
@@ -195,6 +195,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   rematchLabel?: string;
   /** sandbox: start with manual moves on */
   sandbox?: boolean;
+  /** chess clock: minutes per player; your time runs while you have priority, and running out loses */
+  clock?: number;
   /** when set, the game is played on the server: state comes from it and actions are sent to it */
   online?: OnlineLink;
 }) {
@@ -264,6 +266,29 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (i >= 0) log.length = i + 1;
   }, [state, online, initial]);
   const fx = useFx(state, skipFx);
+  // chess clock (local games)
+  const [times, setTimes] = useState<[number, number]>(() => [(clock ?? 0) * 60000, (clock ?? 0) * 60000]);
+  useEffect(() => {
+    if (!clock || online || state.phase === 'gameOver') return;
+    const who = state.priority;
+    let last = performance.now();
+    const t = setInterval(() => {
+      const now = performance.now();
+      const dt = now - last;
+      last = now;
+      setTimes((ts) => { const n: [number, number] = [...ts]; n[who] = Math.max(0, n[who] - dt); return n; });
+    }, 250);
+    return () => clearInterval(t);
+  }, [clock, online, state.priority, state.phase]);
+  useEffect(() => {
+    if (!clock || online || state.phase === 'gameOver') return;
+    const out = times.findIndex((t) => t <= 0) as PlayerId | -1;
+    if (out === -1 || state.priority !== out) return;
+    // flag fall: that player loses on time
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setState((s) => (s.phase !== 'gameOver' && s.priority === out ? logApply(s, { type: 'concede' }) : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [times, clock, online, state.priority, state.phase]);
   // your decisions this game, for the post-game review
   const decisions = useRef<{ before: GameState; action: Action }[]>([]);
   const [reviewing, setReviewing] = useState(false);
@@ -689,6 +714,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       <div className="arena-bar">
         <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
         <div className="grow" />
+        {!!clock && !online && (
+          <span className="chess-clock" title="Chess clock: your time runs while it's your decision">
+            {(['You', state.players[1].name.replace(' (bot)', '')] as string[]).map((_n, i) => {
+              const t = times[i];
+              return <span key={i} className={`clk ${state.priority === i && state.phase !== 'gameOver' ? 'run' : ''} ${t < 60000 ? 'low' : ''}`}>{i === 0 ? '⏱' : ''} {Math.floor(t / 60000)}:{String(Math.floor(t / 1000) % 60).padStart(2, '0')}</span>;
+            })}
+          </span>
+        )}
         {online && (
           <span className={`online-badge ${online.opponent?.connected === false ? 'warn' : ''}`}>
             ● Online{online.opponent?.connected === false ? ' · opponent disconnected (they forfeit in 2 min)' : ''}
@@ -847,7 +880,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             {' '}· you finished on {Math.max(0, me.life)} life.
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
-            {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
+            {onRematch && <button className="primary" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
             <button className="gold" onClick={onExit}>New game</button>
             <button onClick={() => setOverlay(false)}>View board</button>
             {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}

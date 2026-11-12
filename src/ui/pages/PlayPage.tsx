@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { card } from '../../data/cardDb';
 import type { DeckFormat } from '../../deck/deck';
-import { autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
+import { FORMAT_RULES, autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import type { MatchStats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
+import { DiceRoll, Loadout, poolHasChoices } from '../components/MatchFlow';
+import type { DeckList } from '../../engine/game';
+import type { PlayerId } from '../../engine/types';
 import { friends as friendsApi, myRating } from '../auth';
 import type { FriendRow, MyRating } from '../auth';
 import { saveLocalReplay } from '../../stats/replays';
@@ -29,15 +32,21 @@ interface Setup {
   tutorial: boolean;
   /** sandbox: manual moves on, results not recorded */
   sandbox?: boolean;
+  /** best of 1 or best of 3 (with sideboarding between games) */
+  bestOf?: 1 | 3;
+  /** chess clock: minutes per player (0 = off) */
+  clock?: number;
 }
+
+interface Opponent { heroId: string; name: string; deck: DeckList }
 
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
   const hashDeck = preselect ?? location.hash.split('/')[1];
   const decks = loadDecks();
-  const pre = decks.find((d) => d.id === hashDeck);
+  const preDeck = decks.find((d) => d.id === hashDeck);
   const [setup, setSetup] = useState<Setup>({
-    format: pre?.format ?? 'blitz',
-    myDeckId: pre?.id ?? '',
+    format: preDeck?.format ?? 'blitz',
+    myDeckId: preDeck?.id ?? '',
     oppHeroId: 'random',
     difficulty: tutorial ? 'easy' : 'normal',
     tutorial: !!tutorial,
@@ -59,16 +68,34 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const myDeck = decks.find((d) => d.id === setup.myDeckId);
   const myAutoHero = setup.myDeckId.startsWith('auto:') ? setup.myDeckId.slice(5) : null;
 
+  // a match: your card pool and the opponent stay the same across games; between games you sideboard
+  const [ctx, setCtx] = useState<{ pool: DeckList; opp: Opponent } | null>(null);
+  const [match, setMatch] = useState<{ wins: [number, number]; lastLoser?: PlayerId } | null>(null);
+  const [pre, setPre] = useState<{ step: 'loadout' | 'dice'; chosen?: DeckList; chooser?: PlayerId } | null>(null);
+  const rules = FORMAT_RULES[setup.format === 'casual' ? 'blitz' : setup.format];
   const start = () => {
     const fmt = setup.format;
-    const mine = myDeck ? toDeckList(myDeck) : myAutoHero ? toDeckList(autoBuildDeck(myAutoHero, fmt, Date.now() & 0xffff)) : null;
-    if (!mine) return;
+    const pool = myDeck ? toDeckList(myDeck) : myAutoHero ? toDeckList(autoBuildDeck(myAutoHero, fmt, Date.now() & 0xffff)) : null;
+    if (!pool) return;
     const oppHero = setup.oppHeroId === 'random' ? heroes[Math.floor(Math.random() * heroes.length)].id : setup.oppHeroId;
-    const oppDeck = toDeckList(autoBuildDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff));
+    const opp = { heroId: oppHero, name: `${card(oppHero).name.split(',')[0]} (bot)`, deck: toDeckList(autoBuildDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff)) };
+    setCtx({ pool, opp });
+    setMatch(setup.bestOf === 3 ? { wins: [0, 0] } : null);
+    setPre({ step: poolHasChoices(pool, rules.minDeck) && !setup.tutorial ? 'loadout' : 'dice' });
+  };
+  const begin = (first: PlayerId) => {
+    if (!ctx || !pre) return;
     setGame(createGame([
-      { name: 'You', isBot: false, deck: mine },
-      { name: `${card(oppHero).name.split(',')[0]} (bot)`, isBot: true, difficulty: setup.difficulty, deck: oppDeck },
-    ], Date.now() & 0x7fffffff, fmt));
+      { name: 'You', isBot: false, deck: pre.chosen ?? ctx.pool },
+      { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
+    ], Date.now() & 0x7fffffff, setup.format, first));
+    setPre(null);
+  };
+  const matchOver = match && (match.wins[0] >= 2 || match.wins[1] >= 2);
+  const nextGame = () => {
+    setGame(null);
+    if (match && !matchOver) setPre({ step: 'loadout', chooser: match.lastLoser }); // sideboard, then the loser chooses
+    else start();
   };
 
   const onGameOver = (s: GameState, stats: MatchStats, replay?: LocalReplay) => {
@@ -81,6 +108,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       deckName: myDeck?.name ?? `${card(me.hero.cardId).name} (auto)`, difficulty: setup.difficulty,
       won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life, stats,
     });
+    if (match) setMatch((m) => m && { wins: [m.wins[0] + (s.winner === 0 ? 1 : 0), m.wins[1] + (s.winner === 1 ? 1 : 0)], lastLoser: s.winner === 0 ? 1 : 0 });
   };
 
   const deckForOnline = () => {
@@ -113,9 +141,17 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     );
   }
 
+  if (pre && ctx) {
+    return pre.step === 'loadout'
+      ? <Loadout pool={ctx.pool} minDeck={rules.minDeck} maxDeck={rules.maxDeck} title={match && (match.wins[0] + match.wins[1] > 0) ? `Sideboarding · game ${match.wins[0] + match.wins[1] + 1}` : 'Your loadout'} onDone={(d) => setPre({ ...pre, chosen: d, step: 'dice' })} />
+      : <DiceRoll names={['You', ctx.opp.name]} chooser={pre.chooser} onDone={begin} />;
+  }
   if (game) {
     const practice = setup.sandbox || setup.difficulty === 'goldfish';
-    return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} sandbox={setup.sandbox} onExit={() => setGame(null)} onRematch={start} onGameOver={practice ? undefined : onGameOver} cosmetics={loadProfile().cosmetics} />;
+    const score = match && <div className="match-score">Best of 3 · You <b>{match.wins[0]}</b> – <b>{match.wins[1]}</b> {ctx?.opp.name}{matchOver ? (match.wins[0] >= 2 ? ' · 🏆 You win the match!' : ' · Match lost') : ''}</div>;
+    return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} sandbox={setup.sandbox} onExit={() => { setGame(null); setMatch(null); }}
+      onRematch={nextGame} rematchLabel={match && !matchOver ? 'Next game' : match ? 'New match' : 'Rematch'} extraResult={score}
+      onGameOver={practice ? undefined : onGameOver} cosmetics={loadProfile().cosmetics} clock={setup.clock || undefined} />;
   }
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
@@ -137,6 +173,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         </div>
         {!tutorial && (
           <div className="more-modes">
+            <a href="#tournament">🏅 Armory night</a>
             <a href="#gauntlet">🏟 Gauntlet</a>
             <a href="#limited">📦 Sealed &amp; Draft</a>
             <a href="#puzzles">🧩 Lethal puzzles</a>
@@ -237,6 +274,14 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
           {(['easy', 'normal', 'hard', 'goldfish'] as Difficulty[]).map((d) => (
             <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d[0].toUpperCase() + d.slice(1)}</button>
           ))}
+        </div>
+        <div className="row small">
+          <span className="lobby-label">Match</span>
+          <div className="seg">{([1, 3] as const).map((b) => <button key={b} className={(setup.bestOf ?? 1) === b ? 'on' : ''} onClick={() => setSetup({ ...setup, bestOf: b })}>{b === 1 ? 'Single game' : 'Best of 3'}</button>)}</div>
+        </div>
+        <div className="row small">
+          <span className="lobby-label">Clock</span>
+          <div className="seg">{[0, 10, 20].map((m) => <button key={m} className={(setup.clock ?? 0) === m ? 'on' : ''} onClick={() => setSetup({ ...setup, clock: m })}>{m ? `${m} min` : 'Off'}</button>)}</div>
         </div>
         <label className="row small" title="Tap any card to move it anywhere: play cards the simulator doesn't automate, test lines, set up positions. Sandbox games aren't recorded.">
           <input type="checkbox" checked={!!setup.sandbox} onChange={(e) => setSetup({ ...setup, sandbox: e.target.checked })} /> 🛠 Sandbox (manual moves, not recorded)
