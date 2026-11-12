@@ -5,7 +5,9 @@ import { autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '.
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
-import { recordMatch } from '../../stats/matches';
+import { loadMatches, recordMatch } from '../../stats/matches';
+import { sfx } from '../sound';
+import type { Card } from '../../data/types';
 import { HeroPicker } from './DecksPage';
 import CardView from '../components/CardView';
 
@@ -30,6 +32,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   });
   const [game, setGame] = useState<GameState | null>(null);
   const [picking, setPicking] = useState<'me' | 'opp' | null>(null);
+  const [heroQ, setHeroQ] = useState('');
 
   const heroes = useMemo(() => heroesFor(setup.format === 'casual' ? 'blitz' : setup.format), [setup.format]);
   const myDeck = decks.find((d) => d.id === setup.myDeckId);
@@ -60,68 +63,72 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
   const formatDecks = decks.filter((d) => d.format === setup.format || setup.format === 'casual');
+  const starterHeroes = heroes.filter((h) => h.name.toLowerCase().includes(heroQ.toLowerCase()));
+  const selectedHero = myDeck ? card(myDeck.heroId) : myAutoHero ? card(myAutoHero) : null;
+  const record = loadMatches();
+  const wins = record.filter((m) => m.won).length;
   return (
-    <div className="col" style={{ maxWidth: 900 }}>
-      <h1>{tutorial ? 'Guided practice' : 'Play vs AI'}</h1>
-      {tutorial && (
-        <div className="panel small">
-          A relaxed game against an <b>easy</b> bot with hints switched on. Each time it’s your move, a suggestion appears with the reasoning behind it.
-          You can undo any move. Read the lessons first if you haven’t: <a href="#learn">Learn</a>.
+    <div className="lobby">
+      <div className="lobby-main">
+        <div className="lobby-head">
+          <h1>{tutorial ? 'Guided practice' : 'Play'}</h1>
+          <div className="seg">
+            {([['blitz', 'Blitz'], ['cc', 'Classic Constructed'], ['casual', 'Casual']] as [DeckFormat, string][]).map(([f, label]) => (
+              <button key={f} className={setup.format === f ? 'on' : ''} onClick={() => setSetup({ ...setup, format: f, myDeckId: '', oppHeroId: 'random' })}>{label}</button>
+            ))}
+          </div>
         </div>
-      )}
-      <div className="panel col">
-        <div className="row">
-          <b style={{ width: 120 }}>Format</b>
-          <select value={setup.format} onChange={(e) => setSetup({ ...setup, format: e.target.value as DeckFormat, myDeckId: '', oppHeroId: 'random' })}>
-            <option value="blitz">Blitz (young heroes, ~20 life, fast games)</option>
-            <option value="cc">Classic Constructed (adult heroes, 40 life)</option>
-            <option value="casual">Casual (any deck)</option>
-          </select>
+        {tutorial && (
+          <div className="panel small">
+            A relaxed game against an <b>easy</b> bot with hints on. Each time it’s your move, a suggestion explains the best play. You can undo any move.
+          </div>
+        )}
+        <h3 className="lobby-sub">Your decks</h3>
+        <div className="deckbox-grid">
+          {formatDecks.map((d) => (
+            <DeckBox key={d.id} hero={card(d.heroId)} title={d.name} sub={validateDeck(d).filter((e) => !e.startsWith('No weapon')).length ? 'Casual only' : 'Legal'}
+              selected={setup.myDeckId === d.id} onClick={() => setSetup({ ...setup, myDeckId: d.id })} />
+          ))}
+          <a className="deckbox deckbox-new" href="#decks"><span>＋</span>Build a deck</a>
         </div>
-        <div className="row">
-          <b style={{ width: 120 }}>Your deck</b>
-          <select value={myDeck ? setup.myDeckId : myAutoHero ? 'auto' : ''} onChange={(e) => {
-            const v = e.target.value;
-            if (v === 'auto') setPicking('me');
-            else setSetup({ ...setup, myDeckId: v });
-          }}>
-            <option value="">— choose —</option>
-            {formatDecks.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            <option value="auto">Auto-built deck for a hero…</option>
-          </select>
-          {myAutoHero && <span>{card(myAutoHero).name} (auto-built) <button className="small" onClick={() => setPicking('me')}>change</button></span>}
-          <a href="#decks" className="small">Manage decks</a>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <h3 className="lobby-sub">Starter decks</h3>
+          <input type="search" placeholder="Find a hero…" value={heroQ} onChange={(e) => setHeroQ(e.target.value)} style={{ maxWidth: 220 }} />
         </div>
-        {deckErrs.length > 0 && <div className="small" style={{ color: 'var(--yellow)' }}>Note: this deck isn’t tournament-legal ({deckErrs[0]}). You can still play with it.</div>}
-        <div className="row">
-          <b style={{ width: 120 }}>Opponent</b>
-          <select value={setup.oppHeroId === 'random' ? 'random' : 'pick'} onChange={(e) => (e.target.value === 'random' ? setSetup({ ...setup, oppHeroId: 'random' }) : setPicking('opp'))}>
-            <option value="random">Random hero</option>
-            <option value="pick">Choose hero…</option>
-          </select>
-          {setup.oppHeroId !== 'random' && <span>{card(setup.oppHeroId).name} <button className="small" onClick={() => setPicking('opp')}>change</button></span>}
-        </div>
-        <div className="row">
-          <b style={{ width: 120 }}>Bot difficulty</b>
-          {(['easy', 'normal', 'hard'] as Difficulty[]).map((d) => (
-            <label key={d} className="row" style={{ gap: '.25rem' }}>
-              <input type="radio" checked={setup.difficulty === d} onChange={() => setSetup({ ...setup, difficulty: d })} /> {d}
-            </label>
+        <div className="deckbox-grid">
+          {starterHeroes.map((h) => (
+            <DeckBox key={h.id} hero={h} title={h.name} sub="Starter" selected={myAutoHero === h.id} onClick={() => setSetup({ ...setup, myDeckId: `auto:${h.id}` })} />
           ))}
         </div>
-        <label className="row">
-          <input type="checkbox" checked={setup.tutorial} onChange={(e) => setSetup({ ...setup, tutorial: e.target.checked })} /> Show move suggestions (hints)
-        </label>
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <div className="row">
-            {myDeck && <CardView card={card(myDeck.heroId)} width={80} />}
-            {myAutoHero && <CardView card={card(myAutoHero)} width={80} />}
-            {(myDeck || myAutoHero) && <b>vs</b>}
-            {setup.oppHeroId !== 'random' && <CardView card={card(setup.oppHeroId)} width={80} />}
-          </div>
-          <button className="primary" disabled={!myDeck && !myAutoHero} onClick={start} style={{ fontSize: '1.1rem' }}>Start game ▶</button>
-        </div>
       </div>
+
+      <aside className="lobby-side">
+        <div className="lobby-matchup">
+          <div className="matchup-hero">
+            {selectedHero ? <CardView card={selectedHero} width="100%" /> : <div className="matchup-empty">Choose a deck</div>}
+            <span>{selectedHero ? (myDeck?.name ?? `${selectedHero.name} starter`) : 'You'}</span>
+          </div>
+          <div className="vs">VS</div>
+          <div className="matchup-hero" onClick={() => setPicking('opp')} style={{ cursor: 'pointer' }} title="Choose opponent">
+            {setup.oppHeroId !== 'random' ? <CardView card={card(setup.oppHeroId)} width="100%" /> : <div className="matchup-empty">?<small>Random hero</small></div>}
+            <span>{setup.oppHeroId !== 'random' ? card(setup.oppHeroId).name : 'Random opponent'} <button className="small" onClick={(e) => { e.stopPropagation(); setPicking('opp'); }}>change</button></span>
+          </div>
+        </div>
+        {setup.oppHeroId !== 'random' && <button className="small" onClick={() => setSetup({ ...setup, oppHeroId: 'random' })}>🎲 Random opponent</button>}
+        <div className="lobby-label">Difficulty</div>
+        <div className="seg">
+          {(['easy', 'normal', 'hard'] as Difficulty[]).map((d) => (
+            <button key={d} className={setup.difficulty === d ? 'on' : ''} onClick={() => setSetup({ ...setup, difficulty: d })}>{d[0].toUpperCase() + d.slice(1)}</button>
+          ))}
+        </div>
+        <label className="row small">
+          <input type="checkbox" checked={setup.tutorial} onChange={(e) => setSetup({ ...setup, tutorial: e.target.checked })} /> Show move suggestions
+        </label>
+        {deckErrs.length > 0 && <div className="small" style={{ color: 'var(--yellow)' }}>This deck isn’t tournament-legal ({deckErrs[0]}). You can still play it.</div>}
+        {record.length > 0 && <div className="small muted">Record vs AI: <b className="ok">{wins}W</b> – <b className="err">{record.length - wins}L</b></div>}
+        <button className="play-big" disabled={!myDeck && !myAutoHero} onClick={start}>Play</button>
+      </aside>
+
       {picking && (
         <div className="modal-bg" onClick={() => setPicking(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -135,5 +142,17 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         </div>
       )}
     </div>
+  );
+}
+
+function DeckBox({ hero, title, sub, selected, onClick }: { hero: Card; title: string; sub: string; selected: boolean; onClick: () => void }) {
+  return (
+    <button className={`deckbox ${selected ? 'sel' : ''}`} onClick={() => { sfx('click'); onClick(); }}>
+      <div className="deckbox-art" style={{ backgroundImage: hero.image ? `url(${hero.image})` : undefined }} />
+      <div className="deckbox-label">
+        <b>{title}</b>
+        <small>{sub}</small>
+      </div>
+    </button>
   );
 }

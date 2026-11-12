@@ -11,6 +11,7 @@ import { getScript } from '../../engine/cardScript';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
+import { setSoundEnabled, sfx, soundEnabled } from '../sound';
 import type { ChainLink } from '../../engine/types';
 
 const HUMAN: PlayerId = 0;
@@ -22,6 +23,20 @@ interface Floater { id: number; player: PlayerId; amount: number }
 interface Fx { floaters: Floater[]; lifeAnim: [string, string]; lifeKey: [number, number]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
 
 const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+function playSounds(a: GameState, b: GameState) {
+  if (b.phase === 'gameOver' && a.phase !== 'gameOver') return sfx(b.winner === HUMAN ? 'win' : 'lose');
+  const lifeLoss = Math.max(a.players[0].life - b.players[0].life, a.players[1].life - b.players[1].life);
+  if (lifeLoss >= 5) sfx('bigHit');
+  else if (lifeLoss > 0) sfx('hit');
+  if (b.chain.length > a.chain.length) sfx('play');
+  const defA = a.chain[a.chain.length - 1]?.defenders.length ?? 0;
+  const lastB = b.chain[b.chain.length - 1];
+  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA) sfx('block');
+  if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) sfx('pitch');
+  if (b.turn !== a.turn) sfx(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
+  else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) sfx('draw');
+}
 
 /** Watches state transitions and produces short-lived visual effects. */
 function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
@@ -47,6 +62,7 @@ function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
         if (d <= -5) shake = true;
       }
     }
+    if (before) playSounds(before, state);
     if (!before || before.turn !== state.turn) {
       const mine = state.turnPlayer === HUMAN;
       next.banner = { id: seq.current++, text: mine ? 'Your turn' : `${state.players[state.turnPlayer].name.replace(' (bot)', '')}’s turn`, mine };
@@ -78,9 +94,19 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [detail, setDetail] = useState<Card | null>(null);
   const [zone, setZone] = useState<{ title: string; cards: CardInst[] } | null>(null);
   const [showHint, setShowHint] = useState(tutorial);
-  const [showManual, setShowManual] = useState(false);
   const [modePick, setModePick] = useState<PlayOption | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
+  const [sound, setSound] = useState(soundEnabled);
+  const handRef = useRef<HTMLDivElement>(null);
+  const oppHandRef = useRef<HTMLDivElement>(null);
+  const suppressClick = useRef(false);
+  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    document.documentElement.classList.add('in-game');
+    return () => document.documentElement.classList.remove('in-game');
+  }, []);
   const skipFx = useRef(false);
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
@@ -150,7 +176,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
-  }, [state.log.length]);
+  }, [state.log.length, drawer]);
 
   const undo = () => {
     const prev = history[history.length - 1];
@@ -187,9 +213,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const rememberRect = (uid: number) => {
     lastClick.current = document.querySelector(`[data-uid="${uid}"]`)?.getBoundingClientRect() ?? null;
   };
-  const clickHand = (inst: CardInst) => {
+  const clickHand = (inst: CardInst, rect?: DOMRect) => {
     setError(null);
-    rememberRect(inst.uid);
+    if (rect) lastClick.current = rect;
+    else rememberRect(inst.uid);
     if (pending) {
       if (pending.opt.kind === 'card' && inst.uid === pending.opt.uid) return setPending(null);
       const sel = pending.pitch.includes(inst.uid) ? pending.pitch.filter((u) => u !== inst.uid) : [...pending.pitch, inst.uid];
@@ -218,6 +245,50 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setDetail(cardOf(inst));
   };
 
+  // ---- drag a card out of the hand onto the battlefield to play it
+  const dragStart = (e: React.PointerEvent<HTMLDivElement>, inst: CardInst) => {
+    if (e.button !== 0) return;
+    dragRef.current = { uid: inst.uid, x: e.clientX, y: e.clientY, moved: false, el: e.currentTarget };
+  };
+  const dragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.moved && Math.hypot(dx, dy) < 10) return;
+    if (!d.moved) {
+      d.moved = true;
+      d.el.setPointerCapture(e.pointerId);
+      d.el.classList.add('dragging');
+      setDragging(true);
+    }
+    d.el.style.setProperty('--dx', `${dx}px`);
+    d.el.style.setProperty('--dy', `${dy}px`);
+    const top = handRef.current?.getBoundingClientRect().top ?? window.innerHeight;
+    d.el.classList.toggle('will-play', e.clientY < top - 30);
+  };
+  const dragReset = (el: HTMLElement) => {
+    el.classList.remove('dragging', 'will-play');
+    el.style.removeProperty('--dx');
+    el.style.removeProperty('--dy');
+    setDragging(false);
+  };
+  const dragEnd = (e: React.PointerEvent<HTMLDivElement>, inst: CardInst) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d || !d.moved) return;
+    suppressClick.current = true;
+    setTimeout(() => (suppressClick.current = false), 50);
+    const rect = d.el.querySelector('.card')?.getBoundingClientRect();
+    const top = handRef.current?.getBoundingClientRect().top ?? window.innerHeight;
+    dragReset(d.el);
+    if (e.clientY < top - 30) clickHand(inst, rect);
+  };
+  const dragCancel = () => {
+    if (dragRef.current) dragReset(dragRef.current.el);
+    dragRef.current = null;
+  };
+
   // ---- prompt
   const defendTotal = defendSel.reduce((a, u) => a + (defOpts.find((d) => d.uid === u)?.defense ?? 0), 0);
   const defendErr = state.phase === 'defend' && myTurn ? checkDefense(state, defendSel) : null;
@@ -231,11 +302,16 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       </>
     );
   } else if (!myTurn) {
-    prompt = <span className="msg muted">{state.players[state.priority].name} is thinking…</span>;
+    prompt = (
+      <>
+        <span className="msg muted">{state.players[state.priority].name} is thinking…</span>
+        <button className="primary waiting" disabled>Opponent’s Move</button>
+      </>
+    );
   } else if (pending) {
     prompt = (
       <>
-        <span className="msg">Pay <b>{pending.opt.cost}</b> for <b>{pending.opt.label}</b>: click cards in your hand to pitch them ({pitchTotal}/{pending.opt.cost}).</span>
+        <span className="msg">Pitch cards to pay for <b>{pending.opt.label}</b> <span className="pay-meter">{pitchTotal} / {pending.opt.cost}</span></span>
         <button className="gold" onClick={() => { const p = autoPitch(me, pending.opt.cost, pending.opt.kind === 'card' ? [pending.opt.uid] : []); if (p) finishPay(p); }}>Auto-pay</button>
         <button onClick={() => setPending(null)}>Cancel</button>
       </>
@@ -245,11 +321,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     prompt = (
       <>
         <span className="msg">
-          <b>{cardOf(link.inst).name}</b> attacks for <b>{incoming}</b>{link.dominate ? ' (dominate: max 1 card from hand)' : ''}{link.overpower ? ' (overpower: max 1 action card)' : ''}. Select cards from hand or equipment to defend.
-          {' '}Blocking {defendTotal} → you take <b>{Math.max(0, incoming - defendTotal)}</b>.
+          <b>{cardOf(link.inst).name}</b> attacks for <b>{incoming}</b>{link.dominate ? ' · dominate (max 1 from hand)' : ''}{link.overpower ? ' · overpower (max 1 action)' : ''}.
+          {' '}Pick blockers. You take <b className="pay-meter">{Math.max(0, incoming - defendTotal)}</b>
           {defendErr && <span className="err"> {defendErr}</span>}
         </span>
-        <button className="primary" disabled={!!defendErr} onClick={() => act({ type: 'defend', uids: defendSel })}>{defendSel.length ? `Defend (${defendTotal})` : 'No block'}</button>
+        <button className="primary" disabled={!!defendErr} onClick={() => act({ type: 'defend', uids: defendSel })}>{defendSel.length ? `Block ${defendTotal}` : 'No Blocks'}</button>
       </>
     );
   } else if (state.phase === 'reaction' && link) {
@@ -257,8 +333,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     prompt = (
       <>
         <span className="msg">
-          Reaction step: {cardOf(link.inst).name} {linkPower(link)} vs {linkDefense(link)} defense.{' '}
-          {mine ? 'Play an attack reaction or instant, or pass.' : 'Play a defense reaction or instant, or pass.'}
+          Reactions · {cardOf(link.inst).name} <b>{linkPower(link)}</b> vs <b>{linkDefense(link)}</b>.{' '}
+          {mine ? 'Attack reactions or instants?' : 'Defense reactions or instants?'}
         </span>
         <button className="primary" onClick={() => act({ type: 'pass' })}>Pass</button>
       </>
@@ -266,18 +342,17 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (state.phase === 'arsenal') {
     prompt = (
       <>
-        <span className="msg">End phase: click a card in your hand to put it face-down in your arsenal, or skip.</span>
-        <button className="primary" onClick={() => act({ type: 'arsenal', uid: null })}>Skip</button>
+        <span className="msg">End phase: choose a card for your arsenal.</span>
+        <button className="primary" onClick={() => act({ type: 'arsenal', uid: null })}>No Arsenal</button>
       </>
     );
   } else {
     prompt = (
       <>
         <span className="msg">
-          Your action phase. {me.actionPoints > 0 ? `You have ${me.actionPoints} action point${me.actionPoints > 1 ? 's' : ''}.` : 'No action points left (instants only).'}
-          {' '}Playable cards glow green.
+          {me.actionPoints > 0 ? `${me.actionPoints} action point${me.actionPoints > 1 ? 's' : ''}. Drag or click a glowing card.` : 'No action points left.'}
         </span>
-        <button className="primary" onClick={() => act({ type: 'pass' })}>{state.chainOpen ? 'Close chain & end turn' : 'End turn'}</button>
+        <button className="primary" onClick={() => act({ type: 'pass' })}>{state.chainOpen ? 'Close Chain · End Turn' : 'End Turn'}</button>
       </>
     );
   }
@@ -289,66 +364,112 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     return '';
   };
 
+  const phaseStep = state.phase === 'action' ? 1 : state.phase === 'defend' ? 2 : state.phase === 'reaction' ? 3 : state.phase === 'arsenal' ? 4 : -1;
+  const n = me.hand.length;
+
   return (
-    <div className="board">
-      <div className="col" ref={colRef}>
+    <div className="arena">
+      <div className="arena-bar">
+        <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
+        <div className="grow" />
+        <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>
+        <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>
+        <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
+        <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>
+        <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}</button>
+        <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || !myTurn}>⚑<span>Concede</span></button>
+        <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
+      </div>
+
+      <div className="opp-hand" ref={oppHandRef} title={`${opp.name}: ${opp.hand.length} cards in hand`}>
+        {opp.hand.map((h, i) => {
+          const off = i - (opp.hand.length - 1) / 2;
+          return <div key={h.uid} className="opp-hand-card anim-fade-up" style={{ rotate: `${-off * 5}deg`, translate: `0 ${-Math.abs(off) * Math.abs(off) * 3}px` }}><CardBack width="var(--ohw)" /></div>;
+        })}
+      </div>
+
+      <div className="arena-board" ref={colRef}>
         <div className="mat">
-        <div ref={oppRef}>
-          <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
-        </div>
-        <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppRef} />
-        <PlayerArea
-          p={me}
-          state={state}
-          onHover={setHover}
-          onClickArena={clickArena}
-          onZone={setZone}
-          arenaClass={(inst) => {
-            if (myTurn && state.phase === 'defend') return defendSel.includes(inst.uid) ? 'sel' : defOpts.some((d) => d.uid === inst.uid) ? '' : '';
-            return myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '';
-          }}
-          arsenalClick={clickHand}
-          arsenalClass={handClass}
-          fx={fx}
-        />
-        </div>
-        <div className="prompt">{prompt}</div>
-        {error && <div className="err small">{error}</div>}
-        {hint && showHint && state.phase !== 'gameOver' && (
-          <div className="hint">
-            <b>💡 Suggested:</b> {describeAction(state, hint.action)}. <span className="muted">{hint.reason}</span>
+          <div ref={oppRef}>
+            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
           </div>
-        )}
-        <div className="hand">
-          {me.hand.map((inst, i) => (
-            <div key={inst.uid} data-uid={inst.uid} className="anim-deal" style={{ animationDelay: `${Math.min(i, 6) * 60}ms` }}>
-              <CardView card={cardOf(inst)} width={118} className={handClass(inst)} onClick={() => clickHand(inst)} onHover={setHover}
-                badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
+          <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
+          <PlayerArea
+            p={me}
+            state={state}
+            onHover={setHover}
+            onClickArena={clickArena}
+            onZone={setZone}
+            arenaClass={(inst) => {
+              if (myTurn && state.phase === 'defend') return defendSel.includes(inst.uid) ? 'sel' : '';
+              return myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '';
+            }}
+            arsenalClick={(i) => clickHand(i)}
+            arsenalClass={handClass}
+            fx={fx}
+          />
+        </div>
+      </div>
+
+      <div className={`hand-fan ${dragging ? 'is-dragging' : ''}`} ref={handRef}>
+        {me.hand.map((inst, i) => {
+          const off = i - (n - 1) / 2;
+          return (
+            <div
+              key={inst.uid}
+              data-uid={inst.uid}
+              className="fan-card"
+              style={{ rotate: `${off * Math.min(5, 26 / Math.max(n, 1))}deg`, translate: `0 ${Math.abs(off) * Math.abs(off) * 4}px`, zIndex: i + 1 }}
+              onPointerDown={(e) => dragStart(e, inst)}
+              onPointerMove={dragMove}
+              onPointerUp={(e) => dragEnd(e, inst)}
+              onPointerCancel={dragCancel}
+              onMouseEnter={() => sfx('hover')}
+            >
+              <div className="anim-deal" style={{ animationDelay: `${Math.min(i, 6) * 60}ms` }}>
+                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
+                  onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } clickHand(inst); }}
+                  onHover={setHover}
+                  badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
+              </div>
             </div>
+          );
+        })}
+      </div>
+
+      <div className="dock">
+        <div className="phase-ladder" title="Turn structure">
+          {['Start', 'Action', 'Defend', 'Reaction', 'End'].map((label, i) => (
+            <span key={label} className={`${i === phaseStep ? 'now' : ''} ${state.turnPlayer === HUMAN ? 'mine' : 'theirs'}`}>{label}</span>
           ))}
-          {me.hand.length === 0 && <span className="muted small">Your hand is empty.</span>}
         </div>
+        <div className={`prompt ${myTurn ? 'your-move' : ''}`}>{prompt}</div>
+        {error && <div className="dock-error">{error}</div>}
       </div>
-      <div className="col">
-        <div className="panel col">
-          <div className="row">
-            <button className="small" onClick={() => setShowHint(!showHint)}>{showHint ? 'Hide hints' : '💡 Hint'}</button>
-            <button className="small" disabled={!history.length} onClick={undo}>↶ Undo</button>
-            <button className="small" onClick={() => setShowManual(!showManual)}>🛠 Manual</button>
-            <button className="small" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || !myTurn}>Concede</button>
-            <button className="small" onClick={onExit}>Exit</button>
-          </div>
-          {showManual && <ManualTools state={state} act={act} />}
+
+      {hint && showHint && state.phase !== 'gameOver' && (
+        <div className="hint arena-hint">
+          <b>💡 {describeAction(state, hint.action)}</b>
+          <div className="muted small">{hint.reason}</div>
         </div>
-        <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Game log</h3>
-          <div className="log" ref={logRef}>
-            {state.log.slice(-200).map((l, i) => (
-              <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>{l.text}</div>
-            ))}
+      )}
+
+      {drawer && (
+        <div className="drawer">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h3 style={{ margin: 0 }}>{drawer === 'log' ? 'Game log' : 'Manual controls'}</h3>
+            <button className="small" onClick={() => setDrawer(null)}>✕</button>
           </div>
+          {drawer === 'manual' && <ManualTools state={state} act={act} />}
+          {drawer === 'log' && (
+            <div className="log" ref={logRef}>
+              {state.log.slice(-250).map((l, i) => (
+                <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>{l.text}</div>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
+      )}
       {fx.banner && <TurnBanner key={fx.banner.id} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
@@ -538,7 +659,7 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     const src = document.querySelector(`.side [data-uid="${l.inst.uid}"]`);
     if (src) from = src.getBoundingClientRect();
     else if (l.attacker === HUMAN) from = lastClick.current;
-    else from = oppRef.current?.querySelector('.hero-box')?.getBoundingClientRect() ?? null;
+    else from = oppRef.current?.getBoundingClientRect() ?? null;
     if (!from) return;
     const dx = from.left + from.width / 2 - (to.left + to.width / 2);
     const dy = from.top + from.height / 2 - (to.top + to.height / 2);
