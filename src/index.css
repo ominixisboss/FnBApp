@@ -1153,3 +1153,31 @@ table.history tr.me-row td { background: #d9a4411a; }
 .avatar.frame-goldf { border-color: #f6d58e; box-shadow: 0 0 0 2px #a8741d, 0 0 14px #f0b54288; }
 .avatar.frame-flame { border-color: #ff8a3d; box-shadow: 0 0 0 2px #6d140e, 0 0 16px #ff5a1aaa; }
 .avatar.frame-mythic { border-color: #e2c4ff; box-shadow: 0 0 0 2px #5a2fae, 0 0 18px #9b6bffcc, 0 0 30px #ff8a4f55; }
+
+/* ===================================================== puzzles, gauntlet, review */
+.learn-extra { display: block; margin-top: .5rem; padding: .5rem .7rem; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); text-decoration: none; color: var(--text); }
+.learn-extra:hover { border-color: var(--accent); }
+.btn-link { display: inline-block; padding: .45em .9em; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); text-decoration: none; }
+.btn-link:hover { border-color: var(--accent); }
+.puzzle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .8rem; }
+.puzzle-tile { display: flex; gap: .8rem; align-items: center; text-decoration: none; color: var(--text); position: relative; transition: transform .15s, border-color .15s; }
+.puzzle-tile:hover { transform: translateY(-3px); border-color: var(--accent); }
+.puzzle-tile.solved { border-color: var(--good); }
+.pt-done { position: absolute; top: 8px; right: 10px; color: var(--good); font-size: 1.3rem; font-weight: 800; }
+.puzzle-banner { position: fixed; top: calc(46px + var(--sa-t)); left: 50%; transform: translateX(-50%); z-index: 35; display: flex; gap: .8rem; align-items: center;
+  padding: .35rem 1rem; border-radius: 999px; background: #1b1307ee; border: 1px solid #a57c46; font-size: .85rem; box-shadow: 0 6px 18px #000a; pointer-events: none; }
+@media (orientation: landscape) and (max-height: 560px) { .puzzle-banner { top: auto; bottom: calc(var(--peek, 40px) + 6px); left: calc(var(--sa-l) + 40%); font-size: .7rem; padding: .2rem .7rem; } }
+.solution { margin: .4rem 0 1rem; padding-left: 1.3rem; line-height: 1.6; }
+.gauntlet-ladder { display: grid; grid-template-columns: repeat(8, 1fr); gap: .5rem; }
+@media (max-width: 900px) { .gauntlet-ladder { grid-template-columns: repeat(4, 1fr); } }
+.g-stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: .2rem; text-align: center; padding: .4rem; border-radius: 10px; background: #0005; border: 1px solid var(--line); }
+.g-stage.locked { filter: grayscale(.85) brightness(.6); }
+.g-stage.next { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 20px #d9a44166; }
+.g-stage.beaten { border-color: var(--good); }
+.g-stage.lost { border-color: #b8322a; }
+.g-mark { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%); font-size: 2.4rem; font-weight: 900; color: var(--good); text-shadow: 0 2px 8px #000; }
+.g-mark.lost { color: #ff5a4a; }
+.g-diff { font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; padding: 0 .5em; border-radius: 999px; border: 1px solid var(--line); }
+.g-diff.easy { color: #8fe0a0; } .g-diff.normal { color: #f6d58e; } .g-diff.hard { color: #ff8a7a; }
+.review-row { display: grid; gap: .2rem; padding: .6rem .7rem; border-radius: 10px; background: #0005; border: 1px solid var(--line); }
+.review-row .tag { justify-self: start; }

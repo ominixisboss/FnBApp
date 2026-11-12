@@ -171,12 +171,16 @@ export interface OnlineLink {
   error: string | null;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult }: {
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel }: {
   initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats) => void;
   /** the player's equipped card sleeve and playmat */
   cosmetics?: { sleeve?: string; mat?: string };
   /** extra content for the result screen (gauntlet / puzzle progress) */
   extraResult?: React.ReactNode;
+  /** called with every new game state (puzzles use it to spot a failed attempt) */
+  watch?: (s: GameState) => void;
+  /** what to call the opponent screen's rematch button */
+  rematchLabel?: string;
   /** when set, the game is played on the server: state comes from it and actions are sent to it */
   online?: OnlineLink;
 }) {
@@ -221,6 +225,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  // your decisions this game, for the post-game review
+  const decisions = useRef<{ before: GameState; action: Action }[]>([]);
+  const [reviewing, setReviewing] = useState(false);
+  const watchRef = useRef(watch);
+  useEffect(() => { watchRef.current = watch; });
+  useEffect(() => { watchRef.current?.(state); }, [state]);
   // per-game numbers for quests and achievements
   const gameStats = useRef<MatchStats & { turnDmg: Record<number, number> }>({ damageDealt: 0, maxTurnDamage: 0, attacks: 0, blocks: 0, cardsPlayed: 0, turnDmg: {} });
   const statPrev = useRef<GameState | null>(null);
@@ -308,6 +318,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const act = (a: Action, snapshot = true) => {
     try {
       const next = applyAction(state, a); // validates the move (throws if illegal)
+      if (a.type !== 'manual' && a.type !== 'concede') decisions.current.push({ before: state, action: a });
       if (online) online.send(a);
       else {
         if (snapshot) setHistory((h) => [...h.slice(-30), state]);
@@ -542,7 +553,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     prompt = (
       <>
         <span className="msg"><b>{state.winner === HUMAN ? '🏆 Victory!' : '💀 Defeat.'}</b> {state.players[state.winner ?? 0].name} wins on turn {state.turn}.</span>
-        {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
+        {onRematch && <button className="primary" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
         <button onClick={onExit}>New game</button>
       </>
     );
@@ -760,11 +771,13 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
             <button className="gold" onClick={onExit}>New game</button>
             <button onClick={() => setOverlay(false)}>View board</button>
+            {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
           </div>
           {extraResult}
           {onGameOver && <ProgressGains before={progressBefore} />}
         </GameOverOverlay>
       )}
+      {reviewing && <GameReview decisions={decisions.current} onClose={() => setReviewing(false)} />}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
       {optPick && (() => {
         const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === optPick.opt.uid);
@@ -1240,6 +1253,53 @@ function ProgressGains({ before }: { before: Progress }) {
       {d.quests.map((q) => <div key={q.id} className="gain-row">✅ Quest complete: {q.text} <b>+{q.reward}</b></div>)}
       {d.achievements.map((a) => <div key={a.id} className="gain-row ach">{a.icon} Achievement: <b>{a.name}</b> <b>+{a.reward}</b></div>)}
       {d.unlocks.map((c) => <div key={c.id} className="gain-row unlock">🎁 Unlocked {c.kind === 'mat' ? 'playmat' : c.kind === 'sleeve' ? 'card sleeve' : 'avatar frame'}: <b>{c.name}</b></div>)}
+    </div>
+  );
+}
+
+/** Post-game review: the Hard bot re-checks each of your decisions and points out where it would have played differently. */
+function GameReview({ decisions, onClose }: { decisions: { before: GameState; action: Action }[]; onClose: () => void }) {
+  const [rows, setRows] = useState<{ turn: number; yours: string; better: string; why: string }[]>([]);
+  const [done, setDone] = useState(0);
+  const list = useMemo(() => decisions.filter((d) => ['play', 'activate', 'defend', 'pass'].includes(d.action.type) && ['action', 'defend'].includes(d.before.phase)).slice(-60), [decisions]);
+  useEffect(() => {
+    let off = false;
+    void (async () => {
+      for (const d of list) {
+        const sug = await askBot(d.before, HUMAN, 'hard');
+        if (off) return;
+        const a = d.action;
+        const b = sug.action;
+        const same = a.type === b.type && (
+          (a.type === 'play' || a.type === 'activate') ? a.uid === (b as typeof a).uid
+            : a.type === 'defend' ? [...a.uids].sort().join() === [...(b as typeof a).uids].sort().join() : true);
+        if (!same) setRows((r) => [...r, { turn: d.before.turn, yours: describeAction(d.before, a), better: describeAction(d.before, b), why: sug.reason }]);
+        setDone((n) => n + 1);
+      }
+    })();
+    return () => { off = true; };
+  }, [list]);
+  const matched = done - rows.length;
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal review" style={{ maxWidth: 680 }} onClick={(e) => e.stopPropagation()}>
+        <button className="close small" onClick={onClose}>✕</button>
+        <h2>🔍 Game review</h2>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          {done < list.length ? `Checking your decisions… ${done}/${list.length}` : `${matched} of ${list.length} decisions matched what the Hard bot would do.`} The bot isn’t perfect, so treat these as ideas rather than mistakes.
+        </p>
+        {rows.length === 0 && done === list.length && <p>🎯 No differences: you played this game like the Hard bot would.</p>}
+        <div className="col" style={{ gap: '.5rem' }}>
+          {rows.map((r, i) => (
+            <div key={i} className="review-row">
+              <span className="tag">Turn {r.turn}</span>
+              <div><span className="muted small">You:</span> {r.yours}</div>
+              <div><span className="ok small">Suggested:</span> <b>{r.better}</b></div>
+              {r.why && <div className="small muted">{r.why}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
