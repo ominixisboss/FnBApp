@@ -8,6 +8,7 @@ import type { PlayOption } from '../../engine/game';
 import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState } from '../../engine/types';
 import { chooseAction, decideOptional, describeAction } from '../../ai/bot';
 import { getScript } from '../../engine/cardScript';
+import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
@@ -181,6 +182,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  const showcase = useShowcase(state);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setHandOpen(false); }, [state]);
   useZoneGlide(oppHandRef);
@@ -636,8 +638,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </div>
       )}
       <AttackArrow state={state} />
+      {showcase && <Showcase key={`sc${showcase.id}`} cardId={showcase.cardId} mine={showcase.mine} />}
       {fx.lifeAnim[HUMAN] === 'hurt' && fx.lifeKey[HUMAN] > 0 && <div key={`vig${fx.lifeKey[HUMAN]}`} className="hurt-vignette" />}
-      {fx.banner && <TurnBanner key={fx.banner.id} text={fx.banner.text} mine={fx.banner.mine} />}
+      {fx.banner && <TurnBanner key={`tb${fx.banner.id}`} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
           <h1>{state.winner === HUMAN ? 'Victory' : 'Defeat'}</h1>
@@ -772,7 +775,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
   const equipSlot = (area: string, label: string, e?: EquipState) => (
     <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
       {e && (
-        <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
+        <CardView key={`${e.inst.uid}-${e.destroyed}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
           className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
           badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
@@ -806,7 +809,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className="hero-box">
-        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} />
+        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)}
+          className={state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -874,6 +878,26 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
   lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  // the attack lunges at the defending hero when its damage resolves
+  const prevDamage = useRef(l.damage);
+  useEffect(() => {
+    const was = prevDamage.current;
+    prevDamage.current = l.damage;
+    const el = cardRef.current;
+    if (was !== null || l.damage === null || !el || !el.animate || !motionOk()) return;
+    const from = el.getBoundingClientRect();
+    const to = document.querySelector(`.mat-side.${l.attacker === HUMAN ? 'opp' : 'me'} .hero-box`)?.getBoundingClientRect();
+    if (!to) return;
+    const dx = (to.left + to.width / 2 - (from.left + from.width / 2)) * 0.62;
+    const dy = (to.top + to.height / 2 - (from.top + from.height / 2)) * 0.62;
+    const tilt = l.attacker === HUMAN ? -10 : 10;
+    el.animate([
+      { transform: 'none' },
+      { transform: `translate(${-dx * 0.08}px, ${-dy * 0.08}px) scale(1.08) rotate(${-tilt / 2}deg)`, offset: 0.25 },
+      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, filter: 'brightness(1.6) drop-shadow(0 0 18px #ff8a3d)', offset: 0.55 },
+      { transform: 'none', filter: 'none' },
+    ], { duration: l.hit ? 620 : 520, easing: 'cubic-bezier(.3,.7,.2,1)' });
+  }, [l.damage, l.attacker, l.hit]);
   // FLIP: fly the attacking card from where it was played (hand, weapon, or the opponent's side)
   useLayoutEffect(() => {
     const el = cardRef.current;
@@ -1029,5 +1053,53 @@ function AttackArrow({ state }: { state: GameState }) {
         <path d="M 0 0 L -22 -12 L -16 0 L -22 12 Z" className="arrow-head" />
       </g>
     </svg>
+  );
+}
+
+/** Cards being played, queued for the "cast" showcase (both players' plays and weapon attacks). */
+function useShowcase(state: GameState) {
+  const prev = useRef<GameState | null>(null);
+  const queue = useRef<{ id: number; cardId: string; mine: boolean }[]>([]);
+  const seq = useRef(1);
+  const [current, setCurrent] = useState<{ id: number; cardId: string; mine: boolean } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const next = () => {
+    const item = queue.current.shift() ?? null;
+    setCurrent(item);
+    if (item) timer.current = setTimeout(next, item.mine ? 750 : 1150);
+    else timer.current = null;
+  };
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = state;
+    if (!before || !motionOk()) return;
+    const found: { id: number; cardId: string; mine: boolean }[] = [];
+    state.players.forEach((p, i) => {
+      const old = before.turn === state.turn ? before.players[i].turn.played.length : 0;
+      for (const id of p.turn.played.slice(old)) found.push({ id: seq.current++, cardId: id, mine: i === HUMAN });
+    });
+    const newLink = state.chain.length > before.chain.length ? state.chain[state.chain.length - 1] : null;
+    if (newLink?.fromWeapon) found.push({ id: seq.current++, cardId: newLink.inst.cardId, mine: newLink.attacker === HUMAN });
+    if (!found.length) return;
+    queue.current.push(...found);
+    if (!timer.current) next();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return current;
+}
+
+/** A played card shown big at the side of the board for a moment; the opponent's flips over as it's revealed. */
+function Showcase({ cardId, mine }: { cardId: string; mine: boolean }) {
+  const c = getDb().byId.get(cardId);
+  if (!c || cardId === '__hidden__') return null;
+  return (
+    <div className={`showcase ${mine ? 'mine' : 'theirs'}`} aria-hidden>
+      <div className="showcase-rays" />
+      <div className="showcase-card">
+        <div className="sc-face"><CardView card={c} width="var(--sc-w)" tilt={false} noPopout /></div>
+        {!mine && <div className="sc-back"><CardBack width="var(--sc-w)" /></div>}
+      </div>
+    </div>
   );
 }
