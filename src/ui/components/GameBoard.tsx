@@ -169,10 +169,20 @@ export interface OnlineLink {
   send(a: Action): void;
   opponent: { name: string; connected: boolean } | null;
   error: string | null;
+  /** the opponent's latest emote, and sending your own */
+  emote?: { id: string; at: number } | null;
+  sendEmote?: (id: string) => void;
+}
+
+export const EMOTES: [string, string, string][] = [['hello', '👋', 'Hello!'], ['gg', '🤝', 'Good game'], ['nice', '👏', 'Nice play!'], ['thinking', '🤔', 'Hmm…'], ['oops', '😅', 'Oops'], ['wow', '😮', 'Wow!']];
+function EmoteBubble({ id, mine }: { id: string; mine?: boolean }) {
+  const e = EMOTES.find((x) => x[0] === id);
+  if (!e) return null;
+  return <div className={`emote-bubble ${mine ? 'mine' : 'theirs'}`}><span>{e[1]}</span> {e[2]}</div>;
 }
 
 export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel }: {
-  initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats) => void;
+  initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats, replay?: { initial: GameState; actions: Action[] }) => void;
   /** the player's equipped card sleeve and playmat */
   cosmetics?: { sleeve?: string; mat?: string };
   /** extra content for the result screen (gauntlet / puzzle progress) */
@@ -185,6 +195,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   online?: OnlineLink;
 }) {
   const [localState, setState] = useState(initial);
+  // replay recording: every applied action, keyed by the state it produced (undo truncates the log)
+  const applied = useRef(new WeakMap<GameState, { from: GameState; a: Action }>());
+  const logApply = (s: GameState, a: Action) => { const n = applyAction(s, a); applied.current.set(n, { from: s, a }); return n; };
+  const replayLog = useRef<{ state: GameState; a: Action }[]>([]);
   const state = online ? online.state : localState;
   const [history, setHistory] = useState<GameState[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -202,6 +216,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
   const [vibrate, setVibrate] = useState(hapticsEnabled);
+  const [emoteOpen, setEmoteOpen] = useState(false);
+  const [myEmote, setMyEmote] = useState<{ id: string; at: number } | null>(null);
+  // re-render when bubbles should disappear
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setTimeout(() => setTick((n) => n + 1), 3600); return () => clearTimeout(t); }, [myEmote, online?.emote]);
   const [sound, setSound] = useState(soundEnabled);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
@@ -224,6 +243,16 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const skipFx = useRef(false);
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (online) return;
+    const log = replayLog.current;
+    const tail = log.length ? log[log.length - 1].state : initial;
+    const e = applied.current.get(state);
+    if (e && e.from === tail) { log.push({ state, a: e.a }); return; }
+    if (state === initial) { log.length = 0; return; }
+    const i = log.findIndex((x) => x.state === state); // undo
+    if (i >= 0) log.length = i + 1;
+  }, [state, online, initial]);
   const fx = useFx(state, skipFx);
   // your decisions this game, for the post-game review
   const decisions = useRef<{ before: GameState; action: Action }[]>([]);
@@ -278,7 +307,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const reported = useRef(false);
   useEffect(() => {
     if (state.phase !== 'gameOver') return;
-    if (!reported.current) { const { turnDmg: _t, ...st } = gameStats.current; void _t; reported.current = true; onGameOver?.(state, st); }
+    if (!reported.current) { const { turnDmg: _t, ...st } = gameStats.current; void _t; reported.current = true; onGameOver?.(state, st, online ? undefined : { initial, actions: replayLog.current.map((x) => x.a) }); }
     const lethal = state.players.some((p) => p.life <= 0);
     const t = setTimeout(() => setOverlay(true), lethal && motionOk() ? 1700 : 700);
     return () => clearTimeout(t);
@@ -317,7 +346,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   const act = (a: Action, snapshot = true) => {
     try {
-      const next = applyAction(state, a); // validates the move (throws if illegal)
+      const next = logApply(state, a); // validates the move (throws if illegal)
       if (a.type !== 'manual' && a.type !== 'concede') decisions.current.push({ before: state, action: a });
       if (online) online.send(a);
       else {
@@ -347,10 +376,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         setState((s) => {
           if (s !== state || s.phase === 'gameOver' || !s.players[s.priority].isBot) return s; // the game moved on
           try {
-            return applyAction(s, d.action);
+            return logApply(s, d.action);
           } catch (e) {
             console.error(e);
-            return applyAction(s, { type: 'pass' });
+            return logApply(s, { type: 'pass' });
           }
         });
       });
@@ -376,7 +405,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (!nothingToPlay && !nothingToBlock) return;
     const t = setTimeout(() => {
       if (sendOnline) sendOnline(nothingToBlock ? { type: 'defend', uids: [] } : { type: 'pass' });
-      else setState((s) => (s.priority === HUMAN && s.phase === state.phase ? applyAction(s, nothingToBlock ? { type: 'defend', uids: [] } : { type: 'pass' }) : s));
+      else setState((s) => (s.priority === HUMAN && s.phase === state.phase ? logApply(s, nothingToBlock ? { type: 'defend', uids: [] } : { type: 'pass' }) : s));
     }, nothingToPlay ? 1100 : 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -388,7 +417,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (!myTurn || state.phase !== 'reaction' || options.length > 0) return;
     const t = setTimeout(() => {
       if (sendOnline) sendOnline({ type: 'pass' });
-      else setState((s) => (s.priority === HUMAN && s.phase === 'reaction' ? applyAction(s, { type: 'pass' }) : s));
+      else setState((s) => (s.priority === HUMAN && s.phase === 'reaction' ? logApply(s, { type: 'pass' }) : s));
     }, 450);
     return () => clearTimeout(t);
   }, [state, myTurn, options.length, sendOnline]);
@@ -640,6 +669,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             ● Online{online.opponent?.connected === false ? ' · opponent disconnected (they forfeit in 2 min)' : ''}
           </span>
         )}
+        {online?.sendEmote && <button className={`icon-btn ${emoteOpen ? 'on' : ''}`} title="Emotes" onClick={() => setEmoteOpen(!emoteOpen)}>💬<span>Emote</span></button>}
         {!online && <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
         {!online && <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
         <button className={`icon-btn more-btn ${menuOpen ? 'on' : ''}`} title="More" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰<span>More</span></button>
@@ -753,6 +783,13 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           )}
         </div>
       )}
+      {emoteOpen && online?.sendEmote && (
+        <div className="emote-picker">
+          {EMOTES.map(([id, icon, text]) => <button key={id} onClick={() => { online.sendEmote!(id); setMyEmote({ id, at: Date.now() }); setEmoteOpen(false); }}>{icon} {text}</button>)}
+        </div>
+      )}
+      {online?.emote && Date.now() - online.emote.at < 3500 && <EmoteBubble key={online.emote.at} id={online.emote.id} />}
+      {myEmote && Date.now() - myEmote.at < 3500 && <EmoteBubble key={myEmote.at} id={myEmote.id} mine />}
       <AttackArrow state={state} />
       {showHint && <HintArrows marks={hintMarks} deps={[state, handOpen]} />}
       {dangerClass && <div className="danger-vignette" />}

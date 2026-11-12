@@ -17,6 +17,8 @@ import LimitedPage from './ui/pages/LimitedPage';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
 import { loadMatches } from './stats/matches';
+import { online, useOnline } from './online/client';
+import ReplayPage from './ui/pages/ReplayPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -57,6 +59,9 @@ export default function App() {
   useEffect(() => setAnimations(anim), [anim]);
   useEffect(() => { void checkServer(); }, []);
   const auth = useAuth();
+  // stay connected while signed in, so friends see you online and challenges reach you on any page
+  const net = useOnline();
+  useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
   const [profile, setProfile] = useState(loadProfile);
   const [level, setLevel] = useState<number | null>(null);
   useEffect(() => {
@@ -111,9 +116,17 @@ export default function App() {
             {route === 'puzzles' && <PuzzlesPage id={rest[0]} />}
             {route === 'gauntlet' && <GauntletPage />}
             {route === 'limited' && <LimitedPage />}
+            {route === 'replay' && <ReplayPage id={rest[0]} />}
           </div>
         )}
       </main>
+      {net.challenge && route !== 'play' && (
+        <div className="challenge-toast" role="alert">
+          <b>⚔ {net.challenge.from}</b> challenges you!
+          <a className="btn-link" href="#play/online">Open</a>
+          <button className="small" onClick={() => online.decline()}>Decline</button>
+        </div>
+      )}
       <HoverCardLayer />
     </>
   );

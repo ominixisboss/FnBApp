@@ -37,6 +37,8 @@ export function heroClass(heroId: string): string {
   return h?.types.find((t) => CLASSES.includes(t) && t !== 'Generic') ?? 'Generic';
 }
 const won = (m: MatchRecord) => m.won;
+/** a win where you actually brought the opponent to 0 (not a concession) */
+const realWin = (m: MatchRecord) => m.won && m.oppLifeLeft <= 0;
 
 // ---------------------------------------------------------------- XP and levels
 
@@ -111,9 +113,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'classes-5', icon: '🎭', name: 'Versatile', text: 'Win with 5 different classes', goal: 5, reward: 300, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },
   { id: 'classes-all', icon: '🌈', name: 'Master of All', text: 'Win with 10 different classes', goal: 10, reward: 800, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },
   { id: 'burst-20', icon: '🔥', name: 'Overkill', text: 'Deal 20+ damage in a single turn', goal: 1, reward: 300, check: (ms) => count(ms, (m) => (stats(m)?.maxTurnDamage ?? 0) >= 20) },
-  { id: 'comeback', icon: '❤️‍🔥', name: 'Comeback', text: 'Win with 3 life or less', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.lifeLeft <= 3) },
-  { id: 'untouched', icon: '🛡', name: 'Untouchable', text: 'Win a Blitz game without dropping below 15 life', goal: 1, reward: 300, check: (ms) => count(ms, (m) => m.won && m.format === 'blitz' && m.lifeLeft >= 15) },
-  { id: 'speed', icon: '⚡', name: 'Blitzkrieg', text: 'Win in 6 turns or fewer', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.turns <= 6) },
+  { id: 'comeback', icon: '❤️‍🔥', name: 'Comeback', text: 'Win with 3 life or less', goal: 1, reward: 200, check: (ms) => count(ms, (m) => realWin(m) && m.lifeLeft <= 3) },
+  { id: 'untouched', icon: '🛡', name: 'Untouchable', text: 'Win a Blitz game without dropping below 15 life', goal: 1, reward: 300, check: (ms) => count(ms, (m) => realWin(m) && m.format === 'blitz' && m.lifeLeft >= 15 && m.turns >= 4) },
+  { id: 'speed', icon: '⚡', name: 'Blitzkrieg', text: 'Win in 6 turns or fewer', goal: 1, reward: 200, check: (ms) => count(ms, (m) => realWin(m) && m.turns <= 6) },
   { id: 'streak-5', icon: '📈', name: 'On Fire', text: 'Win 5 games in a row', goal: 5, reward: 300, check: (ms) => maxStreak(ms) },
   { id: 'formats', icon: '📚', name: 'All Rounder', text: 'Win in Blitz and Classic Constructed', goal: 2, reward: 200, check: (ms) => new Set(ms.filter((m) => m.won && (m.format === 'blitz' || m.format === 'cc')).map((m) => m.format)).size },
   { id: 'games-25', icon: '🎲', name: 'Regular', text: 'Play 25 games', goal: 25, reward: 200, check: (ms) => ms.length },

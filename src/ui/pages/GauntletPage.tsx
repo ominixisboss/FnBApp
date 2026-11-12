@@ -7,6 +7,7 @@ import { autoBuildDeck, heroesFor, loadDecks, toDeckList } from '../../deck/deck
 import { recordMatch } from '../../stats/matches';
 import { loadFeats, updateFeats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
+import { saveLocalReplay } from '../../stats/replays';
 import GameBoard from '../components/GameBoard';
 import CardView from '../components/CardView';
 import { HeroPicker } from './DecksPage';
@@ -53,10 +54,13 @@ export default function GauntletPage() {
         onExit={() => setGame(null)}
         onRematch={() => setGame(null)}
         rematchLabel="Back to the Gauntlet"
-        onGameOver={(s, stats) => {
+        onGameOver={(s, stats, replay) => {
           const [me, them] = s.players;
           const won = s.winner === 0;
+          const id = Math.random().toString(36).slice(2, 10);
+          if (replay) saveLocalReplay(id, replay);
           recordMatch({
+            id,
             format: 'blitz', myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId, deckId: run.deckId, deckName: 'Gauntlet', difficulty: STAGES[run.stage],
             won, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life, stats,
           });

@@ -8,6 +8,10 @@ import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import type { MatchStats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
+import { friends as friendsApi, myRating } from '../auth';
+import type { FriendRow, MyRating } from '../auth';
+import { saveLocalReplay } from '../../stats/replays';
+import type { LocalReplay } from '../../stats/replays';
 import { sfx } from '../sound';
 import { archetypeFor } from '../../deck/archetypes';
 import { getHeroAbility } from '../../engine/heroes';
@@ -43,6 +47,8 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const [joinCode, setJoinCode] = useState('');
   const net = useOnline();
   const auth = useAuth();
+  const [rating, setRating] = useState<MyRating | null>(null);
+  useEffect(() => { if (auth.user && auth.available && mode === 'online') myRating().then(setRating, () => setRating(null)); }, [auth.user, auth.available, mode, net.status]);
   // (re)connect when signed in, so an online game in progress resumes after a reload
   useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
 
@@ -62,9 +68,12 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     ], Date.now() & 0x7fffffff, fmt));
   };
 
-  const onGameOver = (s: GameState, stats: MatchStats) => {
+  const onGameOver = (s: GameState, stats: MatchStats, replay?: LocalReplay) => {
     const [me, them] = s.players;
+    const id = Math.random().toString(36).slice(2, 10);
+    if (replay) saveLocalReplay(id, replay);
     recordMatch({
+      id,
       format: s.format, myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId, deckId: myDeck?.id ?? null,
       deckName: myDeck?.name ?? `${card(me.hero.cardId).name} (auto)`, difficulty: setup.difficulty,
       won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life, stats,
@@ -86,7 +95,8 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         initial={g}
         tutorial={false}
         cosmetics={loadProfile().cosmetics}
-        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error }}
+        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error, emote: net.emote, sendEmote: online.emote }}
+        extraResult={net.rated ? <div className="rated-result">{net.matchId?.startsWith('online-') ? 'Ranked' : ''} rating {net.rated.before} → <b className={net.rated.after >= net.rated.before ? 'ok' : 'err'}>{net.rated.after}</b> ({net.rated.after >= net.rated.before ? '+' : ''}{net.rated.after - net.rated.before})</div> : undefined}
         onExit={() => { if (g.phase === 'gameOver') online.done(); else online.leave(); }}
         onGameOver={(s, stats) => {
           const [me, them] = s.players;
@@ -177,17 +187,30 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                 </div>
               ) : (
                 <>
-                  <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Find match</button>
+                  {net.challenge && (
+                    <div className="panel challenge-box">
+                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({net.challenge.format === 'cc' ? 'Classic Constructed' : net.challenge.format})</span>
+                      <div className="row" style={{ marginTop: '.4rem' }}>
+                        <button className="primary" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.accept(d); }}>Accept with this deck</button>
+                        <button onClick={() => online.decline()}>Decline</button>
+                      </div>
+                      {!selectedHero && <div className="small muted">Pick a deck on the left first.</div>}
+                    </div>
+                  )}
+                  {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}
+                  <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
                   <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format); }}>Create private room</button>
                   <div className="row">
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />
                     <button disabled={!selectedHero || joinCode.length < 5} onClick={() => { const d = deckForOnline(); if (d) online.join(joinCode, d); }}>Join</button>
                   </div>
-                  <div className="small muted">Format: {setup.format === 'cc' ? 'Classic Constructed' : setup.format === 'blitz' ? 'Blitz' : 'Casual'}. Ranked formats need a legal deck.</div>
+                  <div className="small muted">Format: {setup.format === 'cc' ? 'Classic Constructed' : setup.format === 'blitz' ? 'Blitz' : 'Casual'}. Blitz and CC need a legal deck. Ranked matches move your rating; private rooms and friend challenges don’t.</div>
+                  <FriendsPanel canChallenge={!!selectedHero} onChallenge={(u) => { const d = deckForOnline(); if (d) online.challenge(u, d, setup.format); }} />
                 </>
               )
             )}
             {net.error && <div className="small err">{net.error} <button className="small" onClick={() => online.clearError()}>✕</button></div>}
+            {net.notice && <div className="small">{net.notice} <button className="small" onClick={() => online.clearError()}>✕</button></div>}
           </div>
         ) : (<>
         <div className="lobby-matchup">
@@ -242,5 +265,31 @@ function DeckBox({ hero, title, sub, selected, onClick }: { hero: Card; title: s
         <small>{sub}</small>
       </div>
     </button>
+  );
+}
+
+/** Friends with online status; challenge one to a game with your selected deck. */
+function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; onChallenge: (username: string) => void }) {
+  const [list, setList] = useState<FriendRow[] | null>(null);
+  useEffect(() => {
+    let off = false;
+    const load = () => friendsApi.list().then((l) => { if (!off) setList(l); }, () => {});
+    load();
+    const t = setInterval(load, 15000);
+    return () => { off = true; clearInterval(t); };
+  }, []);
+  if (!list) return null;
+  return (
+    <div className="friends-panel">
+      <div className="lobby-label">Friends</div>
+      {list.length === 0 && <div className="small muted">No friends yet. Add them by username on your <a href="#profile">Profile</a>.</div>}
+      {list.map((f) => (
+        <div key={f.username} className="friend-row">
+          <span className={`presence ${f.status}`} title={f.status} />
+          <span className="grow">{f.name}</span>
+          <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : f.status === 'in-game' ? 'In a game' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>
+        </div>
+      ))}
+    </div>
   );
 }

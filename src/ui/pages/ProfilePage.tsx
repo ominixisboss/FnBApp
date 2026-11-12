@@ -1,4 +1,7 @@
 import { ACHIEVEMENTS, COSMETICS, computeProgress } from '../../stats/progress';
+import { localReplayIds } from '../../stats/replays';
+import { friends as friendsApi, ladder } from '../auth';
+import type { FriendRow, LadderRow } from '../auth';
 import type { CosmeticKind } from '../../stats/progress';
 import { useEffect, useMemo, useState } from 'react';
 import { getDb } from '../../data/cardDb';
@@ -61,6 +64,10 @@ export default function ProfilePage() {
     return () => window.removeEventListener('fab-synced', on);
   }, []);
   useEffect(() => { if (auth.available) leaderboard().then(setBoard, () => setBoard(null)); }, [auth.available]);
+  const [ladderRows, setLadderRows] = useState<LadderRow[] | null>(null);
+  useEffect(() => { if (auth.available) ladder().then(setLadderRows, () => setLadderRows(null)); }, [auth.available]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const replayIds = useMemo(() => localReplayIds(), [tick]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const matches = useMemo(() => loadMatches(), [tick]);
   const st = useMemo(() => summarize(matches), [matches]);
@@ -169,7 +176,7 @@ export default function ProfilePage() {
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>Match history</h3>
             <table className="history">
-              <thead><tr><th>Date</th><th>Result</th><th>Your hero</th><th>Opponent</th><th>Mode</th><th>Turns</th><th>Life left</th></tr></thead>
+              <thead><tr><th>Date</th><th>Result</th><th>Your hero</th><th>Opponent</th><th>Mode</th><th>Turns</th><th>Life left</th><th></th></tr></thead>
               <tbody>
                 {st.recent.map((m) => (
                   <tr key={m.id}>
@@ -180,6 +187,7 @@ export default function ProfilePage() {
                     <td>{m.mode === 'online' ? 'Online' : `${m.difficulty} bot`} · {FORMAT[m.format] ?? m.format}</td>
                     <td>{m.turns}</td>
                     <td>{Math.max(0, m.lifeLeft)}</td>
+                    <td>{(replayIds.has(m.id) || m.mode === 'online') && <a className="small" href={`#replay/${m.id}`} title="Watch the replay">▶ Replay</a>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -188,6 +196,25 @@ export default function ProfilePage() {
         </>
       )}
 
+      {auth.user && auth.available && <FriendsManager />}
+      {ladderRows && ladderRows.length > 0 && (
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Ranked ladder</h3>
+          <table className="history">
+            <thead><tr><th>#</th><th>Player</th><th>Tier</th><th>Rating</th><th>Ranked games</th></tr></thead>
+            <tbody>
+              {ladderRows.map((r, i) => (
+                <tr key={r.username} className={auth.user?.username === r.username ? 'me-row' : ''}>
+                  <td>{i + 1}</td>
+                  <td><span className="row" style={{ gap: '.4rem' }}><Avatar heroId={r.avatarHeroId} size={22} />{r.name}</span></td>
+                  <td><span className={`tier tier-${r.tier.toLowerCase()}`}>{r.tier}</span></td>
+                  <td><b>{r.rating}</b></td><td>{r.games}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {board && board.length > 0 && (
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Online leaderboard</h3>
@@ -215,6 +242,38 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Add friends by username, see who is online, remove them. */
+function FriendsManager() {
+  const [list, setList] = useState<FriendRow[]>([]);
+  const [name, setName] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const load = () => friendsApi.list().then(setList, () => {});
+  useEffect(() => { void load(); }, []);
+  const add = async () => {
+    try { await friendsApi.add(name.trim()); setName(''); setMsg(null); void load(); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div className="panel">
+      <h3 style={{ marginTop: 0 }}>Friends</h3>
+      <div className="row">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Friend’s username" onKeyDown={(e) => { if (e.key === 'Enter') void add(); }} />
+        <button className="primary" disabled={!name.trim()} onClick={() => void add()}>Add friend</button>
+      </div>
+      {msg && <div className="small err">{msg}</div>}
+      <div className="col" style={{ gap: '.3rem', marginTop: '.6rem' }}>
+        {list.length === 0 && <span className="small muted">Add a friend to see when they’re online and challenge them from the Play page.</span>}
+        {list.map((f) => (
+          <div key={f.username} className="friend-row">
+            <span className={`presence ${f.status}`} title={f.status} /><Avatar heroId={f.avatarHeroId} size={26} />
+            <span className="grow">{f.name} <span className="small muted">@{f.username} · {f.status === 'in-game' ? 'in a game' : f.status}</span></span>
+            <button className="small" onClick={() => { void friendsApi.remove(f.username).then(load); }}>Remove</button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
