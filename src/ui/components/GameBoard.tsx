@@ -210,6 +210,20 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const options = useMemo(() => (myTurn ? playOptions(state, HUMAN) : []), [state, myTurn]);
   const defOpts = useMemo(() => (myTurn ? defendOptions(state, HUMAN) : []), [state, myTurn]);
   const hint = useMemo(() => (myTurn && showHint ? chooseAction(state, HUMAN, 'hard') : null), [state, myTurn, showHint]);
+  // what the hint wants you to do, marked on the cards themselves: numbered steps, cards to pitch, blockers
+  const hintMarks = useMemo(() => {
+    const m = new Map<number, { kind: 'play' | 'pitch' | 'block' | 'arsenal'; label: string }>();
+    if (!hint || state.phase === 'gameOver') return m;
+    const a = hint.action;
+    if (hint.plan?.length) hint.plan.forEach((uid, i) => { if (!m.has(uid)) m.set(uid, { kind: 'play', label: String(i + 1) }); });
+    else if (a.type === 'play' || a.type === 'activate') m.set(a.uid, { kind: 'play', label: '1' });
+    for (const uid of hint.planPitch ?? (a.type === 'play' || a.type === 'activate' ? a.pitch : [])) if (!m.has(uid)) m.set(uid, { kind: 'pitch', label: '⛀' });
+    if (a.type === 'defend') a.uids.forEach((uid) => m.set(uid, { kind: 'block', label: '🛡' }));
+    if (a.type === 'arsenal' && a.uid !== null) m.set(a.uid, { kind: 'arsenal', label: 'A' });
+    return m;
+  }, [hint, state.phase]);
+  const hintClass = (uid: number) => { const k = hintMarks.get(uid); return k ? ` hint-${k.kind}` : ''; };
+  const hintMarker = (uid: number) => hintMarks.get(uid)?.label;
   const link = currentLink(state);
 
   const act = (a: Action, snapshot = true) => {
@@ -564,11 +578,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             onClickArena={clickArena}
             onZone={setZone}
             arenaClass={(inst) => {
-              if (myTurn && state.phase === 'defend') return defendSel.includes(inst.uid) ? 'sel' : '';
-              return myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '';
+              if (myTurn && state.phase === 'defend') return (defendSel.includes(inst.uid) ? 'sel' : '') + hintClass(inst.uid);
+              return (myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '') + hintClass(inst.uid);
             }}
+            marker={(inst) => hintMarker(inst.uid)}
             arsenalClick={(i) => clickHand(i)}
-            arsenalClass={handClass}
+            arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
           />
         </div>
@@ -593,7 +608,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               onMouseEnter={() => sfx('hover')}
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
-                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
+                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid)} marker={hintMarker(inst.uid)} tilt={false}
                   onInspect={() => { if (compactTouch()) setHandOpen(true); }}
                   onClick={() => {
                     if (suppressClick.current) { suppressClick.current = false; return; }
@@ -754,9 +769,9 @@ function Slot({ area, label, filled, onClick, className = '', children, uid, cou
   );
 }
 
-function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, arsenalClick, arsenalClass, fx }: {
+function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
-  onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string;
+  onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string; marker?: (i: CardInst) => string | undefined;
   arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx;
 }) {
   const active = state.turnPlayer === p.id;
@@ -780,15 +795,15 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
     <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
       {e && (
         <CardView key={`${e.inst.uid}-${e.destroyed}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
-          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
+          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
           badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
     </Slot>
   );
   const weaponSlot = (area: string, w?: { inst: CardInst; usedThisTurn: boolean }, e?: EquipState) => (
     <Slot area={area} label="Weapon" filled={!!(w || e)} uid={w?.inst.uid ?? e?.inst.uid}>
-      {w && <CardView card={cardOf(w.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} />}
-      {!w && e && <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)} className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} />}
+      {w && <CardView card={cardOf(w.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(w.inst)} className={`${arenaClass?.(w.inst) ?? ''} ${w.usedThisTurn ? 'dim' : ''}`} marker={marker?.(w.inst)} />}
+      {!w && e && <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)} className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)} />}
     </Slot>
   );
   const pile = (area: string, label: string, cards: CardInst[], anim: string, title: string) => {
@@ -813,8 +828,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className="hero-box">
-        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)}
-          className={state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} />
+        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
+          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -825,7 +840,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       <Slot area="arsenal" label="Arsenal" filled={p.arsenal.length > 0} uid={p.arsenal[0]?.uid}>
         {p.arsenal[0] && (isOpp
           ? <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid} data-from="opphand"><CardBack width={SLOT} label="A" /></div>
-          : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} /></div>)}
+          : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} marker={marker?.(p.arsenal[0])} /></div>)}
       </Slot>
       <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
         {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
@@ -849,7 +864,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
         {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
           <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop">
-            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} />
+            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
           </div>
         ))}
       </div>

@@ -16,6 +16,10 @@ import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerSta
 export interface BotDecision {
   action: Action;
   reason: string;
+  /** action phase: the cards/sources the plan uses this turn, in the order to play them (for hint highlights) */
+  plan?: number[];
+  /** action phase: hand cards the plan pitches to pay for it */
+  planPitch?: number[];
 }
 
 function effectValue(effects: Effect[]): number {
@@ -286,6 +290,8 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
   return {
     action: playIt ?? { type: 'activate', uid: first.opt.uid, index: first.opt.index, pitch },
     reason: explainPlan(sorted, p),
+    plan: sorted.map((i) => i.opt.uid),
+    planPitch: [...new Set([...(playIt?.type === 'play' ? playIt.pitch : pitch), ...best.pitch])],
   };
 }
 

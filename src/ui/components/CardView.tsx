@@ -8,6 +8,8 @@ interface Props {
   width?: number | string;
   className?: string;
   badge?: ReactNode;
+  /** a hint marker (step number, pitch, block) shown on the card's corner */
+  marker?: ReactNode;
   count?: number;
   onClick?: () => void;
   onHover?: (c: Card | null) => void;
@@ -30,7 +32,7 @@ function onTilt(e: React.MouseEvent<HTMLDivElement>) {
   el.style.setProperty('--my', `${y * 100}%`);
 }
 
-export default function CardView({ card, width = 150, className = '', badge, count, onClick, onHover, title, tilt = true, noPopout, onInspect }: Props) {
+export default function CardView({ card, width = 150, className = '', badge, marker, count, onClick, onHover, title, tilt = true, noPopout, onInspect }: Props) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const style = { '--w': typeof width === 'number' ? `${width}px` : width } as CSSProperties;
@@ -86,6 +88,7 @@ export default function CardView({ card, width = 150, className = '', badge, cou
       {tilt && <span className="shine" />}
       {count !== undefined && <span key={count} className="count anim-pop">{count}</span>}
       {badge !== undefined && badge !== null && <span className="badge">{badge}</span>}
+      {marker !== undefined && marker !== null && <span key={String(marker)} className="hint-marker">{marker}</span>}
     </div>
   );
 }

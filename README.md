@@ -6,7 +6,7 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 
 - **Full card database**: all ~5,000 cards, including stats, rules text, legality (Blitz, CC, Silver Age, Commoner), sets and images. Search by name, text or keyword, and filter by class, talent, type, pitch and format.
 - **Learn**: nine short lessons (pitching, action points and go again, the combat chain, defending, arsenal, reactions, strategy) and a keyword glossary.
-- **Guided practice**: a game against an easy bot with move suggestions that explain the reasoning. You can undo any move.
+- **Guided practice**: a game against an easy bot with move suggestions that explain the reasoning. With hints on (💡), the suggested cards glow on the board: gold numbers give the order to play them in, blue ⛀ marks the cards to pitch, 🛡 the blockers and A the card for your arsenal. You can undo any move.
 - **Play vs AI**: easy, normal and hard bots. The bots plan their whole turn (which cards to play, pitch or keep for blocking) and decide blocks and reactions by card value.
 - **Deck builder**:
   - Hero picker, with the card pool filtered to the hero's class and talents.

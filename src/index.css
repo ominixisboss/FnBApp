@@ -923,3 +923,26 @@ table.history tr.me-row td { background: #d9a4411a; }
 }
 /* popups stay clear of the camera cut-out */
 .modal-bg { padding-left: max(1rem, var(--sa-l)); padding-right: max(1rem, var(--sa-r)); padding-top: max(1rem, var(--sa-t)); }
+
+/* ===================================================== move suggestions on the cards */
+/* gold + number = play these, in this order; blue ⛀ = pitch these to pay; 🛡 = block with these; A = arsenal */
+.card .hint-marker {
+  position: absolute; top: 4%; left: 6%; z-index: 6; pointer-events: none;
+  width: clamp(18px, calc(var(--w, 150px) * .26), 34px); aspect-ratio: 1; border-radius: 50%;
+  display: grid; place-items: center; font: 800 clamp(11px, calc(var(--w, 150px) * .15), 19px)/1 Inter, system-ui, sans-serif;
+  color: #1b1307; background: radial-gradient(circle at 35% 30%, #fff3c4, #f0b542 60%, #a8741d);
+  border: 2px solid #fff8dd; box-shadow: 0 0 0 2px #0009, 0 0 14px #f6c35a; animation: hintPop .35s cubic-bezier(.2,1.6,.4,1) both;
+}
+@keyframes hintPop { from { transform: scale(0); } to { transform: scale(1); } }
+.card.hint-play { box-shadow: 0 0 0 3px #f6d58e, 0 0 22px 6px #f0b542cc !important; animation: hintGlow 1.3s ease-in-out infinite !important; }
+@keyframes hintGlow { 50% { box-shadow: 0 0 0 3px #fff1c2, 0 0 34px 10px #f6c35aee; } }
+.card.hint-pitch { box-shadow: 0 0 0 3px #8fc1ff, 0 0 18px 4px #4a8bffaa !important; }
+.card.hint-pitch .hint-marker { color: #fff; background: radial-gradient(circle at 35% 30%, #cfe4ff, #4a8bff 60%, #1d4f9a); border-color: #e2efff; box-shadow: 0 0 0 2px #0009, 0 0 14px #4a8bff; }
+.card.hint-block { box-shadow: 0 0 0 3px #8fe0a0, 0 0 20px 5px #5fae6bcc !important; animation: hintGlowG 1.3s ease-in-out infinite !important; }
+@keyframes hintGlowG { 50% { box-shadow: 0 0 0 3px #d4ffdc, 0 0 32px 9px #5fae6bee; } }
+.card.hint-block .hint-marker { background: radial-gradient(circle at 35% 30%, #e4ffe9, #5fae6b 60%, #2c6a37); border-color: #e4ffe9; box-shadow: 0 0 0 2px #0009, 0 0 14px #5fae6b; }
+.card.hint-arsenal { box-shadow: 0 0 0 3px #d6b3ff, 0 0 20px 5px #9b6bffaa !important; }
+.card.hint-arsenal .hint-marker { color: #fff; background: radial-gradient(circle at 35% 30%, #f0e4ff, #9b6bff 60%, #5a2fae); border-color: #f0e4ff; }
+/* hand cards: lift the suggested ones a little so they stand out even in the collapsed phone hand */
+.fan-card:has(.card.hint-play) > div, .fan-card:has(.card.hint-block) > div, .fan-card:has(.card.hint-arsenal) > div { transform: translateY(-12px); }
+.no-anim .card.hint-play, .no-anim .card.hint-block { animation: none !important; }
