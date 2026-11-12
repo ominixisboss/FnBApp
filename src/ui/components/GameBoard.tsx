@@ -12,6 +12,7 @@ import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
+import { hideHover } from './HoverCard';
 import type { ChainLink } from '../../engine/types';
 
 const HUMAN: PlayerId = 0;
@@ -90,7 +91,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [pending, setPending] = useState<Pending | null>(null);
   const [defendSel, setDefendSel] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [hover, setHover] = useState<Card | null>(null);
+  const setHover = (c: Card | null) => void c; // hover pop-outs are handled globally by HoverCardLayer
   const [detail, setDetail] = useState<Card | null>(null);
   const [zone, setZone] = useState<{ title: string; cards: CardInst[] } | null>(null);
   const [showHint, setShowHint] = useState(tutorial);
@@ -258,6 +259,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (!d.moved && Math.hypot(dx, dy) < 10) return;
     if (!d.moved) {
       d.moved = true;
+      hideHover();
       d.el.setPointerCapture(e.pointerId);
       d.el.classList.add('dragging');
       setDragging(true);
@@ -485,7 +487,6 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           </div>
         </GameOverOverlay>
       )}
-      {hover && <div className="preview"><CardView card={hover} width={260} /></div>}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
       {modePick && (
         <div className="modal-bg" onClick={() => setModePick(null)}>

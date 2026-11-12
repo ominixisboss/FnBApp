@@ -8,6 +8,7 @@ import PlayPage from './ui/pages/PlayPage';
 import LearnPage from './ui/pages/LearnPage';
 import { animationsEnabled, setAnimations } from './ui/components/Fx';
 import { canLeave } from './ui/navGuard';
+import { HoverCardLayer } from './ui/components/HoverCard';
 
 const ROUTES = [
   ['', 'Home'],
@@ -69,6 +70,7 @@ export default function App() {
           </div>
         )}
       </main>
+      <HoverCardLayer />
     </>
   );
 }

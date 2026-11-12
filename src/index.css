@@ -490,3 +490,43 @@ html.in-game .preview .card { --w: clamp(200px, 19vw, 300px) !important; width: 
 }
 .play-big:hover:not(:disabled) { filter: brightness(1.12); transform: scale(1.02); }
 .play-big:disabled { animation: none; filter: grayscale(.7); }
+
+/* ===================================================== readable card pop-out */
+.hovercard {
+  position: fixed; z-index: 70; display: flex; gap: 14px; width: min(620px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
+  padding: 12px; border-radius: 16px; pointer-events: none;
+  background: linear-gradient(160deg, #2a2119f7, #14100cf7); border: 1px solid #a57c46;
+  box-shadow: 0 0 0 1px #000, 0 24px 60px #000e, 0 0 40px #d9a44122;
+  animation: hcIn .14s ease-out both; backdrop-filter: blur(6px);
+}
+.hovercard.pinned { pointer-events: auto; }
+@keyframes hcIn { from { opacity: 0; transform: scale(.96) translateY(4px); } to { opacity: 1; transform: none; } }
+.hc-img { flex: 0 0 auto; width: clamp(150px, 22vw, 250px); }
+.hc-img .card { --w: 100%; box-shadow: 0 8px 22px #000c; cursor: default; }
+.hc-img .card:hover { transform: none; }
+.hc-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; overflow: auto; }
+.hc-name { font: 700 1.25rem/1.15 Cinzel, Georgia, serif; color: #f6e6c8; display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.hc-pitch { font: 600 .7rem Inter, system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; padding: .1em .5em; border-radius: 999px;
+  background: color-mix(in srgb, var(--pc) 25%, transparent); border: 1px solid var(--pc); color: #fff; }
+.hc-type { color: #c9a46a; font-size: .85rem; font-style: italic; }
+.hc-stats { display: flex; gap: .4rem; flex-wrap: wrap; }
+.hc-stats > span { display: flex; flex-direction: column; align-items: center; min-width: 3.4em; padding: .2em .5em; border-radius: 8px; background: #0007; border: 1px solid #4a3520; }
+.hc-stats small { font-size: .6rem; text-transform: uppercase; letter-spacing: .06em; color: #a99c8a; }
+.hc-stats b { font-size: 1.1rem; display: flex; align-items: center; gap: .25em; }
+.hc-text { font-size: 1.02rem; line-height: 1.55; color: #f3ece0; background: #0006; border: 1px solid #ffffff12; border-radius: 10px; padding: .6rem .8rem; }
+.hc-text p { margin: 0 0 .45em; } .hc-text p:last-child { margin: 0; }
+.hc-text .kw { color: #f6d58e; }
+.sym { display: inline-grid; place-items: center; width: 1.25em; height: 1.25em; border-radius: 50%; font-size: .85em; vertical-align: -.1em; margin: 0 .05em;
+  background: #ffffff1a; color: #fff; font-weight: 700; }
+.sym-r { background: #b8322a; color: #ffd0c8; } .sym-p { background: #6b3f1d; } .sym-d { background: #3f4a5c; } .sym-h { background: #7a1a2f; color: #ff9fb1; }
+.hc-help { font-size: .8rem; color: #cfc4b3; display: flex; flex-direction: column; gap: .25rem; border-left: 3px solid #a57c46; padding-left: .6rem; }
+.hc-help b { color: #f6d58e; }
+.hc-auto { font-size: .75rem; }
+.hc-auto.full { color: var(--good); } .hc-auto.partial { color: var(--yellow); } .hc-auto.none { color: #ff8a80; }
+.card:focus-visible { outline: 3px solid #f6d58e; outline-offset: 2px; }
+@media (max-width: 560px) {
+  .hovercard { gap: 10px; padding: 10px; }
+  .hc-img { width: 34vw; }
+  .hc-name { font-size: 1.05rem; }
+  .hc-text { font-size: .92rem; }
+}

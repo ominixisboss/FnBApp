@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { hideHover, newHoverOwner, showHover } from './HoverCard';
 import type { CSSProperties, ReactNode } from 'react';
 import type { Card } from '../../data/types';
 
@@ -12,6 +13,8 @@ interface Props {
   onHover?: (c: Card | null) => void;
   title?: string;
   tilt?: boolean;
+  /** don't show the readable pop-out for this card */
+  noPopout?: boolean;
 }
 
 function onTilt(e: React.MouseEvent<HTMLDivElement>) {
@@ -25,19 +28,45 @@ function onTilt(e: React.MouseEvent<HTMLDivElement>) {
   el.style.setProperty('--my', `${y * 100}%`);
 }
 
-export default function CardView({ card, width = 150, className = '', badge, count, onClick, onHover, title, tilt = true }: Props) {
+export default function CardView({ card, width = 150, className = '', badge, count, onClick, onHover, title, tilt = true, noPopout }: Props) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const style = { '--w': typeof width === 'number' ? `${width}px` : width } as CSSProperties;
+  const [owner] = useState(newHoverOwner);
+  const press = useRef<{ t: ReturnType<typeof setTimeout> | null; fired: boolean }>({ t: null, fired: false });
+  useEffect(() => () => hideHover(owner), [owner]);
+  const popout = !noPopout;
   return (
     <div
+      tabIndex={popout ? 0 : undefined}
+      onPointerEnter={(e) => { if (popout && e.pointerType === 'mouse') showHover(card, e.currentTarget, owner); }}
+      onPointerLeave={(e) => { if (popout && e.pointerType === 'mouse') hideHover(owner); }}
+      onFocus={(e) => { if (popout && e.currentTarget.matches(':focus-visible')) showHover(card, e.currentTarget, owner, { delay: 0 }); }}
+      onBlur={() => popout && hideHover(owner)}
+      onKeyDown={(e) => { if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick(); } }}
+      onTouchStart={(e) => {
+        if (!popout) return;
+        const el = e.currentTarget;
+        press.current.fired = false;
+        press.current.t = setTimeout(() => { press.current.fired = true; showHover(card, el, owner, { delay: 0, pinned: true }); }, 420);
+      }}
+      onTouchMove={() => { if (press.current.t) clearTimeout(press.current.t); }}
+      onTouchEnd={(e) => {
+        if (press.current.t) clearTimeout(press.current.t);
+        if (press.current.fired) e.preventDefault(); // long-press: don't also "click" the card
+      }}
+      onContextMenu={(e) => { if (press.current.fired) e.preventDefault(); }}
       className={`card ${tilt ? 'tilt' : ''} ${card.pitch ? `pitch-${card.pitch}` : ''} ${className}`}
       style={style}
-      onClick={onClick}
+      onClick={() => {
+        if (press.current.fired) { press.current.fired = false; return; }
+        onClick?.();
+      }}
       onMouseMove={tilt ? onTilt : undefined}
       onMouseEnter={() => onHover?.(card)}
       onMouseLeave={() => onHover?.(null)}
-      title={title ?? card.name}
+      title={popout ? undefined : title ?? card.name}
+      aria-label={title ?? card.name}
     >
       {!loaded && <TextCard card={card} />}
       {card.image && !failed && (
