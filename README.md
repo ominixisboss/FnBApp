@@ -49,6 +49,7 @@ The `android/` folder is a [Capacitor](https://capacitorjs.com) project that pac
 - **Download:** every push to `main` builds an APK and publishes it as a GitHub Release (`.github/workflows/android.yml`). The newest one is always at `releases/latest/download/fab-trainer.apk`. On the phone, open the file and allow installing from that source. New versions install over the old one.
 - **Build it yourself:** you need JDK 21 and the Android SDK (`ANDROID_HOME`). Run `npm run android:build`; the APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 - **Signing:** builds use a fixed key that is committed on purpose (`android/app/fab-trainer-debug.keystore`), so updates install over each other. It's fine for sideloading; publishing to the Play Store would need your own private release key.
+- **Full screen:** the app hides the status and navigation bars. Swipe in from the top or bottom edge to see them for a moment.
 - **Phone layout:** turn the phone sideways for the game board. Tap a card to see its details, and tap it again to play it.
 
 ## Rules engine
