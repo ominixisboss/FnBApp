@@ -300,3 +300,25 @@ export function saveDecks(decks: Deck[]) {
   saveDecksLocal(decks);
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fab-decks', { detail: { removed } }));
 }
+
+// ------------------------------------------------------------ draw odds
+
+function choose(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  let r = 1;
+  for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i;
+  return r;
+}
+/** Chance to see at least one of `copies` cards among the first `seen` cards of a `deckSize`-card deck. */
+export function chanceToSee(deckSize: number, copies: number, seen: number): number {
+  if (copies <= 0 || deckSize <= 0) return 0;
+  const n = Math.min(seen, deckSize);
+  return 1 - choose(deckSize - copies, n) / choose(deckSize, n);
+}
+/** Recognise a deck link from a deck site (they can't be fetched directly, so we explain how to copy the list). */
+export function deckSiteLink(text: string): { site: string; url: string } | null {
+  const m = text.match(/https?:\/\/(?:www\.)?(fabrary\.net|fabdb\.net|talishar\.net)\/\S+/i);
+  if (!m) return null;
+  const site = m[1].toLowerCase().startsWith('fabrary') ? 'Fabrary' : m[1].toLowerCase().startsWith('fabdb') ? 'FaB DB' : 'Talishar';
+  return { site, url: m[0] };
+}

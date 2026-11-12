@@ -119,6 +119,13 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
             ))}
           </div>
         </div>
+        {!tutorial && (
+          <div className="more-modes">
+            <a href="#gauntlet">🏟 Gauntlet</a>
+            <a href="#limited">📦 Sealed &amp; Draft</a>
+            <a href="#puzzles">🧩 Lethal puzzles</a>
+          </div>
+        )}
         {tutorial && (
           <div className="panel small">
             A relaxed game against an <b>easy</b> bot with hints on. Each time it’s your move, a suggestion explains the best play. You can undo any move.

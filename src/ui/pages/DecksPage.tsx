@@ -4,7 +4,7 @@ import type { Card } from '../../data/types';
 import { PITCH_COLOR } from '../../data/types';
 import type { Deck, DeckFormat } from '../../deck/deck';
 import {
-  FORMAT_RULES, autoBuildDeck, deckCounts, exportDecklist, heroesFor, importDecklist, isArenaCard,
+  FORMAT_RULES, autoBuildDeck, chanceToSee, deckCounts, deckSiteLink, exportDecklist, heroesFor, importDecklist, isArenaCard,
   loadDecks, newDeck, saveDecks, validateDeck,
 } from '../../deck/deck';
 import CardView from '../components/CardView';
@@ -185,7 +185,9 @@ function NewDeckDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (
 
 function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d: Deck) => void }) {
   const [text, setText] = useState('');
-  const result = useMemo(() => (text.trim() ? importDecklist(text) : null), [text]);
+  const link = deckSiteLink(text);
+  const result = useMemo(() => (text.trim() && !deckSiteLink(text) ? importDecklist(text) : null), [text]);
+  const paste = async () => { try { setText(await navigator.clipboard.readText()); } catch { /* clipboard blocked: paste by hand */ } };
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -198,6 +200,17 @@ function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d
         <div className="row" style={{ marginBottom: '.5rem' }}>
           <label className="small">Or load a file (.txt): <input type="file" accept=".txt,text/plain" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setText(await readFile(f)); }} /></label>
         </div>
+        <div className="row" style={{ marginBottom: '.5rem' }}><button className="small" onClick={paste}>📋 Paste from clipboard</button></div>
+        {link && (
+          <div className="link-help">
+            <b>That’s a {link.site} link.</b> {link.site} doesn’t let other apps download decks, so copy the list as text instead:
+            <ol>
+              <li>Open the deck: <a href={link.url} target="_blank" rel="noreferrer">{link.site} ↗</a></li>
+              <li>{link.site === 'Fabrary' ? <>Press <i>Copy</i> → <i>Copy as text</i></> : link.site === 'FaB DB' ? <>Use <i>Export</i> → <i>Copy to clipboard</i></> : <>Use the deck’s <i>Export</i> → <i>Text</i></>}</li>
+              <li>Come back and press <b>📋 Paste from clipboard</b>.</li>
+            </ol>
+          </div>
+        )}
         <textarea rows={14} value={text} onChange={(e) => setText(e.target.value)} placeholder={'Hero: Dorinthea\nWeapons: Dawnblade\nEquipment: Braveforge Bracers\n\n(2) Ironsong Response (red)\n(2) Warrior\'s Valor (yellow)\n...'} />
         {result && (
           <div className="small" style={{ marginTop: '.5rem' }}>
@@ -317,6 +330,7 @@ function DeckEditor({ deck: saved, onChange: onSave, onSaveAs, onDelete }: { dec
           <div className="small muted" style={{ margin: '.5rem 0' }}>
             Cost curve: {curve.map((n, i) => `${i === 4 ? '4+' : i}:${n}`).join('  ')}
           </div>
+          <DrawOdds entries={entries} intellect={hero.intellect ?? 4} />
           {groups.map(([label, list]) => list.length > 0 && (
             <div key={label}>
               <h4 style={{ margin: '.8rem 0 .2rem' }}>{label} <span className="muted">({list.reduce((a, e) => a + e.cnt, 0)})</span></h4>
@@ -363,6 +377,39 @@ function DeckEditor({ deck: saved, onChange: onSave, onSaveAs, onDelete }: { dec
           )}
         />
       )}
+    </div>
+  );
+}
+
+/** Pitch balance and the chance to draw each card: in your opening hand, and by your 2nd / 3rd turn. */
+function DrawOdds({ entries, intellect }: { entries: { c: Card; cnt: number }[]; intellect: number }) {
+  const [open, setOpen] = useState(false);
+  const deck = entries.filter((e) => !isArenaCard(e.c));
+  const size = deck.reduce((a, e) => a + e.cnt, 0);
+  if (!size) return null;
+  const byPitch = [1, 2, 3].map((p) => deck.filter((e) => e.c.pitch === p).reduce((a, e) => a + e.cnt, 0));
+  const avgPitch = deck.reduce((a, e) => a + (e.c.pitch ?? 0) * e.cnt, 0) / size;
+  const blueHand = chanceToSee(size, byPitch[2], intellect);
+  const pctf = (x: number) => `${Math.round(x * 100)}%`;
+  return (
+    <div className="draw-odds">
+      <div className="pitch-bar" title="Red / yellow / blue cards in the deck">
+        {byPitch.map((n, i) => n > 0 && <span key={i} className={`pitch-${i + 1}`} style={{ flex: n }}>{n}</span>)}
+      </div>
+      <div className="small muted">Average pitch {avgPitch.toFixed(2)} · about {(avgPitch * intellect).toFixed(1)} resources in a full hand · {pctf(blueHand)} of opening hands have a blue</div>
+      <button className="small" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'Show'} draw odds</button>
+      {open && (
+        <table className="odds">
+          <thead><tr><th>Card</th><th>#</th><th>Opening hand</th><th>By turn 2</th><th>By turn 3</th></tr></thead>
+          <tbody>
+            {[...deck].sort((a, b) => b.cnt - a.cnt || a.c.name.localeCompare(b.c.name)).map(({ c, cnt }) => (
+              <tr key={c.id}><td>{c.pitch ? <span className={`pitch-${c.pitch}`}><span className="dot" /></span> : null} {c.name}</td><td>{cnt}</td>
+                <td>{pctf(chanceToSee(size, cnt, intellect))}</td><td>{pctf(chanceToSee(size, cnt, intellect * 2))}</td><td>{pctf(chanceToSee(size, cnt, intellect * 3))}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="small muted">Assumes you see {intellect} new cards per turn (your intellect).</div>
     </div>
   );
 }

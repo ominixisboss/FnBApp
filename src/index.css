@@ -1181,3 +1181,26 @@ table.history tr.me-row td { background: #d9a4411a; }
 .g-diff.easy { color: #8fe0a0; } .g-diff.normal { color: #f6d58e; } .g-diff.hard { color: #ff8a7a; }
 .review-row { display: grid; gap: .2rem; padding: .6rem .7rem; border-radius: 10px; background: #0005; border: 1px solid var(--line); }
 .review-row .tag { justify-self: start; }
+
+/* ===================================================== deck tools, sealed & draft */
+.more-modes { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+.more-modes a { padding: .4em .9em; border-radius: 999px; background: #0006; border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: .9rem; }
+.more-modes a:hover { border-color: var(--accent); }
+.link-help { background: #1a2a3a88; border: 1px solid #3f8ad8; border-radius: 10px; padding: .6rem .8rem; margin-bottom: .6rem; font-size: .9rem; }
+.link-help ol { margin: .4rem 0 0; padding-left: 1.2rem; }
+.draw-odds { display: flex; flex-direction: column; gap: .35rem; margin: .4rem 0 .6rem; }
+.pitch-bar { display: flex; height: 18px; border-radius: 999px; overflow: hidden; border: 1px solid #000; }
+.pitch-bar > span { display: grid; place-items: center; font-size: .7rem; font-weight: 800; color: #000a; background: var(--pc); }
+table.odds { width: 100%; border-collapse: collapse; font-size: .78rem; }
+table.odds th, table.odds td { padding: .2rem .3rem; border-bottom: 1px solid #ffffff10; text-align: right; }
+table.odds th:first-child, table.odds td:first-child { text-align: left; }
+.pack-reveal { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: .6rem; perspective: 1000px; }
+.pack-card { animation: packFlip .5s cubic-bezier(.2,.8,.3,1.1) both; }
+@keyframes packFlip { from { transform: rotateY(90deg) translateY(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+.pack-card .card { cursor: pointer; }
+.ineligible { opacity: .38; filter: grayscale(.7); }
+.hero-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .7rem; }
+.hero-choice { display: flex; flex-direction: column; gap: .3rem; align-items: center; padding: .5rem; }
+.limited-build { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .limited-build { grid-template-columns: 1fr; } }
+.small-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)) !important; max-height: 70vh; overflow: auto; }
