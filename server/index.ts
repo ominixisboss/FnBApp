@@ -67,7 +67,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   try {
-    if (path === '/api/health') return json(res, 200, { ok: true, cards: cardJson.cards.length, ...roomCount() });
+    if (path === '/api/health') return json(res, 200, { ok: true, cards: cardJson.cards.length, ephemeral: process.env.EPHEMERAL_DATA === '1', ...roomCount() });
 
     if ((path === '/api/register' || path === '/api/login') && req.method === 'POST') {
       if (rateLimited(req)) return json(res, 429, { error: 'Too many attempts, wait a minute.' });

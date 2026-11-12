@@ -33,6 +33,12 @@ export default function AccountPage() {
           {auth.available === null ? 'Checking for the game server…' : auth.available ? '● Game server online' : '● No game server reachable. Accounts and online play are unavailable here; everything else works offline.'}
         </div>
 
+        {auth.available && auth.ephemeral && (
+          <div className="ephemeral-warning small">
+            ⚠ This is a free test server: accounts, synced decks and online stats are <b>wiped whenever it restarts</b> (and it sleeps when idle).
+            Your decks and AI-game stats stay safe in this browser. Use <b>Decks → Backup all</b> for anything you want to keep.
+          </div>
+        )}
         {auth.user ? (
           <>
             <p>Signed in as <b>{auth.user.username}</b>. Your profile, decks and match history sync automatically.</p>

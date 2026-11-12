@@ -1,0 +1,22 @@
+# FREE-TIER test deploy on Render (render.com → New → Blueprint → this repo,
+# then set "Blueprint path" to render.free.yaml).
+#
+# Limits of Render's free plan:
+#   - no persistent disk: accounts, decks and match history are WIPED on every
+#     restart or redeploy (the app shows a warning on the Account page)
+#   - the service sleeps after ~15 minutes without traffic; the first visit after
+#     that takes ~1 minute to wake it, and online games in progress are lost
+# For anything people will really use, deploy render.yaml (Starter plan + disk).
+services:
+  - type: web
+    name: fab-trainer-free
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATA_DIR
+        value: /tmp/fab-data
+      - key: EPHEMERAL_DATA
+        value: "1"

@@ -572,3 +572,5 @@ table.history tr.me-row td { background: #d9a4411a; }
 @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 .online-badge { font-size: .8rem; color: var(--good); background: #0008; border: 1px solid #5fae6b55; border-radius: 999px; padding: .2em .7em; }
 .online-badge.warn { color: var(--yellow); border-color: #e2c23b88; }
+
+.ephemeral-warning { background: #3a2e10; border: 1px solid #e2c23b88; color: #f3e2a6; border-radius: 10px; padding: .6rem .8rem; line-height: 1.45; }
