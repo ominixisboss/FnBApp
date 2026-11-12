@@ -6,6 +6,7 @@ import type { Card } from '../../data/types';
 import { PITCH_COLOR } from '../../data/types';
 import { getScript } from '../../engine/cardScript';
 import { GLOSSARY } from '../../learn/lessons';
+import { heroAutomation } from '../../engine/heroes';
 import CardView from './CardView';
 
 interface HoverState { card: Card; rect: DOMRect; owner: number; pinned: boolean }
@@ -177,6 +178,14 @@ export function HoverCardLayer() {
             {help.map(([k, v]) => <div key={k}><b>{k}</b> — {v}</div>)}
           </div>
         )}
+        {!sc && (() => {
+          const h = heroAutomation(c);
+          return (
+            <div className={`hc-auto ${h.level}`}>
+              {h.level === 'none' ? '○ ' : h.level === 'partial' ? '◐ Hero ability partly automated: ' : '✓ Hero ability automated: '}{h.summary}
+            </div>
+          );
+        })()}
         {sc && (
           <div className={`hc-auto ${sc.coverage}`}>
             {sc.coverage === 'full' ? '✓ Fully automated in games' : sc.coverage === 'partial' ? '◐ Partly automated in games' : '○ Stats only in games: use Manual for its text'}

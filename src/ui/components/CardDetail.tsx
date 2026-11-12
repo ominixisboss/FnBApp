@@ -1,6 +1,7 @@
 import type { Card } from '../../data/types';
 import { PITCH_COLOR } from '../../data/types';
 import { getScript } from '../../engine/cardScript';
+import { heroAutomation } from '../../engine/heroes';
 import CardView from './CardView';
 
 const FORMAT_LABEL: Record<string, string> = { blitz: 'Blitz', cc: 'Classic Constructed', sage: 'Silver Age', commoner: 'Commoner', ll: 'Living Legend' };
@@ -48,7 +49,7 @@ export default function CardDetail({ card, onClose, actions }: { card: Card; onC
                 )}
               </div>
             )}
-            {card.types.includes('Hero') && <div className="small muted">Hero abilities aren’t automated yet. Use the manual controls in game for them.</div>}
+            {card.types.includes('Hero') && <div className="small"><b>Simulator support: </b>{heroAutomation(card).summary}</div>}
             {actions}
           </div>
         </div>

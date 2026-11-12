@@ -7,6 +7,8 @@ import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import { sfx } from '../sound';
+import { archetypeFor } from '../../deck/archetypes';
+import { getHeroAbility } from '../../engine/heroes';
 import type { Card } from '../../data/types';
 import { HeroPicker } from './DecksPage';
 import CardView from '../components/CardView';
@@ -97,7 +99,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         </div>
         <div className="deckbox-grid">
           {starterHeroes.map((h) => (
-            <DeckBox key={h.id} hero={h} title={h.name} sub="Starter" selected={myAutoHero === h.id} onClick={() => setSetup({ ...setup, myDeckId: `auto:${h.id}` })} />
+            <DeckBox key={h.id} hero={h} title={h.name} sub={`Starter · ${archetypeFor(h).label}${getHeroAbility(h) ? '' : ' · ability manual'}`} selected={myAutoHero === h.id} onClick={() => setSetup({ ...setup, myDeckId: `auto:${h.id}` })} />
           ))}
         </div>
       </div>

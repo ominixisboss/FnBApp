@@ -5,6 +5,8 @@ import {
 } from '../data/cardDb';
 import type { DeckList } from '../engine/game';
 import { getScript } from '../engine/cardScript';
+import { archetypeFor } from './archetypes';
+import type { Archetype } from './archetypes';
 
 export type DeckFormat = 'blitz' | 'cc' | 'casual';
 
@@ -185,7 +187,7 @@ export function exportDecklist(d: Deck): string {
 // ------------------------------------------------------------ auto-build
 
 /** Score how good a card is likely to be in the simulator (prefers fully scripted cards). */
-function autoScore(c: Card): number {
+function autoScore(c: Card, arch?: Archetype): number {
   const sc = getScript(c);
   let v = 0;
   if (has(c, 'Attack') && has(c, 'Action')) v += n(c.power) * 1.2 - n(c.cost) * 0.6 + (sc.goAgain ? 2 : 0);
@@ -195,6 +197,10 @@ function autoScore(c: Card): number {
   if (has(c, 'Block')) v += n(c.defense) * 0.6;
   v += sc.coverage === 'full' ? 2 : sc.coverage === 'partial' ? 0.8 : -1.5;
   if (c.pitch === 3) v += 0.5;
+  if (arch) {
+    v += arch.bonus(c);
+    if (arch.signature.some((nm) => nm.toLowerCase() === c.name.toLowerCase())) v += 5;
+  }
   if (c.types.length && !c.types.includes('Generic')) v += 3; // prefer class/talent cards
   return v;
 }
@@ -230,7 +236,8 @@ export function autoBuildDeck(heroId: string, format: DeckFormat, seed = 1): Dec
   }
   // main deck: score cards, keep mix of pitch values
   const mains = pool.filter((c) => !isArenaCard(c) && !has(c, 'Hero') && c.pitch !== null && !c.types.includes('Resource') && !c.keywords.includes('Legendary'));
-  const scored = mains.map((c) => ({ c, s: autoScore(c) + rnd() * 1.5 })).sort((a, b) => b.s - a.s);
+  const arch = archetypeFor(hero);
+  const scored = mains.map((c) => ({ c, s: autoScore(c, arch) + rnd() * 1.5 })).sort((a, b) => b.s - a.s);
   const target = r.minDeck;
   const copies = Math.min(r.copies, 3);
   const pitchTarget: Record<number, number> = { 1: Math.round(target * 0.45), 2: Math.round(target * 0.2), 3: 0 };

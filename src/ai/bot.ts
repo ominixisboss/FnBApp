@@ -6,8 +6,9 @@ import { getScript } from '../engine/cardScript';
 import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
-  defenseOf, effectiveCost, linkDefense, linkPower, other, pitchOf, playOptions, powerOf,
+  defenseOf, effectiveCost, heroCtx, HERO_INDEX, linkDefense, linkPower, other, pitchOf, playOptions, powerOf,
 } from '../engine/game';
+import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, PlayerId, PlayerState } from '../engine/types';
 
@@ -28,6 +29,8 @@ function effectValue(effects: Effect[]): number {
       case 'nextAttackGoAgain': case 'targetAttackGoAgain': case 'thisGoAgain': v += 1.5; break;
       case 'createToken': v += 1 * e.amount; break;
       case 'preventNext': v += 0.6 * e.amount; break;
+      case 'ampArcane': v += e.amount * 0.8; break;
+      case 'weakenAttack': v += e.amount; break;
       case 'banishTopOpp': v += 0.3; break;
       case 'oppDiscardRandom': case 'intimidate': v += 1.5; break;
       default: v += 0.3;
@@ -63,10 +66,10 @@ function playValue(c: Card, fromArsenal: boolean): number {
     v += powerOf(c) + effectValue(sc.onAttack) + effectValue(sc.onHit) * 0.6 + effectValue(sc.onPlay);
     if (sc.dominate || sc.overpower) v += 0.7;
     if (sc.intimidateOnAttack) v += 1;
-    if (fromArsenal) v += sc.conditional.reduce((a, cn) => a + effectValue(cn.effects), 0);
+    if (fromArsenal) v += sc.conditional.filter((cn) => cn.when === 'fromArsenal').reduce((a, cn) => a + effectValue(cn.effects), 0);
   } else {
     v += effectValue(sc.onPlay) + (sc.ward ? sc.ward * 0.6 : 0);
-    if (fromArsenal) v += sc.conditional.reduce((a, cn) => a + effectValue(cn.effects), 0);
+    if (fromArsenal) v += sc.conditional.filter((cn) => cn.when === 'fromArsenal').reduce((a, cn) => a + effectValue(cn.effects), 0);
     if (v === 0) v = sc.coverage === 'full' ? 0.3 : 0.8; // unscripted effect — some value
   }
   return v;
@@ -90,11 +93,16 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
       const sc = getScript(c);
       const fromArsenal = p.arsenal.some((a) => a.uid === opt.uid);
       const isAttack = has(c, 'Attack') && has(c, 'Action');
-      const goAgain = sc.goAgain || (fromArsenal && sc.conditional.some((cn) => cn.effects.some((e) => e.kind === 'thisGoAgain')));
+      const goAgain = sc.goAgain || (fromArsenal && sc.conditional.some((cn) => cn.when === 'fromArsenal' && cn.effects.some((e) => e.kind === 'thisGoAgain')));
       return {
         opt, value: playValue(c, fromArsenal), goAgain, usesAP: has(c, 'Action') && !has(c, 'Instant'),
         isAttack, cost: opt.cost, uidInHand: p.hand.some((h) => h.uid === opt.uid) ? opt.uid : null,
       };
+    }
+    if (opt.index >= HERO_INDEX) {
+      const a = getHeroAbility(cardOf(p.hero))!.activations![opt.index - HERO_INDEX];
+      const value = a.botValue?.(heroCtx(s, p)) ?? 0.5;
+      return { opt, value, goAgain: !!a.goAgain, usesAP: !a.instant, isAttack: false, cost: opt.cost, uidInHand: null };
     }
     const src = cardOf(findSourceInst(p, opt.uid)!);
     const a = getScript(src).activations[opt.index];
@@ -109,6 +117,7 @@ function modeFor(p: PlayerState, uid: number): number {
 }
 
 function findSourceInst(p: PlayerState, uid: number) {
+  if (p.hero.uid === uid) return p.hero;
   return (
     p.weapons.find((w) => w.inst.uid === uid)?.inst ??
     p.equipment.find((e) => e.inst.uid === uid)?.inst ??
@@ -325,7 +334,8 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
     let gain = 0;
     if (l.attacker === pid) {
       const bonus = sc.onPlay.reduce((a, e) => a + (e.kind === 'targetAttackPower' ? e.amount : 0), 0);
-      const extra = effectValue(sc.onPlay.filter((e) => e.kind !== 'targetAttackPower'));
+      const extra = effectValue(sc.onPlay.filter((e) => e.kind !== 'targetAttackPower' && e.kind !== 'weakenAttack'));
+      if (sc.onPlay.some((e) => e.kind === 'weakenAttack')) continue;
       gain = Math.max(0, power + bonus - def) - Math.max(0, power - def) + extra * 0.7;
       if (power + bonus - def >= s.players[other(pid)].life) gain += 50;
     } else if (has(c, 'Defense Reaction')) {
@@ -333,7 +343,8 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
       gain = Math.min(d, Math.max(0, power - def));
       if (power - def >= p.life && power - def - d < p.life) gain += 50;
     } else {
-      gain = effectValue(sc.onPlay.filter((e) => e.kind === 'preventNext')) * (power > def ? 1 : 0);
+      const weaken = sc.onPlay.reduce((acc, e) => acc + (e.kind === 'weakenAttack' ? e.amount : 0), 0);
+      gain = effectValue(sc.onPlay.filter((e) => e.kind === 'preventNext')) * (power > def ? 1 : 0) + Math.min(weaken, Math.max(0, power - def));
     }
     const cardCost = cardPlayValue(c) * 0.5 + o.cost * 0.8;
     const net = gain - cardCost;

@@ -32,10 +32,14 @@ export type Effect =
   | { kind: 'oppDiscardRandom'; amount: number }
   | { kind: 'intimidate' }
   | { kind: 'opt'; amount: number }
-  | { kind: 'mark' };
+  | { kind: 'mark' }
+  | { kind: 'ampArcane'; amount: number }
+  | { kind: 'weakenAttack'; amount: number };
 
 export interface Conditional {
-  when: 'fromArsenal';
+  when: 'fromArsenal' | 'combo' | 'crush';
+  /** combo: name of the card that must have been the previous attack */
+  comboWith?: string;
   effects: Effect[];
 }
 
@@ -70,8 +74,11 @@ export interface CardScript {
   bladeBreak: boolean;
   temper: boolean;
   boost: boolean;
+  phantasm: boolean;
+  bloodDebt: boolean;
+  costLessPer?: string; // token name: "costs {r} less for each X you control"
   intimidateOnAttack: boolean;
-  additionalCost: { discardRandom?: number; banishRandomHand?: number };
+  additionalCost: { discardRandom?: number; banishRandomHand?: number; banishGraveyard?: number };
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
   onAttack: Effect[];
   onHit: Effect[];
@@ -172,11 +179,15 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'createToken', name: m[2], amount: toNum(m[1].toLowerCase()) }];
   if ((m = s.match(/^banish the top (?:(\d+) )?cards? of (?:their|the defending hero's|target hero's) deck$/i)))
     return [{ kind: 'banishTopOpp', amount: m[1] ? +m[1] : 1 }];
-  if ((m = s.match(/^(?:they|the defending hero|target hero|target opposing hero) discards? (a|two|\d+) (?:random )?cards?$/i)))
+  if ((m = s.match(/^(?:they|the defending hero|target hero|target opposing hero|each opposing hero) discards? (a|two|\d+) (?:random )?cards?$/i)))
     return [{ kind: 'oppDiscardRandom', amount: toNum(m[1].toLowerCase()) }];
   if (/^intimidate$/i.test(s)) return [{ kind: 'intimidate' }];
   if ((m = s.match(/^opt (\d+)$/i))) return [{ kind: 'opt', amount: +m[1] }];
   if (/^mark (?:them|the defending hero|target hero)$/i.test(s)) return [{ kind: 'mark' }];
+  if ((m = s.match(/^the next card you play this turn with an arcane damage effect,? (?:instead )?deals that much arcane damage plus (\d+)$/i)))
+    return [{ kind: 'ampArcane', amount: +m[1] }];
+  if ((m = s.match(/^your next arcane damage effect this turn deals \+?(\d+) more$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
+  if ((m = s.match(/^target attack(?: action card)? gets -(\d+)\{p\}$/i))) return [{ kind: 'weakenAttack', amount: +m[1] }];
   // "X and Y"
   const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw)\b)/i);
   if (and.length > 1) {
@@ -194,7 +205,7 @@ export function parseEffect(raw: string): Effect[] | null {
 function emptyScript(): CardScript {
   return {
     goAgain: false, dominate: false, overpower: false, piercing: 0, ward: 0, arcaneBarrier: 0,
-    spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false,
+    spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false,
     intimidateOnAttack: false, additionalCost: {}, onPlay: [], onAttack: [], onHit: [],
     conditional: [], activations: [], modes: [], unparsed: [], coverage: 'full',
   };
@@ -223,6 +234,9 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^boost$/i.test(s)) return (sc.boost = true);
   if (/^intimidate$/i.test(s)) return (sc.intimidateOnAttack = true);
   if (/^legendary$/i.test(s) || /^specialization$/i.test(s) || /specialization$/i.test(s)) return true;
+  if (/^stealth$/i.test(s)) return true; // only referenced by other effects
+  if (/^phantasm$/i.test(s)) return (sc.phantasm = true);
+  if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
   if ((m = s.match(/^piercing (\d+)$/i))) return !!(sc.piercing = +m[1]);
   if ((m = s.match(/^ward (\d+)$/i))) return !!(sc.ward = +m[1]);
   if ((m = s.match(/^arcane barrier (\d+)$/i))) return !!(sc.arcaneBarrier = +m[1]);
@@ -322,6 +336,22 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if ((m = sent.match(/^when you play this,? (.+)$/i))) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onPlay.push(...e);
+  }
+  if ((m = sent.match(/^combo - if (.+?) was the last attack this combat chain, (.+)$/i))) {
+    const e = parseEffect(m[2]);
+    if (e) return void sc.conditional.push({ when: 'combo', comboWith: m[1].trim(), effects: e });
+  }
+  if ((m = sent.match(/^crush - when this deals 4 or more damage to a hero, (.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.conditional.push({ when: 'crush', effects: e });
+  }
+  if (/^this costs \{r\} less to play for each runechant you control\.?$/i.test(sent)) {
+    sc.costLessPer = 'Runechant';
+    return;
+  }
+  if ((m = sent.match(/^as an additional cost to play this, banish (a|two|three|\d+) random cards? from your graveyard\.?$/i))) {
+    sc.additionalCost.banishGraveyard = toNum(m[1].toLowerCase());
+    return;
   }
   if ((m = sent.match(/^if this (?:was|is) played from (?:your )?arsenal, (.+)$/i))) {
     const e = parseEffect(m[1]);

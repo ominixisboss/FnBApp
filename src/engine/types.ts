@@ -29,7 +29,8 @@ export interface PermanentState {
 export type TurnEffect =
   | { kind: 'nextAttackPower'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
-  | { kind: 'preventNext'; amount: number; source: string };
+  | { kind: 'preventNext'; amount: number; source: string }
+  | { kind: 'ampArcane'; amount: number; source: string };
 
 export interface PlayerState {
   id: PlayerId;
@@ -53,6 +54,18 @@ export interface PlayerState {
   actionPoints: number;
   effects: TurnEffect[];
   marked: boolean;
+  turn: TurnInfo;
+}
+
+/** Per-turn bookkeeping (reset for both players at the start of every turn). */
+export interface TurnInfo {
+  attacks: number;
+  attackActionHits: number;
+  weaponHits: number;
+  played: string[]; // card ids played this turn
+  drew: boolean;
+  boosted: boolean;
+  flags: Record<string, number>;
 }
 
 export interface Defender {
@@ -77,6 +90,7 @@ export interface ChainLink {
   damage: number | null;
   hit: boolean;
   extraOnHit: Effect[];
+  noHandDefense?: boolean;
 }
 
 export type Phase = 'action' | 'defend' | 'reaction' | 'arsenal' | 'gameOver';
