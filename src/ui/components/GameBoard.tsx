@@ -215,6 +215,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const logRef = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
+  const [pitchOrderOn, setPitchOrderOn] = useState(() => readSetting('pitchorder', false));
+  const [ordering, setOrdering] = useState<{ action: Action; order: number[] } | null>(null);
   const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [emoteOpen, setEmoteOpen] = useState(false);
   const [myEmote, setMyEmote] = useState<{ id: string; at: number } | null>(null);
@@ -383,7 +385,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           }
         });
       });
-    }, BOT_DELAY);
+    }, state.stack?.length ? 350 : BOT_DELAY); // quick when it is only deciding whether to respond
     return () => { cancelled = true; clearTimeout(t); };
   }, [state]);
 
@@ -499,7 +501,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       if (!defOpts.some((d) => d.uid === inst.uid)) return;
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
-    if (state.phase === 'arsenal') return act({ type: 'arsenal', uid: inst.uid });
+    if (state.phase === 'arsenal') return endTurnAct({ type: 'arsenal', uid: inst.uid });
     const opts = options.filter((o) => o.uid === inst.uid);
     if (opts.length > 1 || (opts.length === 1 && opts[0].index === HAND_INDEX)) return setChoosePlay(opts); // play it, or discard it for its effect?
     if (opts.length === 1) return startPlay(opts[0]);
@@ -577,6 +579,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const boostBonus = boostable.filter((b) => activeBoosts.includes(b.inst.uid)).reduce((a, b) => a + b.oc.effects.reduce((x, e) => x + (e.kind === 'thisDefense' ? e.amount : 0), 0), 0);
   const boostPitch = boostPay > 0 ? autoPitch(me, boostPay, defendSel) : [];
   const boostErr = boostPay > 0 && !boostPitch ? 'Not enough cards left to pitch for that.' : null;
+  // ending the turn: optionally choose the order your pitched cards go to the bottom of your deck
+  const endTurnAct = (a: Action) => {
+    if (pitchOrderOn && me.pitch.length >= 2 && !(a.type === 'pass' && state.stack?.length)) { setOrdering({ action: a, order: [] }); return; }
+    act(a);
+  };
+  const top = state.stack?.[state.stack.length - 1];
   let prompt: React.ReactNode;
   if (state.phase === 'gameOver') {
     prompt = (
@@ -589,7 +597,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (!myTurn) {
     prompt = (
       <>
-        <span className="msg muted">{state.players[state.priority].name} is thinking…</span>
+        <span className="msg muted">{top ? `${state.players[state.priority].name} may respond to ${top.label}…` : `${state.players[state.priority].name} is thinking…`}</span>
         <button className="primary waiting" disabled>Opponent’s Move</button>
       </>
     );
@@ -631,11 +639,18 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         <button className="primary" onClick={() => act({ type: 'pass' })}>Pass</button>
       </>
     );
+  } else if (state.phase === 'action' && top) {
+    prompt = (
+      <>
+        <span className="msg"><b>{top.label}</b> is on the stack{top.controller === HUMAN ? '' : ` (${state.players[top.controller].name})`}. Respond with an instant, or let it resolve.</span>
+        <button className="primary" onClick={() => act({ type: 'pass' })}>Let it resolve</button>
+      </>
+    );
   } else if (state.phase === 'arsenal') {
     prompt = (
       <>
         <span className="msg">End phase: choose a card for your arsenal.</span>
-        <button className="primary" onClick={() => act({ type: 'arsenal', uid: null })}>No Arsenal</button>
+        <button className="primary" onClick={() => endTurnAct({ type: 'arsenal', uid: null })}>No Arsenal</button>
       </>
     );
   } else {
@@ -644,7 +659,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         <span className="msg">
           {me.actionPoints > 0 ? `${me.actionPoints} action point${me.actionPoints > 1 ? 's' : ''}. Drag or click a glowing card.` : 'No action points left.'}
         </span>
-        <button className="primary" onClick={() => act({ type: 'pass' })}>{state.chainOpen ? 'Close Chain · End Turn' : 'End Turn'}</button>
+        <button className="primary" onClick={() => endTurnAct({ type: 'pass' })}>{state.chainOpen ? 'Close Chain · End Turn' : 'End Turn'}</button>
       </>
     );
   }
@@ -679,6 +694,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         </div>
@@ -698,6 +714,17 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
           </div>
           <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
+          {!!state.stack?.length && (
+            <div className="stack-zone" aria-label="The stack">
+              <span className="stack-title">Stack</span>
+              {[...state.stack].reverse().map((l, i) => (
+                <div key={l.inst.uid + '-' + i} className={`stack-layer ${l.controller === HUMAN ? 'mine' : 'theirs'} ${i === 0 ? 'top' : ''}`}>
+                  <CardView card={cardOf(l.inst)} width="calc(var(--slot, 60px) * .8)" onClick={() => setDetail(cardOf(l.inst))} />
+                  {i === 0 && <span className="small">resolves next</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <PlayerArea
             p={me}
             state={state}
@@ -777,7 +804,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {drawer === 'log' && (
             <div className="log" ref={logRef}>
               {state.log.slice(-250).map((l, i) => (
-                <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>{l.text}</div>
+                <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>
+                  {l.text}
+                  {l.rule && <details className="rule-tip"><summary>ℹ why?</summary>{l.rule}</details>}
+                </div>
               ))}
             </div>
           )}
@@ -814,14 +844,36 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {onGameOver && <ProgressGains before={progressBefore} />}
         </GameOverOverlay>
       )}
+      {ordering && (
+        <div className="modal-bg">
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <h2 style={{ marginBottom: '.2rem' }}>Pitch order</h2>
+            <p className="small muted" style={{ marginTop: 0 }}>Tap your pitched cards in the order they go to the bottom of your deck. The first one you tap goes in first, so it is drawn first when the deck cycles round.</p>
+            <div className="row" style={{ gap: '.6rem' }}>
+              {me.pitch.map((p) => {
+                const n = ordering.order.indexOf(p.uid);
+                return (
+                  <div key={p.uid} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setOrdering({ ...ordering, order: n >= 0 ? ordering.order.filter((u) => u !== p.uid) : [...ordering.order, p.uid] })}>
+                    <CardView card={cardOf(p)} width={96} tilt={false} noPopout marker={n >= 0 ? String(n + 1) : undefined} className={n >= 0 ? 'hint-play' : ''} />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="row" style={{ marginTop: '1rem' }}>
+              <button className="primary" disabled={ordering.order.length !== me.pitch.length} onClick={() => { const a = ordering.action; const order = ordering.order; setOrdering(null); act({ ...a, pitchOrder: order } as Action); }}>Done</button>
+              <button onClick={() => { const a = ordering.action; setOrdering(null); act(a); }}>Keep the order I pitched them</button>
+            </div>
+          </div>
+        </div>
+      )}
       {reviewing && <GameReview decisions={decisions.current} onClose={() => setReviewing(false)} />}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
       {optPick && (() => {
         const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === optPick.opt.uid);
         const oc = inst && getScript(cardOf(inst)).optional;
         if (!inst || !oc) return null;
-        const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop'].includes(oc.cost.kind);
-        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind !== 'discard' || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+        const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop', 'reveal', 'charge'].includes(oc.cost.kind);
+        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
         const advice = decideOptional(state, me, inst.uid, []);
         const yes = (choice: OptionalChoice) => startPlay(optPick.opt, optPick.mode, choice);
         return (

@@ -1237,3 +1237,17 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 @media (orientation: landscape) and (max-height: 560px) { .replay-bar { bottom: auto; top: calc(4px + var(--sa-t)); width: min(460px, 60vw); padding: .3rem .6rem; } }
 .install-banner { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .8rem 0; border-color: var(--accent); }
 .install-banner > span { flex: 1; min-width: 220px; }
+
+/* ===================================================== the stack, rule tips */
+.arena .mat { position: relative; }
+.stack-zone { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 6px; border-radius: 12px; background: #120e0aee; border: 1px solid #a57c46; box-shadow: 0 10px 30px #000c; animation: fadeUp .2s ease-out; }
+.stack-title { font: 700 .7rem Cinzel, Georgia, serif; letter-spacing: .08em; color: #f6d58e; text-transform: uppercase; }
+.stack-layer { display: flex; flex-direction: column; align-items: center; gap: 2px; opacity: .75; }
+.stack-layer.top { opacity: 1; }
+.stack-layer.top .card { box-shadow: 0 0 0 2px #f6d58e, 0 0 18px #f0b542aa; }
+.stack-layer.theirs.top .card { box-shadow: 0 0 0 2px #8fc1ff, 0 0 18px #4a8bffaa; }
+.stack-layer .small { font-size: .6rem; color: #f6d58e; }
+.rule-tip { margin: .1rem 0 .3rem .6rem; font-size: .78em; color: #c9b896; }
+.rule-tip summary { cursor: pointer; color: var(--accent); list-style: none; display: inline; }
+.rule-tip[open] { background: #0005; border-left: 2px solid #a57c46; padding: .2rem .5rem; border-radius: 4px; }

@@ -165,6 +165,21 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+    case 'reveal': {
+      // fusing is free: the revealed card stays in hand
+      const talent = oc.cost.talent;
+      const h = cheapest((c) => c.types.includes(talent));
+      if (!h) return { accept: false };
+      return { accept: true, uid: h.uid };
+    }
+    case 'charge': {
+      const want = oc.cost.pitch;
+      const h = cheapest((c) => !want || pitchOf(c) === want);
+      if (!h) return { accept: false };
+      choice = { accept: true, uid: h.uid };
+      cost = cardPlayValue(cardOf(h)) * 0.8 + 0.3; // a card in the soul still has value for Light heroes
+      break;
+    }
   }
   return gain > cost ? choice : { accept: false };
 }
@@ -470,6 +485,23 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
   return { action: playAction(s, p, best.opt.uid, best.opt.cost, p.hand.filter((h) => h.uid !== best!.opt.uid).map((h) => h.uid)) ?? { type: 'play', uid: best.opt.uid, pitch, mode: modeFor(p, best.opt.uid) }, reason: `Play ${best.opt.label}: it changes the damage on this chain link.` };
 }
 
+/** Something is on the stack: respond with a damage-prevention instant when an opposing attack is coming, else let it resolve. */
+function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty): BotDecision {
+  const pass: BotDecision = { action: { type: 'pass' }, reason: 'Let it resolve.' };
+  const top = s.stack![s.stack!.length - 1];
+  if (difficulty === 'easy' || top.controller === pid || !has(cardOf(top.inst), 'Attack')) return pass;
+  const p = s.players[pid];
+  for (const o of playOptions(s, pid).filter((x) => x.kind === 'card')) {
+    const c = cardOf([...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!);
+    const prevent = getScript(c).onPlay.reduce((a, e) => a + (e.kind === 'preventNext' ? e.amount : 0), 0);
+    if (prevent >= 2 && o.cost <= 1) {
+      const a = playAction(s, p, o.uid, o.cost, p.hand.filter((h) => h.uid !== o.uid).map((h) => h.uid));
+      if (a) return { action: a, reason: `Respond with ${c.name} to prevent damage from ${top.label}.` };
+    }
+  }
+  return pass;
+}
+
 // ---------------------------------------------------------------- arsenal
 
 function planArsenal(s: GameState, pid: PlayerId): BotDecision {
@@ -485,6 +517,7 @@ function planArsenal(s: GameState, pid: PlayerId): BotDecision {
 
 export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficulty): BotDecision {
   const diff = difficulty ?? s.players[pid].difficulty;
+  if (s.phase === 'action' && s.stack?.length) return planStackResponse(s, pid, diff);
   switch (s.phase) {
     case 'defend': return planDefense(s, pid, diff);
     case 'reaction': return planReaction(s, pid, diff);

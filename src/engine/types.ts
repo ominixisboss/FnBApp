@@ -19,12 +19,15 @@ export interface EquipState {
 export interface WeaponState {
   inst: CardInst;
   usedThisTurn: boolean;
+  /** +1{p} counters (sharpen) */
+  counters?: number;
 }
 
 export interface PermanentState {
   inst: CardInst;
   ward: number;
   steam?: number; // Mechanologist steam counters
+  counters?: number; // sandbox: generic counters
 }
 
 export type TurnEffect =
@@ -76,6 +79,8 @@ export interface TurnInfo {
   weaponAttacked?: boolean;
   intimidated?: boolean;
   attackedTimes?: number; // attacks made against this player this turn
+  /** order (uids) to put pitched cards on the bottom of the deck at end of turn, first = goes in first */
+  pitchOrder?: number[];
 }
 
 export interface Defender {
@@ -109,10 +114,25 @@ export interface ChainLink {
 
 export type Phase = 'action' | 'defend' | 'reaction' | 'arsenal' | 'gameOver';
 
+/** A card or ability waiting on the stack to resolve (players may respond with instants first). */
+export interface Layer {
+  controller: PlayerId;
+  inst: CardInst;
+  kind: 'card' | 'activation';
+  index?: number; // activation index
+  fromArsenal?: boolean;
+  mode?: number;
+  /** optional cost paid when it was played: the card used, if any */
+  optional?: { accept: boolean; usedId: string | null };
+  label: string;
+}
+
 export interface LogEntry {
   turn: number;
   player: PlayerId | null;
   text: string;
+  /** the rule that explains this event (shown in the log as a tip) */
+  rule?: string;
 }
 
 export interface GameState {
@@ -128,15 +148,17 @@ export interface GameState {
   chainOpen: boolean;
   winner: PlayerId | null;
   log: LogEntry[];
+  /** layers waiting to resolve, last = top (only used in the action phase) */
+  stack?: Layer[];
   format: string;
 }
 
 export type Action =
   | { type: 'play'; uid: number; pitch: number[]; mode?: number; optional?: OptionalChoice }
   | { type: 'activate'; uid: number; index: number; pitch: number[] }
-  | { type: 'pass' }
+  | { type: 'pass'; pitchOrder?: number[] }
   | { type: 'defend'; uids: number[]; boosts?: number[]; pitch?: number[] }
-  | { type: 'arsenal'; uid: number | null }
+  | { type: 'arsenal'; uid: number | null; pitchOrder?: number[] }
   | { type: 'concede' }
   | ManualAction;
 
@@ -148,7 +170,16 @@ export type ManualAction =
   | { type: 'manual'; op: 'power'; amount: number }
   | { type: 'manual'; op: 'discard'; player: PlayerId; uid: number }
   | { type: 'manual'; op: 'returnFromGraveyard'; player: PlayerId; uid: number }
-  | { type: 'manual'; op: 'token'; player: PlayerId; name: string };
+  | { type: 'manual'; op: 'token'; player: PlayerId; name: string }
+  /** sandbox: move any card to any zone */
+  | { type: 'manual'; op: 'move'; player: PlayerId; uid: number; to: Zone; bottom?: boolean }
+  | { type: 'manual'; op: 'shuffle'; player: PlayerId }
+  /** sandbox: +/- counters on a permanent, or defense counters on equipment */
+  | { type: 'manual'; op: 'counter'; player: PlayerId; uid: number; amount: number }
+  /** sandbox: destroy / restore a piece of equipment */
+  | { type: 'manual'; op: 'equipment'; player: PlayerId; uid: number; destroyed: boolean };
+
+export type Zone = 'hand' | 'arsenal' | 'pitch' | 'graveyard' | 'banished' | 'deck' | 'soul' | 'arena';
 
 /** The player's answer to a card's "you may <cost>. If you do, <effect>" when playing it. */
 export interface OptionalChoice {
