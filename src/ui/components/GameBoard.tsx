@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, checkDefense, currentLink, defendOptions,
+  applyAction, autoPitch, availableResources, cardOf, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
-import type { Action, CardInst, EquipState, GameState, PlayerId, PlayerState } from '../../engine/types';
-import { chooseAction, describeAction } from '../../ai/bot';
+import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState } from '../../engine/types';
+import { chooseAction, decideOptional, describeAction } from '../../ai/bot';
 import { getScript } from '../../engine/cardScript';
+import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
@@ -18,7 +19,7 @@ import type { ChainLink } from '../../engine/types';
 const HUMAN: PlayerId = 0;
 const BOT_DELAY = 650;
 
-interface Pending { opt: PlayOption; pitch: number[]; mode?: number }
+interface Pending { opt: PlayOption; pitch: number[]; mode?: number; optional?: OptionalChoice }
 
 interface Floater { id: number; player: PlayerId; amount: number }
 interface Fx { floaters: Floater[]; lifeAnim: [string, string]; lifeKey: [number, number]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
@@ -153,6 +154,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [zone, setZone] = useState<{ title: string; cards: CardInst[] } | null>(null);
   const [showHint, setShowHint] = useState(tutorial);
   const [modePick, setModePick] = useState<PlayOption | null>(null);
+  const [optPick, setOptPick] = useState<{ opt: PlayOption; mode?: number } | null>(null);
+  const [choosePlay, setChoosePlay] = useState<PlayOption[] | null>(null);
+  const [boostSel, setBoostSel] = useState<number[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [sound, setSound] = useState(soundEnabled);
@@ -178,6 +182,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  const showcase = useShowcase(state);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setHandOpen(false); }, [state]);
   useZoneGlide(oppHandRef);
@@ -216,6 +221,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       }
       setPending(null);
       setDefendSel([]);
+      setBoostSel([]);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -297,23 +303,39 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === opt.uid);
     return inst ? getScript(cardOf(inst)).modes : [];
   };
-  const startPlay = (opt: PlayOption, mode?: number) => {
+  const optionalOf = (opt: PlayOption) => {
+    if (opt.kind !== 'card') return undefined;
+    const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === opt.uid);
+    const oc = inst && getScript(cardOf(inst)).optional;
+    return oc && oc.timing !== 'defend' && optionalPayable(me, oc, opt.uid) ? oc : undefined;
+  };
+  const extraFor = (opt: PlayOption, optional?: OptionalChoice) => {
+    const oc = optionalOf(opt);
+    return optional?.accept && oc?.cost.kind === 'pay' ? oc.cost.amount : 0;
+  };
+  const startPlay = (opt: PlayOption, mode?: number, optional?: OptionalChoice) => {
     if (mode === undefined && modesOf(opt).length > 0) return setModePick(opt);
     setModePick(null);
-    const exclude = opt.kind === 'card' ? [opt.uid] : [];
-    if (me.resources >= opt.cost) return act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch: [], mode } : { type: 'activate', uid: opt.uid, index: opt.index, pitch: [] });
-    if (availableResources(me, exclude) < opt.cost) return setError('Not enough resources.');
+    // "you may <cost>. If you do, <effect>": ask first
+    if (optional === undefined && optionalOf(opt)) return setOptPick({ opt, mode });
+    setOptPick(null);
+    const cost = opt.cost + extraFor(opt, optional);
+    const exclude = [...(opt.kind === 'card' ? [opt.uid] : []), ...(optional?.uid !== undefined ? [optional.uid] : [])];
+    const build = (pitch: number[]): Action => (opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    if (me.resources >= cost) return act(build([]));
+    if (availableResources(me, exclude) < cost) return setError('Not enough resources.');
     if (autoPay && !shiftHeld.current) {
       // like auto-tapping mana: pick the cheapest cards to pitch automatically (hold Shift to choose)
-      const auto = autoPitch(me, opt.cost, exclude);
-      if (auto) return act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch: auto, mode } : { type: 'activate', uid: opt.uid, index: opt.index, pitch: auto });
+      const auto = autoPitch(me, cost, exclude);
+      if (auto) return act(build(auto));
     }
-    setPending({ opt, pitch: [], mode });
+    setPending({ opt, pitch: [], mode, optional });
   };
+  const pendingCost = pending ? pending.opt.cost + extraFor(pending.opt, pending.optional) : 0;
   const finishPay = (pitch: number[]) => {
     if (!pending) return;
-    const { opt, mode } = pending;
-    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    const { opt, mode, optional } = pending;
+    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
   };
   const pitchTotal = pending ? me.resources + pending.pitch.reduce((a, u) => a + pitchOf(cardOf(me.hand.find((h) => h.uid === u)!)), 0) : 0;
 
@@ -326,9 +348,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     else rememberRect(inst.uid);
     if (pending) {
       if (pending.opt.kind === 'card' && inst.uid === pending.opt.uid) return setPending(null);
+      if (pending.optional?.uid === inst.uid) return; // that card pays the optional cost
       const sel = pending.pitch.includes(inst.uid) ? pending.pitch.filter((u) => u !== inst.uid) : [...pending.pitch, inst.uid];
       const total = me.resources + sel.reduce((a, u) => a + pitchOf(cardOf(me.hand.find((h) => h.uid === u)!)), 0);
-      if (total >= pending.opt.cost && !pending.pitch.includes(inst.uid)) return finishPay(sel);
+      if (total >= pendingCost && !pending.pitch.includes(inst.uid)) return finishPay(sel);
       return setPending({ ...pending, pitch: sel });
     }
     if (!myTurn) return setDetail(cardOf(inst));
@@ -337,8 +360,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
     if (state.phase === 'arsenal') return act({ type: 'arsenal', uid: inst.uid });
-    const opt = optionFor(inst.uid);
-    if (opt) return startPlay(opt);
+    const opts = options.filter((o) => o.uid === inst.uid);
+    if (opts.length > 1 || (opts.length === 1 && opts[0].index === HAND_INDEX)) return setChoosePlay(opts); // play it, or discard it for its effect?
+    if (opts.length === 1) return startPlay(opts[0]);
     setDetail(cardOf(inst));
   };
 
@@ -400,6 +424,19 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   // ---- prompt
   const defendTotal = defendSel.reduce((a, u) => a + (defOpts.find((d) => d.uid === u)?.defense ?? 0), 0);
   const defendErr = state.phase === 'defend' && myTurn ? checkDefense(state, defendSel) : null;
+  // blockers with "When this defends, you may <cost>. If you do, <effect>"
+  const boostable = state.phase === 'defend' && myTurn
+    ? defendSel.map((u) => {
+        const inst = me.hand.find((h) => h.uid === u) ?? me.equipment.find((e) => e.inst.uid === u)?.inst;
+        const oc = inst && getScript(cardOf(inst)).optional;
+        return inst && oc && oc.timing === 'defend' && (oc.cost.kind === 'pay' || optionalPayable(me, oc, u)) ? { inst, oc } : null;
+      }).filter((x): x is NonNullable<typeof x> => !!x)
+    : [];
+  const activeBoosts = boostSel.filter((u) => boostable.some((b) => b.inst.uid === u));
+  const boostPay = boostable.filter((b) => activeBoosts.includes(b.inst.uid)).reduce((a, b) => a + (b.oc.cost.kind === 'pay' ? b.oc.cost.amount : 0), 0);
+  const boostBonus = boostable.filter((b) => activeBoosts.includes(b.inst.uid)).reduce((a, b) => a + b.oc.effects.reduce((x, e) => x + (e.kind === 'thisDefense' ? e.amount : 0), 0), 0);
+  const boostPitch = boostPay > 0 ? autoPitch(me, boostPay, defendSel) : [];
+  const boostErr = boostPay > 0 && !boostPitch ? 'Not enough cards left to pitch for that.' : null;
   let prompt: React.ReactNode;
   if (state.phase === 'gameOver') {
     prompt = (
@@ -419,8 +456,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (pending) {
     prompt = (
       <>
-        <span className="msg">Pitch cards to pay for <b>{pending.opt.label}</b> <span className="pay-meter">{pitchTotal} / {pending.opt.cost}</span></span>
-        <button className="gold" onClick={() => { const p = autoPitch(me, pending.opt.cost, pending.opt.kind === 'card' ? [pending.opt.uid] : []); if (p) finishPay(p); }}>Auto-pay</button>
+        <span className="msg">Pitch cards to pay for <b>{pending.opt.label}</b> <span className="pay-meter">{pitchTotal} / {pendingCost}</span></span>
+        <button className="gold" onClick={() => { const p = autoPitch(me, pendingCost, [...(pending.opt.kind === 'card' ? [pending.opt.uid] : []), ...(pending.optional?.uid !== undefined ? [pending.optional.uid] : [])]); if (p) finishPay(p); }}>Auto-pay</button>
         <button onClick={() => setPending(null)}>Cancel</button>
       </>
     );
@@ -433,7 +470,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {' '}Pick blockers. You take <b className="pay-meter">{Math.max(0, incoming - defendTotal)}</b>
           {defendErr && <span className="err"> {defendErr}</span>}
         </span>
-        <button className="primary" disabled={!!defendErr} onClick={() => act({ type: 'defend', uids: defendSel })}>{defendSel.length ? `Block ${defendTotal}` : 'No Blocks'}</button>
+        {boostable.map(({ inst: b, oc }) => (
+          <label key={b.uid} className="boost-toggle">
+            <input type="checkbox" checked={boostSel.includes(b.uid)} onChange={() => setBoostSel(boostSel.includes(b.uid) ? boostSel.filter((u) => u !== b.uid) : [...boostSel, b.uid])} />
+            <span><b>{cardOf(b).name}</b>: {oc.costText} → {oc.effectText}</span>
+          </label>
+        ))}
+        {boostErr && <span className="err small">{boostErr}</span>}
+        <button className="primary" disabled={!!defendErr || !!boostErr} onClick={() => act({ type: 'defend', uids: defendSel, boosts: activeBoosts, pitch: boostPitch ?? [] })}>{defendSel.length ? `Block ${defendTotal + boostBonus}` : 'No Blocks'}</button>
       </>
     );
   } else if (state.phase === 'reaction' && link) {
@@ -594,8 +638,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </div>
       )}
       <AttackArrow state={state} />
+      {showcase && <Showcase key={`sc${showcase.id}`} cardId={showcase.cardId} mine={showcase.mine} />}
       {fx.lifeAnim[HUMAN] === 'hurt' && fx.lifeKey[HUMAN] > 0 && <div key={`vig${fx.lifeKey[HUMAN]}`} className="hurt-vignette" />}
-      {fx.banner && <TurnBanner key={fx.banner.id} text={fx.banner.text} mine={fx.banner.mine} />}
+      {fx.banner && <TurnBanner key={`tb${fx.banner.id}`} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
           <h1>{state.winner === HUMAN ? 'Victory' : 'Defeat'}</h1>
@@ -611,6 +656,57 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </GameOverOverlay>
       )}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
+      {optPick && (() => {
+        const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === optPick.opt.uid);
+        const oc = inst && getScript(cardOf(inst)).optional;
+        if (!inst || !oc) return null;
+        const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop'].includes(oc.cost.kind);
+        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind !== 'discard' || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+        const advice = decideOptional(state, me, inst.uid, []);
+        const yes = (choice: OptionalChoice) => startPlay(optPick.opt, optPick.mode, choice);
+        return (
+          <div className="modal-bg" onClick={() => setOptPick(null)}>
+            <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+              <h2 style={{ marginBottom: '.3rem' }}>{cardOf(inst).name}</h2>
+              <p style={{ marginTop: 0 }}>You may <b>{oc.costText}</b>. If you do: <b>{oc.effectText}</b>{oc.minPower !== undefined ? ` (only if it has ${oc.minPower}+ power)` : ''}.</p>
+              {advice && <p className="small muted" style={{ marginTop: 0 }}>💡 Suggested: {advice.accept ? 'yes' : 'no'}{advice.accept && advice.uid !== undefined ? `, using ${cardOf(me.hand.find((h) => h.uid === advice.uid)!).name}` : ''}.</p>}
+              {needsCard && eligible.length > 0 && (
+                <>
+                  <div className="small muted">Choose the card:</div>
+                  <div className="row" style={{ gap: '.5rem', margin: '.4rem 0 .8rem' }}>
+                    {eligible.map((h) => (
+                      <div key={h.uid} onClick={() => yes({ accept: true, uid: h.uid })} style={{ cursor: 'pointer' }}>
+                        <CardView card={cardOf(h)} width={92} tilt={false} noPopout className={advice?.uid === h.uid ? 'playable' : ''} />
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div className="row">
+                {oc.cost.kind === 'discardOrTop' && <button onClick={() => yes({ accept: true, top: true })}>Destroy the top card of my deck</button>}
+                {!needsCard && <button className="primary" onClick={() => yes({ accept: true })}>Yes</button>}
+                <button onClick={() => yes({ accept: false })}>No</button>
+                <button className="small" onClick={() => setOptPick(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {choosePlay && (
+        <div className="modal-bg" onClick={() => setChoosePlay(null)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <h2>What do you want to do?</h2>
+            <div className="col">
+              {choosePlay.map((o) => (
+                <button key={o.index} style={{ textAlign: 'left' }} onClick={() => { setChoosePlay(null); startPlay(o); }}>
+                  {o.index === HAND_INDEX ? o.label : `Play ${o.label}`}{o.cost ? ` (cost ${o.cost})` : ''}
+                </button>
+              ))}
+              <button className="small" onClick={() => setChoosePlay(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {modePick && (
         <div className="modal-bg" onClick={() => setModePick(null)}>
           <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
@@ -679,7 +775,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
   const equipSlot = (area: string, label: string, e?: EquipState) => (
     <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
       {e && (
-        <CardView card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
+        <CardView key={`${e.inst.uid}-${e.destroyed}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
           className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`}
           badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
@@ -713,7 +809,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className="hero-box">
-        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} />
+        <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)}
+          className={state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -739,6 +836,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           <span key={`r${p.resources}`} className={p.resources ? 'anim-pulse' : ''} title="Floating resources">⛀ {p.resources}</span>
           <span key={`a${p.actionPoints}`} className={p.actionPoints ? 'anim-pulse' : ''} style={{ '--pulse': '#f2e14e' } as React.CSSProperties} title="Action points">⚡ {p.actionPoints}</span>
           {isOpp && <span title="Cards in hand">✋ {p.hand.length}{p.intimidated.length ? ` (+${p.intimidated.length})` : ''}</span>}
+          {(p.soul?.length ?? 0) > 0 && <span title="Cards in soul">✦ {p.soul!.length}</span>}
         </div>
       </div>
       <div className="mat-effects" style={{ gridArea: 'fx' }}>
@@ -780,6 +878,26 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
   lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  // the attack lunges at the defending hero when its damage resolves
+  const prevDamage = useRef(l.damage);
+  useEffect(() => {
+    const was = prevDamage.current;
+    prevDamage.current = l.damage;
+    const el = cardRef.current;
+    if (was !== null || l.damage === null || !el || !el.animate || !motionOk()) return;
+    const from = el.getBoundingClientRect();
+    const to = document.querySelector(`.mat-side.${l.attacker === HUMAN ? 'opp' : 'me'} .hero-box`)?.getBoundingClientRect();
+    if (!to) return;
+    const dx = (to.left + to.width / 2 - (from.left + from.width / 2)) * 0.62;
+    const dy = (to.top + to.height / 2 - (from.top + from.height / 2)) * 0.62;
+    const tilt = l.attacker === HUMAN ? -10 : 10;
+    el.animate([
+      { transform: 'none' },
+      { transform: `translate(${-dx * 0.08}px, ${-dy * 0.08}px) scale(1.08) rotate(${-tilt / 2}deg)`, offset: 0.25 },
+      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, filter: 'brightness(1.6) drop-shadow(0 0 18px #ff8a3d)', offset: 0.55 },
+      { transform: 'none', filter: 'none' },
+    ], { duration: l.hit ? 620 : 520, easing: 'cubic-bezier(.3,.7,.2,1)' });
+  }, [l.damage, l.attacker, l.hit]);
   // FLIP: fly the attacking card from where it was played (hand, weapon, or the opponent's side)
   useLayoutEffect(() => {
     const el = cardRef.current;
@@ -935,5 +1053,53 @@ function AttackArrow({ state }: { state: GameState }) {
         <path d="M 0 0 L -22 -12 L -16 0 L -22 12 Z" className="arrow-head" />
       </g>
     </svg>
+  );
+}
+
+/** Cards being played, queued for the "cast" showcase (both players' plays and weapon attacks). */
+function useShowcase(state: GameState) {
+  const prev = useRef<GameState | null>(null);
+  const queue = useRef<{ id: number; cardId: string; mine: boolean }[]>([]);
+  const seq = useRef(1);
+  const [current, setCurrent] = useState<{ id: number; cardId: string; mine: boolean } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const next = () => {
+    const item = queue.current.shift() ?? null;
+    setCurrent(item);
+    if (item) timer.current = setTimeout(next, item.mine ? 750 : 1150);
+    else timer.current = null;
+  };
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = state;
+    if (!before || !motionOk()) return;
+    const found: { id: number; cardId: string; mine: boolean }[] = [];
+    state.players.forEach((p, i) => {
+      const old = before.turn === state.turn ? before.players[i].turn.played.length : 0;
+      for (const id of p.turn.played.slice(old)) found.push({ id: seq.current++, cardId: id, mine: i === HUMAN });
+    });
+    const newLink = state.chain.length > before.chain.length ? state.chain[state.chain.length - 1] : null;
+    if (newLink?.fromWeapon) found.push({ id: seq.current++, cardId: newLink.inst.cardId, mine: newLink.attacker === HUMAN });
+    if (!found.length) return;
+    queue.current.push(...found);
+    if (!timer.current) next();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return current;
+}
+
+/** A played card shown big at the side of the board for a moment; the opponent's flips over as it's revealed. */
+function Showcase({ cardId, mine }: { cardId: string; mine: boolean }) {
+  const c = getDb().byId.get(cardId);
+  if (!c || cardId === '__hidden__') return null;
+  return (
+    <div className={`showcase ${mine ? 'mine' : 'theirs'}`} aria-hidden>
+      <div className="showcase-rays" />
+      <div className="showcase-card">
+        <div className="sc-face"><CardView card={c} width="var(--sc-w)" tilt={false} noPopout /></div>
+        {!mine && <div className="sc-back"><CardBack width="var(--sc-w)" /></div>}
+      </div>
+    </div>
   );
 }

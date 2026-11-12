@@ -6,11 +6,12 @@ import { getScript } from '../engine/cardScript';
 import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
-  defenseOf, effectiveCost, heroCtx, HERO_INDEX, linkDefense, linkPower, other, pitchOf, playOptions, powerOf,
+  defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, other, pitchOf,
+  playOptions, powerOf,
 } from '../engine/game';
 import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
-import type { Action, Difficulty, GameState, PlayerId, PlayerState } from '../engine/types';
+import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
 
 export interface BotDecision {
   action: Action;
@@ -94,10 +95,21 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
       const fromArsenal = p.arsenal.some((a) => a.uid === opt.uid);
       const isAttack = has(c, 'Attack') && has(c, 'Action');
       const goAgain = sc.goAgain || (fromArsenal && sc.conditional.some((cn) => cn.when === 'fromArsenal' && cn.effects.some((e) => e.kind === 'thisGoAgain')));
+      // conditions that are already true add their payoff ("If you've drawn a card this turn, +1{p}")
+      const condValue = sc.conditional.filter((cn) => cn.when === 'if' && cn.cond && evalCondition(s, p, cn.cond)).reduce((a, cn) => a + effectValue(cn.effects), 0);
+      const condGoAgain = sc.conditional.some((cn) => cn.when === 'if' && cn.cond && evalCondition(s, p, cn.cond) && cn.effects.some((e) => e.kind === 'thisGoAgain'));
+      const opt0 = decideOptional(s, p, opt.uid, []);
+      const optValue = opt0?.accept ? effectValue(sc.optional!.effects) * 0.8 : 0;
       return {
-        opt, value: playValue(c, fromArsenal), goAgain, usesAP: has(c, 'Action') && !has(c, 'Instant'),
+        opt, value: playValue(c, fromArsenal) + condValue + optValue, goAgain: goAgain || condGoAgain, usesAP: has(c, 'Action') && !has(c, 'Instant'),
         isAttack, cost: opt.cost, uidInHand: p.hand.some((h) => h.uid === opt.uid) ? opt.uid : null,
       };
+    }
+    if (opt.index === HAND_INDEX) {
+      const c = cardOf(p.hand.find((h) => h.uid === opt.uid)!);
+      const ha = getScript(c).handActivation!;
+      const value = effectValue(ha.effects) - cardPlayValue(c) * 0.8 - 0.3;
+      return { opt, value, goAgain: false, usesAP: false, isAttack: false, cost: opt.cost, uidInHand: opt.uid };
     }
     if (opt.index >= HERO_INDEX) {
       const a = getHeroAbility(cardOf(p.hero))!.activations![opt.index - HERO_INDEX];
@@ -109,6 +121,61 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
     const value = a.attack ? powerOf(src) : effectValue(a.effects) - (a.destroySelf ? 1 : 0);
     return { opt, value, goAgain: a.goAgain, usesAP: !a.instant, isAttack: a.attack, cost: opt.cost, uidInHand: null };
   });
+}
+
+/** Should the bot pay a card's optional cost ("you may discard a card. If you do, ...")? And with what? */
+export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch: number[]): OptionalChoice | undefined {
+  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  if (!inst) return undefined;
+  const oc = getScript(cardOf(inst)).optional;
+  if (!oc || oc.timing === 'defend' || !optionalPayable(p, oc, uid)) return undefined;
+  const gain = effectValue(oc.effects);
+  const pool = p.hand.filter((h) => h.uid !== uid && !pitch.includes(h.uid));
+  const cheapest = (filter: (c: Card) => boolean) =>
+    pool.filter((h) => filter(cardOf(h))).sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
+  const needPower = (c: Card) => oc.minPower === undefined || powerOf(c) >= oc.minPower;
+  let choice: OptionalChoice | undefined;
+  let cost = 0;
+  switch (oc.cost.kind) {
+    case 'discard': case 'handToBottom': case 'banishHand': {
+      const want = oc.cost.kind === 'discard' ? oc.cost.pitch : undefined;
+      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c));
+      if (!h) return { accept: false };
+      choice = { accept: true, uid: h.uid };
+      cost = cardPlayValue(cardOf(h)) * (oc.cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4;
+      break;
+    }
+    case 'discardOrTop': {
+      const h = oc.minPower !== undefined ? cheapest(needPower) : undefined;
+      if (h) { choice = { accept: true, uid: h.uid }; cost = cardPlayValue(cardOf(h)) + 0.4; }
+      else { choice = { accept: true, top: true }; cost = oc.minPower !== undefined ? 99 : 0.4; }
+      break;
+    }
+    case 'pay': {
+      const total = effectiveCost(s, p, cardOf(inst)) + oc.cost.amount;
+      if (availableResources(p, [uid]) < total) return { accept: false };
+      choice = { accept: true };
+      cost = oc.cost.amount * 1.1;
+      break;
+    }
+    case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
+    case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
+    case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+  }
+  return gain > cost ? choice : { accept: false };
+}
+
+/** Build a "play" action including mode and optional-cost decisions, with pitch that covers any extra cost. */
+function playAction(s: GameState, p: PlayerState, uid: number, cost: number, pitchPool: number[]): Action | null {
+  let optional = decideOptional(s, p, uid, []);
+  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid)!;
+  const oc = getScript(cardOf(inst)).optional;
+  const extra = optional?.accept && oc?.cost.kind === 'pay' ? oc.cost.amount : 0;
+  const pool = pitchPool.filter((u) => u !== optional?.uid);
+  let pitch = choosePitch(p, cost + extra, pool);
+  if (!pitch && extra) { optional = { accept: false }; pitch = choosePitch(p, cost, pitchPool); }
+  if (!pitch) return null;
+  return { type: 'play', uid, pitch, mode: modeFor(p, uid), optional };
 }
 
 function modeFor(p: PlayerState, uid: number): number {
@@ -146,7 +213,7 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     const attacks = items.filter((i) => i.isAttack || i.value > 1);
     if (attacks.length && Math.random() < 0.85) {
       const it = attacks[Math.floor(Math.random() * attacks.length)];
-      return mkPlay(p, it, [it], 'Plays a card it can afford.');
+      return mkPlay(s, p, it, [it], 'Plays a card it can afford.');
     }
     return { action: { type: 'pass' }, reason: 'Nothing worth playing.' };
   }
@@ -213,8 +280,11 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
   const first = sorted[0];
   const pitch = choosePitch(p, first.cost, best.pitch);
   if (!pitch) return { action: { type: 'pass' }, reason: 'Can’t pay.' };
+  const pool = [...best.pitch, ...p.hand.filter((h) => !best.plan.some((i) => i.uidInHand === h.uid)).map((h) => h.uid)];
+  const playIt = first.opt.kind === 'card' ? playAction(s, p, first.opt.uid, first.cost, [...new Set(pool)]) : null;
+  if (first.opt.kind === 'card' && !playIt) return { action: { type: 'pass' }, reason: 'Can’t pay.' };
   return {
-    action: first.opt.kind === 'card' ? { type: 'play', uid: first.opt.uid, pitch, mode: modeFor(p, first.opt.uid) } : { type: 'activate', uid: first.opt.uid, index: first.opt.index, pitch },
+    action: playIt ?? { type: 'activate', uid: first.opt.uid, index: first.opt.index, pitch },
     reason: explainPlan(sorted, p),
   };
 }
@@ -240,12 +310,13 @@ function choosePitch(p: PlayerState, cost: number, preferred: number[]): number[
   return got >= need ? out : null;
 }
 
-function mkPlay(p: PlayerState, it: Item, plan: Item[], reason: string): BotDecision {
+function mkPlay(s: GameState, p: PlayerState, it: Item, plan: Item[], reason: string): BotDecision {
   const exclude = plan.map((i) => i.uidInHand).filter((u): u is number => u !== null);
   const pitchPool = p.hand.filter((h) => !exclude.includes(h.uid)).map((h) => h.uid);
   const pitch = choosePitch(p, it.cost, pitchPool) ?? [];
+  const playIt = it.opt.kind === 'card' ? playAction(s, p, it.opt.uid, it.cost, pitchPool) : null;
   return {
-    action: it.opt.kind === 'card' ? { type: 'play', uid: it.opt.uid, pitch, mode: modeFor(p, it.opt.uid) } : { type: 'activate', uid: it.opt.uid, index: it.opt.index, pitch },
+    action: playIt ?? (it.opt.kind === 'card' ? { type: 'play', uid: it.opt.uid, pitch, mode: modeFor(p, it.opt.uid) } : { type: 'activate', uid: it.opt.uid, index: it.opt.index, pitch }),
     reason,
   };
 }
@@ -308,12 +379,47 @@ function planDefense(s: GameState, pid: PlayerId, difficulty: Difficulty): BotDe
     const f = p.hand.find((h) => h.uid === u) ?? p.equipment.find((e) => e.inst.uid === u)?.inst;
     return f ? cardOf(f).name : '?';
   });
+  // block-time optional costs ("When this defends, you may pay {r}. If you do, this gets +N{d}")
+  const { boosts, pitch } = planBoosts(s, p, best.uids, power);
   return {
-    action: { type: 'defend', uids: best.uids },
+    action: { type: 'defend', uids: best.uids, boosts, pitch },
     reason: best.uids.length
       ? `Block with ${names.join(', ')}: prevents damage efficiently for what those cards are worth.`
       : `Don’t block: taking ${power} is cheaper than spending cards.`,
   };
+}
+
+function planBoosts(s: GameState, p: PlayerState, uids: number[], power: number): { boosts: number[]; pitch: number[] } {
+  const boosts: number[] = [];
+  let payNeeded = 0;
+  let defense = uids.reduce((a, u) => a + (defendOptions(s, p.id).find((o) => o.uid === u)?.defense ?? 0), 0);
+  for (const u of uids) {
+    const inst = p.hand.find((h) => h.uid === u) ?? p.equipment.find((e) => e.inst.uid === u)?.inst;
+    const oc = inst && getScript(cardOf(inst)).optional;
+    if (!oc || oc.timing !== 'defend') continue;
+    const bonus = oc.effects.reduce((a, e) => a + (e.kind === 'thisDefense' ? e.amount : 0), 0);
+    const gain = Math.min(bonus, Math.max(0, power - defense)) + effectValue(oc.effects.filter((e) => e.kind !== 'thisDefense')) * 0.5;
+    if (gain < 1) continue;
+    if (oc.cost.kind === 'pay') { payNeeded += oc.cost.amount; boosts.push(u); defense += bonus; }
+    else if (optionalPayable(p, oc, u)) { boosts.push(u); defense += bonus; }
+  }
+  if (!payNeeded) return { boosts, pitch: [] };
+  // pay with floating resources, or pitch spare (non-blocking) cards if cheap enough
+  const spare = p.hand.filter((h) => !uids.includes(h.uid)).sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)));
+  const pitch: number[] = [];
+  let have = p.resources;
+  for (const h of spare) {
+    if (have >= payNeeded) break;
+    if (cardPlayValue(cardOf(h)) > 2.5) break;
+    pitch.push(h.uid);
+    have += pitchOf(cardOf(h));
+  }
+  if (have < payNeeded) {
+    // can't afford the paid ones: keep only boosts that don't cost resources
+    const instOf = (u: number) => p.hand.find((h) => h.uid === u) ?? p.equipment.find((e) => e.inst.uid === u)?.inst;
+    return { boosts: boosts.filter((u) => getScript(cardOf(instOf(u)!)).optional?.cost.kind !== 'pay'), pitch: [] };
+  }
+  return { boosts, pitch };
 }
 
 // ---------------------------------------------------------------- reactions
@@ -354,7 +460,7 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
   const exclude = [best.opt.uid];
   const pitch = choosePitch(p, best.opt.cost, p.hand.filter((h) => !exclude.includes(h.uid)).sort((a, b) => keepValue(cardOf(a), 0, 20) - keepValue(cardOf(b), 0, 20)).map((h) => h.uid));
   if (!pitch) return pass;
-  return { action: { type: 'play', uid: best.opt.uid, pitch, mode: modeFor(p, best.opt.uid) }, reason: `Play ${best.opt.label}: it changes the damage on this chain link.` };
+  return { action: playAction(s, p, best.opt.uid, best.opt.cost, p.hand.filter((h) => h.uid !== best!.opt.uid).map((h) => h.uid)) ?? { type: 'play', uid: best.opt.uid, pitch, mode: modeFor(p, best.opt.uid) }, reason: `Play ${best.opt.label}: it changes the damage on this chain link.` };
 }
 
 // ---------------------------------------------------------------- arsenal

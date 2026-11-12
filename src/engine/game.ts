@@ -4,9 +4,9 @@ import { card, findCard, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
 import { getHeroAbility } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
-import type { AttackFilter, Effect, Mode } from './cardScript';
+import type { AttackFilter, Condition, Effect, Mode, OptionalCost } from './cardScript';
 import type {
-  Action, CardInst, ChainLink, Defender, Difficulty, GameState, PlayerId, PlayerState, TurnEffect,
+  Action, CardInst, ChainLink, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState, TurnEffect,
 } from './types';
 
 export interface DeckList {
@@ -79,6 +79,7 @@ function heroApi(s: GameState): HeroApi {
     mk: (cardId, owner) => mk(s, cardId, owner.id),
     shuffle: (arr) => shuffle(s, arr),
     intimidate: (t) => {
+      s.players[other(t.id)].turn.intimidated = true;
       if (!t.hand.length) return;
       const d = t.hand.splice(Math.floor(rand(s) * t.hand.length), 1)[0];
       t.intimidated.push(d);
@@ -181,7 +182,7 @@ export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() 
       id, name: ps.name, isBot: ps.isBot, difficulty: ps.difficulty ?? 'normal',
       hero: mk(s, hero.id, id), life: hero.health ?? 20, intellect: hero.intellect ?? 4,
       deck: shuffle(s, ps.deck.cardIds.map((cid) => mk(s, cid, id))),
-      hand: [], arsenal: [], pitch: [], graveyard: [], banished: [], intimidated: [],
+      hand: [], arsenal: [], pitch: [], graveyard: [], banished: [], intimidated: [], soul: [],
       weapons: [], equipment: [], permanents: [], resources: 0, actionPoints: 0, effects: [], marked: false,
       turn: newTurnInfo(),
     };
@@ -274,8 +275,162 @@ function removePermanent(s: GameState, p: PlayerState, uid: number) {
   const i = p.permanents.findIndex((pm) => pm.inst.uid === uid);
   if (i < 0) return;
   const [pm] = p.permanents.splice(i, 1);
-  if (!has(cardOf(pm.inst), 'Token')) p.graveyard.push(pm.inst);
-  log(s, p.id, `${cardOf(pm.inst).name} leaves the arena.`);
+  const c = cardOf(pm.inst);
+  if (!has(c, 'Token')) p.graveyard.push(pm.inst);
+  if (has(c, 'Item')) p.turn.itemDestroyed = true;
+  log(s, p.id, `${c.name} leaves the arena.`);
+  const onDestroy = getScript(c).onDestroy;
+  if (onDestroy.length) resolveEffects(s, p, onDestroy, pm.inst);
+}
+
+/** Track a discard for "if you've discarded a card with N or more power" and hero abilities. */
+function noteDiscard(s: GameState, p: PlayerState, inst: CardInst) {
+  const c = cardOf(inst);
+  p.turn.discardedPower = Math.max(p.turn.discardedPower ?? 0, powerOf(c));
+  ability(p)?.onDiscard?.(heroCtx(s, p), c);
+}
+
+/** Evaluate a printed condition ("If you have less life than an opposing hero, ..."). */
+export function evalCondition(s: GameState, p: PlayerState, cond: Condition, link?: ChainLink): boolean {
+  const opp = s.players[other(p.id)];
+  const chainBy = s.chain.filter((l) => l.attacker === p.id);
+  switch (cond.kind) {
+    case 'auraThisTurn': return !!p.turn.auraPlayed;
+    case 'lessLife': return p.life < opp.life;
+    case 'draconicLinks': return chainBy.filter((l) => cardOf(l.inst).types.includes('Draconic')).length >= cond.n;
+    case 'arcaneThisTurn': return !!p.turn.arcaneDealt;
+    case 'powerAboveBase': return !!link && link.powerMod > 0;
+    case 'instantThisLink': return !!link && (link.instants ?? 0) > 0;
+    case 'defendedByFewer': return !!link && link.defenders.filter((d) => d.kind !== 'equipment').length < cond.n;
+    case 'powerAtLeast': return !!link && linkPower(link) >= cond.n;
+    case 'reactionsThisLink': return !!link && (link.reactionCount ?? 0) >= cond.n;
+    case 'discardedPower': return (p.turn.discardedPower ?? 0) >= cond.n;
+    case 'hitWithDagger': return chainBy.some((l) => l.hit && cardOf(l.inst).types.includes('Dagger'));
+    case 'defendedByAction': return !!link && link.defenders.some((d) => has(cardOf(d.inst), 'Action'));
+    case 'earthBanished': return p.banished.filter((b) => cardOf(b).types.includes('Earth')).length >= cond.n;
+    case 'drew': return p.turn.drew;
+    case 'itemDestroyed': return !!p.turn.itemDestroyed;
+    case 'pitchColor': return p.pitch.some((x) => pitchOf(cardOf(x)) === cond.pitch);
+    case 'pitchPower': return p.pitch.some((x) => powerOf(cardOf(x)) >= cond.n);
+    case 'lastDraconic': { const prev = s.chain[s.chain.length - 2]; return !!prev && cardOf(prev.inst).types.includes('Draconic'); }
+    case 'controls': return p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === cond.name.toLowerCase());
+    case 'aurasAtLeast': return p.permanents.filter((pm) => has(cardOf(pm.inst), 'Aura')).length >= cond.n;
+    case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
+    case 'attackingMarked': return opp.marked;
+    case 'weaponAttacked': return !!p.turn.weaponAttacked;
+    case 'intimidated': return !!p.turn.intimidated;
+    case 'attackedTimes': return (p.turn.attackedTimes ?? 0) >= cond.n;
+  }
+}
+
+/** Resolve a card's "If <condition>, <effect>" sentences of the given kind. */
+function resolveConditionals(s: GameState, p: PlayerState, c: Card, inst: CardInst, when: 'if' | 'ifLink', link?: ChainLink) {
+  for (const cnd of getScript(c).conditional) {
+    if (cnd.when !== when || !cnd.cond) continue;
+    if (!evalCondition(s, p, cnd.cond, link)) continue;
+    log(s, p.id, `${c.name}: condition met.`);
+    resolveEffects(s, p, cnd.effects, inst);
+  }
+}
+
+/** Is a card's optional cost payable right now (ignoring resources)? */
+export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: number): boolean {
+  const others = p.hand.filter((h) => h.uid !== playingUid);
+  switch (oc.cost.kind) {
+    case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+    case 'pay': return true;
+    case 'banishGrave': return p.graveyard.length >= oc.cost.n;
+    case 'destroyTop': return p.deck.length > 0;
+    case 'handToBottom': case 'banishHand': return others.length > 0;
+    case 'discardOrTop': return others.length > 0 || p.deck.length > 0;
+    case 'destroyOwn': return p.permanents.some((pm) => ownMatches(cardOf(pm.inst), oc.cost));
+  }
+}
+
+function ownMatches(c: Card, cost: OptionalCost['cost']): boolean {
+  if (cost.kind !== 'destroyOwn') return false;
+  if (cost.name) return c.name.toLowerCase() === cost.name.toLowerCase();
+  return !!cost.type && c.types.includes(cost.type);
+}
+
+/** Pay an optional cost. Returns the card used (for "if a card with N+ power is discarded this way"). */
+function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: OptionalChoice, playingUid: number): Card | null {
+  const pick = (filter: (c: Card) => boolean) => {
+    const inst = choice.uid !== undefined ? p.hand.find((h) => h.uid === choice.uid && h.uid !== playingUid) : undefined;
+    if (!inst || !filter(cardOf(inst))) throw new Error('Choose a card from your hand to pay for that.');
+    return removeFrom(p.hand, inst.uid)!;
+  };
+  const cost = oc.cost;
+  switch (cost.kind) {
+    case 'discard': {
+      const inst = pick((c) => !cost.pitch || pitchOf(c) === cost.pitch);
+      p.graveyard.push(inst);
+      noteDiscard(s, p, inst);
+      log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
+      return cardOf(inst);
+    }
+    case 'discardOrTop': {
+      if (choice.top) {
+        const t = p.deck.shift();
+        if (!t) throw new Error('Your deck is empty.');
+        p.graveyard.push(t);
+        log(s, p.id, `${p.name} destroys ${cardOf(t).name} from the top of the deck.`);
+        return cardOf(t);
+      }
+      const inst = pick(() => true);
+      p.graveyard.push(inst);
+      noteDiscard(s, p, inst);
+      log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
+      return cardOf(inst);
+    }
+    case 'handToBottom': {
+      const inst = pick(() => true);
+      p.deck.push(inst);
+      log(s, p.id, `${p.name} puts a card from hand on the bottom of the deck.`);
+      return cardOf(inst);
+    }
+    case 'banishHand': {
+      const inst = pick(() => true);
+      p.banished.push(inst);
+      log(s, p.id, `${p.name} banishes ${cardOf(inst).name} from hand.`);
+      return cardOf(inst);
+    }
+    case 'banishGrave': {
+      if (p.graveyard.length < cost.n) throw new Error('Not enough cards in your graveyard.');
+      let best: Card | null = null;
+      for (let i = 0; i < cost.n; i++) {
+        const g = p.graveyard.splice(Math.floor(rand(s) * p.graveyard.length), 1)[0];
+        p.banished.push(g);
+        if (!best || powerOf(cardOf(g)) > powerOf(best)) best = cardOf(g);
+      }
+      log(s, p.id, `${p.name} banishes ${cost.n} card${cost.n > 1 ? 's' : ''} from the graveyard.`);
+      return best;
+    }
+    case 'destroyTop': {
+      const t = p.deck.shift();
+      if (!t) throw new Error('Your deck is empty.');
+      p.graveyard.push(t);
+      log(s, p.id, `${p.name} destroys ${cardOf(t).name} from the top of the deck.`);
+      return cardOf(t);
+    }
+    case 'destroyOwn': {
+      const pm = p.permanents.find((x) => ownMatches(cardOf(x.inst), cost));
+      if (!pm) throw new Error('You have nothing to destroy for that.');
+      removePermanent(s, p, pm.inst.uid);
+      return cardOf(pm.inst);
+    }
+    case 'pay':
+      return null; // paid together with the card's cost
+  }
+}
+
+/** Apply an accepted optional cost's payoff (respecting "if a card with N+ power ... this way"). */
+function optionalPayoff(s: GameState, p: PlayerState, oc: OptionalCost, used: Card | null, inst: CardInst) {
+  if (oc.minPower !== undefined && (!used || powerOf(used) < oc.minPower)) {
+    log(s, p.id, `${cardOf(inst).name}: the paid card didn't have ${oc.minPower}+ power.`);
+    return;
+  }
+  resolveEffects(s, p, oc.effects, inst);
 }
 
 function createToken(s: GameState, p: PlayerState, name: string, amount: number) {
@@ -288,6 +443,7 @@ function createToken(s: GameState, p: PlayerState, name: string, amount: number)
     const inst = mk(s, t.id, p.id);
     p.permanents.push({ inst, ward: getScript(t).ward });
   }
+  if (has(t, 'Aura')) p.turn.auraPlayed = true;
   log(s, p.id, `${p.name} creates ${amount > 1 ? amount + ' ' : 'a '}${t.name} token${amount > 1 ? 's' : ''}.`);
 }
 
@@ -308,7 +464,10 @@ function frostbite(p: PlayerState) {
 export function effectiveCost(s: GameState, p: PlayerState, c: Card): number {
   void s;
   const sc = getScript(c);
-  const less = sc.costLessPer ? p.permanents.filter((pm) => cardOf(pm.inst).name === sc.costLessPer).length : 0;
+  let less = 0;
+  if (sc.costLessPer === 'draconicLink') less = s.chain.filter((l) => l.attacker === p.id && cardOf(l.inst).types.includes('Draconic')).length;
+  else if (sc.costLessPer) less = p.permanents.filter((pm) => cardOf(pm.inst).name === sc.costLessPer).length;
+  if (sc.costLessIf && p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === sc.costLessIf!.toLowerCase())) less += 1;
   return Math.max(0, costOf(c) - less) + frostbite(p);
 }
 
@@ -352,6 +511,7 @@ function timingOk(s: GameState, pid: PlayerId, c: Card): boolean {
 }
 
 export const HERO_INDEX = 1000;
+export const HAND_INDEX = 2000;
 
 export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const p = s.players[pid];
@@ -399,6 +559,14 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     if (availableResources(p) < cost) return;
     out.push({ uid: p.hero.uid, kind: 'activation', index: HERO_INDEX + i, cost, label: `${cardOf(p.hero).name}: ${a.label}` });
   });
+  // "Instant - Discard this: <effect>" from hand
+  for (const inst of p.hand) {
+    const ha = getScript(cardOf(inst)).handActivation;
+    if (!ha) continue;
+    const cost = ha.cost + frostbite(p);
+    if (availableResources(p, [inst.uid]) < cost) continue;
+    out.push({ uid: inst.uid, kind: 'activation', index: HAND_INDEX, cost, label: `Discard ${cardOf(inst).name}: ${ha.text.split(':').slice(1).join(':').trim()}` });
+  }
   return out;
 }
 
@@ -421,6 +589,7 @@ export function defendOptions(s: GameState, pid: PlayerId): DefendOption[] {
     }
   }
   for (const e of p.equipment) {
+    if (l?.noEquipDefense) break;
     if (e.destroyed || defenseOf(cardOf(e.inst)) === null) continue;
     out.push({ uid: e.inst.uid, kind: 'equipment', defense: defenseFor(p, cardOf(e.inst), equipDefense(e)) });
   }
@@ -448,10 +617,10 @@ export function applyAction(prev: GameState, action: Action): GameState {
   const s: GameState = structuredClone(prev);
   if (s.phase === 'gameOver' && action.type !== 'manual') return s;
   switch (action.type) {
-    case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0); break;
+    case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0, action.optional); break;
     case 'activate': doActivate(s, action.uid, action.index, action.pitch); break;
     case 'pass': doPass(s); break;
-    case 'defend': doDefend(s, action.uids); break;
+    case 'defend': doDefend(s, action.uids, action.boosts ?? [], action.pitch ?? []); break;
     case 'arsenal': doArsenal(s, action.uid); break;
     case 'concede': {
       const loser = s.priority;
@@ -483,23 +652,28 @@ function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
   if (fb) removePermanent(s, p, fb.inst.uid);
 }
 
-function doPlay(s: GameState, uid: number, pitch: number[], mode: number) {
+function doPlay(s: GameState, uid: number, pitch: number[], mode: number, optional?: OptionalChoice) {
   const pid = s.priority;
   const p = s.players[pid];
   const opt = playOptions(s, pid).find((o) => o.uid === uid && o.kind === 'card');
   if (!opt) throw new Error('That card can’t be played now');
   const fromArsenal = p.arsenal.some((a) => a.uid === uid);
-  const inst = removeFrom(fromArsenal ? p.arsenal : p.hand, uid)!;
-  const c = cardOf(inst);
+  const c = cardOf(fromArsenal ? p.arsenal.find((a) => a.uid === uid)! : p.hand.find((h) => h.uid === uid)!);
   const sc = getScript(c);
-  pay(s, p, opt.cost, pitch);
+  // optional cost ("you may ... If you do, ..."): validate before paying anything
+  const oc = optional?.accept && sc.optional && sc.optional.timing !== 'defend' ? sc.optional : undefined;
+  if (oc && !optionalPayable(p, oc, uid)) throw new Error('You can’t pay that optional cost.');
+  if (oc && optional?.uid !== undefined && pitch.includes(optional.uid)) throw new Error('That card is being pitched.');
+  const extraCost = oc?.cost.kind === 'pay' ? oc.cost.amount : 0;
+  const inst = removeFrom(fromArsenal ? p.arsenal : p.hand, uid)!;
+  pay(s, p, opt.cost + extraCost, pitch);
   // additional costs
   for (let i = 0; i < (sc.additionalCost.discardRandom ?? 0); i++) {
     const d = p.hand.splice(Math.floor(rand(s) * p.hand.length), 1)[0];
     if (d) {
       p.graveyard.push(d);
       log(s, pid, `${p.name} discards ${cardOf(d).name} at random.`);
-      ability(p)?.onDiscard?.(heroCtx(s, p), cardOf(d));
+      noteDiscard(s, p, d);
     }
   }
   for (let i = 0; i < (sc.additionalCost.banishGraveyard ?? 0); i++) {
@@ -510,33 +684,40 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number) {
     const d = p.hand.splice(Math.floor(rand(s) * p.hand.length), 1)[0];
     if (d) { p.banished.push(d); log(s, pid, `${p.name} banishes ${cardOf(d).name} at random.`); }
   }
+  const optUsed = oc ? payOptional(s, p, oc, optional!, uid) : null;
   const isAction = has(c, 'Action') && !has(c, 'Instant');
   if (s.phase === 'action' && isAction) p.actionPoints -= 1;
   log(s, pid, `${p.name} plays ${c.name}${fromArsenal ? ' from arsenal' : ''}.`);
   p.turn.played.push(c.id);
+  if (has(c, 'Aura')) p.turn.auraPlayed = true;
+  const link = currentLink(s);
+  if (link && link.attacker === pid) {
+    if (has(c, 'Instant')) link.instants = (link.instants ?? 0) + 1;
+    if (has(c, 'Attack Reaction')) link.reactionCount = (link.reactionCount ?? 0) + 1;
+  }
   ability(p)?.onPlayCard?.(heroCtx(s, p), c);
 
   const chosen = sc.modes[mode];
   if (chosen) log(s, pid, `Mode: ${chosen.label}.`);
   if (has(c, 'Attack') && has(c, 'Action')) {
-    startAttack(s, p, inst, false, fromArsenal, chosen);
+    startAttack(s, p, inst, false, fromArsenal, chosen, oc ? { oc, used: optUsed } : undefined);
     return;
   }
   if (chosen) resolveEffects(s, p, chosen.onPlay, inst);
   if (has(c, 'Attack Reaction')) {
     resolveEffects(s, p, sc.onPlay, inst);
+    resolveConditionals(s, p, c, inst, 'if');
+    if (oc) optionalPayoff(s, p, oc, optUsed, inst);
     p.graveyard.push(inst);
     afterReactionPlay(s);
     return;
   }
   if (has(c, 'Defense Reaction')) {
     const l = currentLink(s)!;
-    const def: Defender = { kind: 'reaction', inst, defense: defenseFor(p, c, defenseOf(c) ?? 0) };
-    l.defenders.push(def);
-    for (const e of sc.onPlay) {
-      if (e.kind === 'thisDefense') def.defense += e.amount;
-      else resolveEffects(s, p, [e], inst);
-    }
+    l.defenders.push({ kind: 'reaction', inst, defense: defenseFor(p, c, defenseOf(c) ?? 0) });
+    resolveEffects(s, p, sc.onPlay, inst); // "this gets +N{d}" adds to this defender
+    resolveConditionals(s, p, c, inst, 'if');
+    if (oc) optionalPayoff(s, p, oc, optUsed, inst);
     afterReactionPlay(s);
     return;
   }
@@ -548,6 +729,8 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number) {
     if (eq) { removePermanent(s, p, eq.inst.uid); goAgain = true; }
   }
   resolveEffects(s, p, sc.onPlay, inst);
+  resolveConditionals(s, p, c, inst, 'if');
+  if (oc) optionalPayoff(s, p, oc, optUsed, inst);
   if (fromArsenal) for (const cnd of sc.conditional) if (cnd.when === 'fromArsenal') resolveEffects(s, p, cnd.effects, inst);
   if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
     p.permanents.push({ inst, ward: sc.ward, steam: sc.steam || undefined });
@@ -563,6 +746,18 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
   const p = s.players[pid];
   const opt = playOptions(s, pid).find((o) => o.uid === uid && o.kind === 'activation' && o.index === index);
   if (!opt) throw new Error('That ability can’t be activated now');
+  if (index === HAND_INDEX) {
+    const inst = removeFrom(p.hand, uid)!;
+    const c = cardOf(inst);
+    const ha = getScript(c).handActivation!;
+    pay(s, p, opt.cost, pitch);
+    p.graveyard.push(inst);
+    noteDiscard(s, p, inst);
+    log(s, pid, `${p.name} discards ${c.name}: ${ha.text.split(':').slice(1).join(':').trim()}`);
+    resolveEffects(s, p, ha.effects, inst);
+    if (s.phase === 'reaction') afterReactionPlay(s);
+    return;
+  }
   if (index >= HERO_INDEX) {
     const a = ability(p)!.activations![index - HERO_INDEX];
     pay(s, p, opt.cost, pitch);
@@ -601,17 +796,21 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
   if (s.phase === 'reaction') afterReactionPlay(s);
 }
 
-function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: boolean, fromArsenal: boolean, mode?: Mode) {
+function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: boolean, fromArsenal: boolean, mode?: Mode, optional?: { oc: OptionalCost; used: Card | null }) {
   const c = cardOf(inst);
   const sc = getScript(c);
   const link: ChainLink = {
     attacker: p.id, inst, fromWeapon, fromArsenal, basePower: basePowerFor(p, c), powerMod: 0,
     goAgain: sc.goAgain, dominate: sc.dominate, overpower: sc.overpower, piercing: sc.piercing,
     defenders: [], reactions: [], damage: null, hit: false, extraOnHit: mode?.onHit ?? [],
+    noEquipDefense: sc.noEquipDefense || undefined,
   };
   s.chain.push(link);
   s.chainOpen = true;
   p.turn.attacks += 1;
+  if (fromWeapon) p.turn.weaponAttacked = true;
+  const target = s.players[other(p.id)];
+  target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;
   // pending "next attack" effects
   p.effects = p.effects.filter((e) => {
     if (e.kind === 'nextAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return false; }
@@ -622,7 +821,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
     const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (name === 'Runechant') { destroy(); dealDamage(s, other(p.id), 1, true, 'Runechant'); }
+    if (name === 'Runechant') { destroy(); if (dealDamage(s, other(p.id), 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true; }
     else if (name === 'Quicken') { destroy(); link.goAgain = true; }
     else if (name === 'Courage') { destroy(); link.powerMod += 1; }
     else if (name === 'Embodiment of Lightning' && !fromWeapon) { destroy(); link.goAgain = true; }
@@ -639,6 +838,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
       }
     }
     if (fromArsenal) for (const cnd of sc.conditional) if (cnd.when === 'fromArsenal') resolveEffects(s, p, cnd.effects, inst);
+    resolveConditionals(s, p, c, inst, 'if');
+    if (optional && optional.oc.timing === 'play') optionalPayoff(s, p, optional.oc, optional.used, inst);
     if (sc.boost && p.deck.length > 0) {
       const top = p.deck.shift()!;
       p.turn.boosted = true;
@@ -651,6 +852,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   if (sc.intimidateOnAttack) resolveEffects(s, p, [{ kind: 'intimidate' }], inst);
   resolveEffects(s, p, sc.onAttack, inst);
   if (mode) resolveEffects(s, p, mode.onAttack, inst);
+  if (optional && optional.oc.timing === 'attack') optionalPayoff(s, p, optional.oc, optional.used, inst);
   ability(p)?.onAttack?.(heroCtx(s, p), link);
   if (s.phase === 'gameOver') return;
   log(s, p.id, `Attack: ${c.name} — ${linkPower(link)} power${link.goAgain ? ', go again' : ''}${link.dominate ? ', dominate' : ''}.`);
@@ -658,7 +860,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   s.priority = other(p.id);
 }
 
-function doDefend(s: GameState, uids: number[]) {
+function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: number[] = []) {
   const l = currentLink(s);
   if (s.phase !== 'defend' || !l) throw new Error('Not defending now');
   const err = checkDefense(s, uids);
@@ -678,6 +880,30 @@ function doDefend(s: GameState, uids: number[]) {
     if (!e) throw new Error('Invalid defending card');
     l.defenders.push({ kind: 'equipment', inst: e.inst, defense: defenseFor(d, cardOf(e.inst), equipDefense(e)) });
     names.push(cardOf(e.inst).name);
+  }
+  // Unity: "when this defends together with a card from hand, this gets +N{d}"
+  const fromHand = l.defenders.filter((x) => x.kind === 'hand').length;
+  for (const x of l.defenders) {
+    const u = getScript(cardOf(x.inst)).unity;
+    if (u && fromHand - (x.kind === 'hand' ? 1 : 0) > 0) { x.defense += u; log(s, d.id, `${cardOf(x.inst).name} (unity) gets +${u} defense.`); }
+  }
+  // "When this defends, you may <cost>. If you do, <effect>" for the blockers the player opted into
+  const boostDefs = l.defenders.filter((x) => boosts.includes(x.inst.uid));
+  const payTotal = boostDefs.reduce((a, x) => {
+    const oc = getScript(cardOf(x.inst)).optional;
+    return a + (oc?.timing === 'defend' && oc.cost.kind === 'pay' ? oc.cost.amount : 0);
+  }, 0);
+  if (payTotal > 0 || pitch.length) pay(s, d, payTotal, pitch);
+  for (const x of boostDefs) {
+    const oc = getScript(cardOf(x.inst)).optional;
+    if (!oc || oc.timing !== 'defend') throw new Error(`${cardOf(x.inst).name} has no defend option.`);
+    let used: Card | null = null;
+    if (oc.cost.kind !== 'pay') {
+      if (!optionalPayable(d, oc, x.inst.uid)) throw new Error(`You can’t pay for ${cardOf(x.inst).name}’s ability.`);
+      used = payOptional(s, d, oc, { accept: true }, x.inst.uid);
+    }
+    log(s, d.id, `${cardOf(x.inst).name}: ${oc.effectText}.`);
+    optionalPayoff(s, d, oc, used, x.inst);
   }
   if (getScript(cardOf(l.inst)).phantasm && l.defenders.some((x) => {
     const dc = cardOf(x.inst);
@@ -728,6 +954,8 @@ function resolveDamage(s: GameState) {
   const l = currentLink(s)!;
   const attacker = s.players[l.attacker];
   const defender = s.players[other(l.attacker)];
+  // "If this is defended by an action card / has N or more power / ... this chain link, ..."
+  if (!l.fromWeapon) resolveConditionals(s, attacker, cardOf(l.inst), l.inst, 'ifLink', l);
   const power = linkPower(l);
   const def = linkDefense(l);
   const raw = Math.max(0, power - def);
@@ -740,6 +968,8 @@ function resolveDamage(s: GameState) {
     const sc = getScript(cardOf(l.inst));
     resolveEffects(s, attacker, [...sc.onHit, ...l.extraOnHit], l.inst); // link is still "current" here
     if (dealt >= 4) for (const cnd of sc.conditional) if (cnd.when === 'crush') { log(s, l.attacker, 'Crush!'); resolveEffects(s, attacker, cnd.effects, l.inst); }
+    for (const cnd of sc.conditional) if (cnd.when === 'surge' && dealt > (cnd.threshold ?? 0)) { log(s, l.attacker, 'Surge!'); resolveEffects(s, attacker, cnd.effects, l.inst); }
+    if (sc.hitDestination && !l.fromWeapon) l.destination = sc.hitDestination;
     ability(attacker)?.onHit?.(heroCtx(s, attacker), l);
     if (defender.marked) { defender.marked = false; log(s, defender.id, `${defender.name} is no longer marked.`); }
   }
@@ -769,7 +999,11 @@ function resolveDamage(s: GameState) {
 
 function closeChain(s: GameState) {
   for (const l of s.chain) {
-    if (!l.fromWeapon) s.players[l.attacker].graveyard.push(l.inst);
+    if (l.fromWeapon) continue;
+    const owner = s.players[l.attacker];
+    if (l.destination === 'soul') { (owner.soul ??= []).push(l.inst); log(s, owner.id, `${cardOf(l.inst).name} is put into ${owner.name}'s soul.`); }
+    else if (l.destination === 'deckBottom') owner.deck.push(l.inst);
+    else owner.graveyard.push(l.inst);
   }
   if (s.chain.length) log(s, null, 'The combat chain closes.');
   s.chain = [];
@@ -892,7 +1126,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'arcane': {
         const amp = p.effects.filter((x) => x.kind === 'ampArcane').reduce((a, x) => a + (x.kind === 'ampArcane' ? x.amount : 0), 0);
         if (amp) { p.effects = p.effects.filter((x) => x.kind !== 'ampArcane'); log(s, p.id, `Arcane damage amplified by ${amp}.`); }
-        dealDamage(s, opp.id, e.amount + amp, true, srcName);
+        if (dealDamage(s, opp.id, e.amount + amp, true, srcName) > 0) p.turn.arcaneDealt = true;
         break;
       }
       case 'ampArcane': p.effects.push({ kind: 'ampArcane', amount: e.amount, source: srcName }); log(s, p.id, `Next arcane damage effect deals +${e.amount}.`); break;
@@ -914,7 +1148,18 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'thisPower': if (l && l.inst.uid === src.uid) l.powerMod += e.amount; break;
       case 'thisGoAgain': if (l && l.inst.uid === src.uid) l.goAgain = true; break;
       case 'thisDominate': if (l && l.inst.uid === src.uid) l.dominate = true; break;
-      case 'thisDefense': break;
+      case 'thisDefense': {
+        const def = l?.defenders.find((d) => d.inst.uid === src.uid);
+        if (def) { def.defense += e.amount; log(s, p.id, `${srcName} gets +${e.amount} defense.`); }
+        break;
+      }
+      case 'thisOverpower': if (l && l.inst.uid === src.uid) l.overpower = true; break;
+      case 'tutor': {
+        const i = p.deck.findIndex((d) => cardOf(d).name.toLowerCase() === e.name.toLowerCase());
+        if (i >= 0) { const [t] = p.deck.splice(i, 1); p.hand.push(t); shuffle(s, p.deck); log(s, p.id, `${p.name} searches their deck for ${cardOf(t).name}.`); }
+        else log(s, p.id, `${p.name} finds no ${e.name} in their deck.`);
+        break;
+      }
       case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
       case 'banishTopOpp':
@@ -929,6 +1174,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         }
         break;
       case 'intimidate':
+        p.turn.intimidated = true;
         if (opp.hand.length) {
           const d = opp.hand.splice(Math.floor(rand(s) * opp.hand.length), 1)[0];
           opp.intimidated.push(d);
