@@ -1235,3 +1235,5 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
   width: min(560px, 92vw); padding: .5rem .8rem; border-radius: 14px; background: #15110df2; border: 1px solid #a57c46; box-shadow: 0 10px 30px #000c; }
 .replay-bar input[type=range] { width: 100%; accent-color: var(--accent); }
 @media (orientation: landscape) and (max-height: 560px) { .replay-bar { bottom: auto; top: calc(4px + var(--sa-t)); width: min(460px, 60vw); padding: .3rem .6rem; } }
+.install-banner { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .8rem 0; border-color: var(--accent); }
+.install-banner > span { flex: 1; min-width: 220px; }

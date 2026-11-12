@@ -19,6 +19,7 @@ import { loadProfile } from './stats/profile';
 import { loadMatches } from './stats/matches';
 import { online, useOnline } from './online/client';
 import ReplayPage from './ui/pages/ReplayPage';
+import PrivacyPage from './ui/pages/PrivacyPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -117,6 +118,7 @@ export default function App() {
             {route === 'gauntlet' && <GauntletPage />}
             {route === 'limited' && <LimitedPage />}
             {route === 'replay' && <ReplayPage id={rest[0]} />}
+            {route === 'privacy' && <PrivacyPage />}
           </div>
         )}
       </main>

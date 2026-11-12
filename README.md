@@ -26,6 +26,16 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Hero abilities**: about 27 heroes are automated, including Dorinthea, Bravo, Benji, Arakni, Ira, Fai, Cindra/Fang, Rhinar, Kayo, Aurora, Oscilio, Terra, Vynnset, Kavdaen, Data Doll, Dash, Emperor, Lyath, Valda and Tuffnut. The card pop-out says what's automated for each hero.
 - **Hero-tuned decks**: bots and starter decks are built around each hero's archetype (Weapon Warrior, Guardian Crush, Ninja Combo, Brute Big Hits, Draconic Aggro, Stealth Assassin, Arcane Wizard, Runechant Runeblade, Mechanologist Boost) with signature cards.
 
+- **Progression:** XP for every game, levels with titles, three daily quests that change at midnight, 19 achievements, and unlockable card sleeves, playmats and avatar frames. Progress is calculated from your match history, so it syncs with your account.
+- **Lethal puzzles:** 11 "win this turn" positions, each checked by a brute-force solver to have a winning line that the bots miss. You can see the solution after a failed attempt.
+- **The Gauntlet:** eight bot heroes in a row, from Easy to Hard. One loss ends the run.
+- **Sealed & Draft:** open six packs from one of 15 sets, or draft three packs at a table of seven bots. Then pick a hero, build a deck of 30 or more cards (or auto-build one) and play it.
+- **Game review:** after a game, the Hard bot re-checks your decisions and lists where it would have played differently, and why.
+- **Replays:** watch any recent game again, with play, step, scrub and speed controls. Games against the AI are stored in the browser; online games are stored on the server.
+- **Online extras:** a ranked ladder (Elo, Bronze to Mythic) for quick matches, friends with online status, direct challenges, and emotes.
+- **Deck tools:** pitch balance, average resources per hand, and per-card odds of drawing a card in your opening hand or by turn 2 or 3. Deck links from Fabrary, FaB DB and Talishar are recognised, with steps to copy the list as text.
+- **Installable web app:** on Android or desktop Chrome or Edge, the Home page offers *Install*. On iPhone, use Safari → Share → *Add to Home Screen*. The installed app runs full screen and plays the bots offline.
+
 ## Running it online
 
 There are two ways to host it:
@@ -48,6 +58,7 @@ There are two ways to host it:
 The `android/` folder is a [Capacitor](https://capacitorjs.com) project that packages the web app as a native Android app. It bundles the full card database, so games against the bots work offline, and it connects to the hosted server (`.env.android` → `VITE_API_URL`) for accounts and online play.
 
 - **Download:** every push to `main` builds an APK and publishes it as a GitHub Release (`.github/workflows/android.yml`). The newest one is always at `releases/latest/download/fab-trainer.apk`. On the phone, open the file and allow installing from that source. New versions install over the old one.
+- **Google Play:** `docs/PLAY_STORE.md` explains how to publish. It covers the developer account, your private upload key as GitHub secrets, the signed bundle workflow (`play-store.yml`), and the listing text, graphics and questionnaires.
 - **Build it yourself:** you need JDK 21 and the Android SDK (`ANDROID_HOME`). Run `npm run android:build`; the APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 - **Signing:** builds use a fixed key that is committed on purpose (`android/app/fab-trainer-debug.keystore`), so updates install over each other. It's fine for sideloading; publishing to the Play Store would need your own private release key.
 - **Full screen, landscape:** the app runs sideways and edge to edge, including the strip beside the camera, with the status and navigation bars hidden. Swipe in from an edge to see them for a moment. Buttons and cards stay clear of the camera.

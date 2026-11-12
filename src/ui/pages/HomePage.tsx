@@ -1,3 +1,4 @@
+import InstallPrompt from '../components/InstallPrompt';
 import type { CardDb } from '../../data/cardDb';
 import { loadDecks } from '../../deck/deck';
 import { Embers } from '../components/Fx';
@@ -15,6 +16,7 @@ export default function HomePage({ db }: { db: CardDb }) {
           <a href="#play"><button className="gold">Play vs AI</button></a>
         </div>
       </div>
+      <InstallPrompt />
       <div className="tiles">
         <a className="panel tile" href="#learn"><h3>📖 Learn</h3><p className="muted">Short lessons on pitching, combat, defending and strategy, plus a keyword glossary.</p></a>
         <a className="panel tile" href="#play"><h3>⚔ Play</h3><p className="muted">Easy, normal and hard bots. Hints, undo and manual controls.</p></a>
@@ -25,7 +27,7 @@ export default function HomePage({ db }: { db: CardDb }) {
         <a className="panel tile" href="#limited"><h3>📦 Sealed &amp; Draft</h3><p className="muted">Open packs or draft against bots, build a deck and play it.</p></a>
       </div>
       <p className="muted small" style={{ marginTop: '2rem' }}>
-        Fan-made learning tool. Not affiliated with Legend Story Studios. Card data comes from the open-source the-fab-cube project; card images are hosted by LSS.
+        Fan-made learning tool. Not affiliated with Legend Story Studios. Card data comes from the open-source the-fab-cube project; card images are hosted by LSS. <a href="#privacy">Privacy</a>
       </p>
     </div>
   );
