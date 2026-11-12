@@ -161,6 +161,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const suppressClick = useRef(false);
   const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement } | null>(null);
   const [dragging, setDragging] = useState(false);
+  // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
+  const [handOpen, setHandOpen] = useState(false);
+  const compactTouch = () => !!window.matchMedia?.('(orientation: landscape) and (max-height: 560px) and (pointer: coarse)').matches;
   useEffect(() => {
     document.documentElement.classList.add('in-game');
     return () => document.documentElement.classList.remove('in-game');
@@ -169,6 +172,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setHandOpen(false); }, [state]);
   useZoneGlide(oppHandRef);
   const colRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -515,7 +520,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </div>
       </div>
 
-      <div className={`hand-fan ${dragging ? 'is-dragging' : ''}`} ref={handRef}>
+      {handOpen && !pending && <div className="hand-scrim" onClick={() => setHandOpen(false)} />}
+      <div className={`hand-fan ${dragging ? 'is-dragging' : ''} ${handOpen || pending ? 'open' : ''}`} ref={handRef}>
         {me.hand.map((inst, i) => {
           const off = i - (n - 1) / 2;
           return (
@@ -534,7 +540,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
                 <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst)} tilt={false}
-                  onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } clickHand(inst); }}
+                  onClick={() => {
+                    if (suppressClick.current) { suppressClick.current = false; return; }
+                    if (!handOpen && compactTouch()) { setHandOpen(true); return; }
+                    clickHand(inst);
+                  }}
                   onHover={setHover}
                   badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
               </div>

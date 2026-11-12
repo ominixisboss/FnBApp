@@ -648,3 +648,64 @@ table.history tr.me-row td { background: #d9a4411a; }
 .banner { position: relative; overflow: hidden; }
 @keyframes glint { from { background-position: 150% 0; } to { background-position: -100% 0; } }
 .no-anim .attack-arrow, .no-anim .impact, .no-anim .hurt-vignette, .no-anim .land-ring { display: none; }
+
+/* ===================================================== phones in landscape (short screens) */
+@media (orientation: landscape) and (max-height: 560px) {
+  .arena {
+    --hw: clamp(64px, 25vh, 104px);
+    --ohw: 26px;
+    --peek: 42px;
+    --rcol: clamp(150px, 21vw, 200px);
+    --boardH: calc(100vh - var(--peek) - 8px);
+  }
+  /* controls live in a slim right-hand column */
+  .arena-bar { left: auto; right: 0; top: 0; width: var(--rcol); height: auto; padding: 4px; gap: 3px; flex-wrap: wrap; justify-content: flex-end; background: none; }
+  .arena-bar .grow, .arena-title, .icon-btn span { display: none; }
+  .icon-btn { padding: .2em .5em; font-size: .78rem; }
+  .online-badge { font-size: .6rem; padding: .1em .5em; }
+  .opp-hand { top: -18px; left: calc((100vw - var(--rcol)) / 2); }
+  .arena-board { top: 4px; bottom: var(--peek); left: 4px; right: calc(var(--rcol) + 4px); padding: 0; }
+  .arena .mat { width: 100%; max-width: none; padding: 3px 6px; gap: 2px; border-radius: 10px;
+    transform: perspective(1200px) rotateX(6deg); transform-origin: 50% 100%; }
+  .arena .mat-side, .arena .mat-chain {
+    --gap: 3px;
+    --base: max(24px, min(calc((100cqi - 8 * var(--gap) - 16px) / 7.4), calc((var(--boardH) - 34px) / 7.45)));
+    --slot: var(--base);
+  }
+  .arena .mat-side { padding: 1px; }
+  .arena .mat-side.opp { --slot: calc(var(--base) * 0.6); }
+  .arena .mat-chain { --slot: calc(var(--base) * 0.72); min-height: calc(var(--slot) * 1.32); padding: 0 2px; }
+  .arena .chain-title, .arena .chain-start { display: none; }
+  .arena .chain-track { min-height: calc(var(--slot) * 1.25); gap: 4px; }
+  .arena .chain-track::before { left: 6px; }
+  .arena .chain-track::after { left: 0; }
+  .arena .chain-links { gap: 4px; padding: 2px; }
+  .arena .chain-links .link .small { font-size: .55rem; }
+  .arena .mat-name { font-size: .68rem; }
+  .arena .mat-info .res { gap: .25rem; }
+  .arena .mat-info .res span { font-size: .6rem; padding: 0 .3em; }
+  .arena .life-orb { font-size: max(11px, calc(var(--slot) * .3)) !important; min-width: max(20px, calc(var(--slot) * .55)); height: max(20px, calc(var(--slot) * .55)); }
+  .arena .tag { font-size: .55rem; }
+
+  /* hand: a strip along the bottom; tap it (touch) or hover (mouse) to raise it */
+  .hand-fan { left: calc((100vw - var(--rcol)) / 2); bottom: calc(var(--peek) - var(--hw) * 1.3956); transition: bottom .2s ease-out; }
+  .fan-card { margin-left: calc(var(--hw) * -0.3); }
+  .fan-card:hover { translate: 0 calc(var(--hw) * -1.05) !important; scale: 1.2; }
+  .hand-fan.open { bottom: 6px; }
+  .hand-fan.open .fan-card { margin-left: calc(var(--hw) * -0.12); }
+  .hand-fan.open .fan-card:hover { translate: 0 calc(var(--hw) * -0.15) !important; scale: 1.05; }
+  .hand-scrim { position: absolute; inset: 0; z-index: 7; background: #0008; animation: pageIn .15s ease-out; }
+
+  .dock { right: 4px; bottom: 4px; width: calc(var(--rcol) - 8px); gap: 4px; }
+  .phase-ladder { display: none; }
+  .arena .prompt { padding: 5px; gap: 4px; border-radius: 10px; }
+  .arena .prompt .msg { font-size: .62rem; line-height: 1.25; }
+  .arena .prompt button { font-size: .72rem; padding: .3em .4em; }
+  .arena .prompt button.primary { font-size: .82rem; padding: .55em .4em; }
+  .arena-hint { left: auto; right: 4px; top: 64px; bottom: auto; width: calc(var(--rcol) - 8px); font-size: .62rem; padding: .4rem; max-height: 34vh; overflow: auto; }
+  .dock-error { font-size: .62rem; }
+  .drawer { top: 4px; bottom: 4px; }
+  .banner { font-size: 1.3rem; padding: .4rem 2rem; }
+  .floater { font-size: 1.5rem; }
+  .gameover h1 { font-size: 2.6rem; }
+}
