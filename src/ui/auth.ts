@@ -12,6 +12,7 @@ export interface User { id: number; username: string; createdAt: number }
 interface AuthState {
   serverUrl: string;          // '' = same origin
   available: boolean | null;  // null = still checking
+  ephemeral: boolean;         // server keeps no data between restarts (free hosting)
   user: User | null;
   token: string | null;
   syncing: boolean;
@@ -26,6 +27,7 @@ const write = (k: string, v: string | null) => { try { if (v === null) localStor
 let state: AuthState = {
   serverUrl: read(K.server) ?? (import.meta.env.VITE_API_URL as string | undefined) ?? '',
   available: null,
+  ephemeral: false,
   user: (() => { try { return JSON.parse(read(K.user) ?? 'null'); } catch { return null; } })(),
   token: read(K.token),
   syncing: false,
@@ -59,8 +61,9 @@ export async function checkServer(): Promise<boolean> {
     const t = setTimeout(() => ctrl.abort(), 4000);
     const res = await fetch(`${apiBase()}/api/health`, { signal: ctrl.signal });
     clearTimeout(t);
-    const ok = res.ok && (await res.json()).ok === true;
-    set({ available: ok });
+    const body = res.ok ? await res.json() : null;
+    const ok = body?.ok === true;
+    set({ available: ok, ephemeral: !!body?.ephemeral });
     if (ok && state.token) void syncAll();
     return ok;
   } catch {

@@ -6,7 +6,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { makeDb, setDb } from '../src/data/cardDb';
-import { q } from './db';
+import { ephemeral, initStore, store } from './db';
 import type { UserRow } from './db';
 import { checkPassword, hashPassword, makeToken, userFromToken, validateCredentials } from './auth';
 import { onConnect, onDisconnect, onMessage, roomCount } from './rooms';
@@ -67,19 +67,24 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
   res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   try {
-    if (path === '/api/health') return json(res, 200, { ok: true, cards: cardJson.cards.length, ...roomCount() });
+    if (path === '/api/health') return json(res, 200, { ok: true, cards: cardJson.cards.length, ephemeral: ephemeral(), storage: store.kind, ...roomCount() });
 
     if ((path === '/api/register' || path === '/api/login') && req.method === 'POST') {
       if (rateLimited(req)) return json(res, 429, { error: 'Too many attempts, wait a minute.' });
       const { username, password } = (await readBody(req)) as { username?: string; password?: string };
       const bad = validateCredentials(username, password);
       if (bad) return json(res, 400, { error: bad });
-      const existing = q.userByName.get(username!) as UserRow | undefined;
+      const existing = await store.userByName(username!);
       if (path === '/api/register') {
         if (existing) return json(res, 409, { error: 'That username is taken.' });
         const { salt, hash } = hashPassword(password!);
-        const r = q.insertUser.run(username!, hash, salt, Date.now());
-        const user = q.userById.get(Number(r.lastInsertRowid)) as unknown as UserRow;
+        let id: number;
+        try {
+          id = await store.insertUser(username!, hash, salt, Date.now());
+        } catch {
+          return json(res, 409, { error: 'That username is taken.' }); // lost a race with another sign-up
+        }
+        const user = (await store.userById(id))!;
         return json(res, 200, { token: makeToken(user.id), user: publicUser(user) });
       }
       if (!existing || !checkPassword(password!, existing)) return json(res, 401, { error: 'Wrong username or password.' });
@@ -87,7 +92,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
 
     if (path === '/api/leaderboard' && req.method === 'GET') {
-      const rows = q.leaderboard.all() as { username: string; profile: string | null; wins: number; games: number }[];
+      const rows = await store.leaderboard();
       return json(res, 200, rows.map((r) => {
         let p: { displayName?: string; avatarHeroId?: string } = {};
         try { p = r.profile ? JSON.parse(r.profile) : {}; } catch { /* ignore */ }
@@ -96,12 +101,12 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
 
     // everything below needs a signed-in user
-    const user = userFromToken(bearer(req));
+    const user = await userFromToken(bearer(req));
     if (!user) return json(res, 401, { error: 'Please sign in again.' });
 
     if (path === '/api/me' && req.method === 'GET') {
-      const row = q.getProfile.get(user.id) as { json: string } | undefined;
-      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row.json) : null });
+      const row = await store.getProfile(user.id);
+      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row) : null });
     }
     if (path === '/api/profile' && req.method === 'PUT') {
       const p = (await readBody(req)) as Record<string, unknown>;
@@ -110,31 +115,31 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         avatarHeroId: typeof p.avatarHeroId === 'string' ? p.avatarHeroId.slice(0, 40) : null,
         createdAt: Number(p.createdAt) || user.created_at,
       };
-      q.putProfile.run(user.id, JSON.stringify(clean), Date.now());
+      await store.putProfile(user.id, JSON.stringify(clean));
       return json(res, 200, { profile: clean });
     }
     if (path === '/api/decks' && req.method === 'GET') {
-      return json(res, 200, { decks: (q.getDecks.all(user.id) as { json: string }[]).map((r) => JSON.parse(r.json)) });
+      return json(res, 200, { decks: (await store.getDecks(user.id)).map((r) => JSON.parse(r)) });
     }
     if (path === '/api/decks' && req.method === 'PUT') {
       const { decks = [], deleted = [] } = (await readBody(req)) as { decks?: { id: string; updatedAt: number }[]; deleted?: string[] };
       if (!Array.isArray(decks) || decks.length > 500) return json(res, 400, { error: 'Invalid decks' });
       for (const d of decks) {
         if (!d || typeof d.id !== 'string' || d.id.length > 40) continue;
-        const cur = q.getDeck.get(user.id, d.id) as { updated_at: number } | undefined;
-        if (!cur || cur.updated_at <= (Number(d.updatedAt) || 0)) q.putDeck.run(user.id, d.id, JSON.stringify(d), Number(d.updatedAt) || Date.now());
+        const cur = await store.getDeckUpdatedAt(user.id, d.id);
+        if (cur === undefined || cur <= (Number(d.updatedAt) || 0)) await store.putDeck(user.id, d.id, JSON.stringify(d), Number(d.updatedAt) || Date.now());
       }
-      for (const id of Array.isArray(deleted) ? deleted : []) if (typeof id === 'string') q.delDeck.run(user.id, id);
-      return json(res, 200, { decks: (q.getDecks.all(user.id) as { json: string }[]).map((r) => JSON.parse(r.json)) });
+      for (const id of Array.isArray(deleted) ? deleted : []) if (typeof id === 'string') await store.deleteDeck(user.id, id);
+      return json(res, 200, { decks: (await store.getDecks(user.id)).map((r) => JSON.parse(r)) });
     }
     if (path === '/api/matches' && req.method === 'GET') {
-      return json(res, 200, { matches: (q.getMatches.all(user.id) as { json: string }[]).map((r) => JSON.parse(r.json)) });
+      return json(res, 200, { matches: (await store.getMatches(user.id)).map((r) => JSON.parse(r)) });
     }
     if (path === '/api/matches' && req.method === 'POST') {
       const { matches = [] } = (await readBody(req)) as { matches?: { id: string; date: number; won: boolean; mode?: string }[] };
       for (const m of matches.slice(0, 1000)) {
         if (!m || typeof m.id !== 'string' || m.mode === 'online') continue; // online results are recorded by the server
-        q.putMatch.run(user.id, m.id.slice(0, 60), JSON.stringify(m), Number(m.date) || Date.now(), 'ai', m.won ? 1 : 0);
+        await store.putMatch(user.id, m.id.slice(0, 60), JSON.stringify(m), Number(m.date) || Date.now(), 'ai', !!m.won);
       }
       return json(res, 200, { ok: true });
     }
@@ -178,7 +183,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://x');
   if (url.pathname !== '/ws') { socket.destroy(); return; }
-  const user = userFromToken(url.searchParams.get('token'));
+  void userFromToken(url.searchParams.get('token')).then((user) => {
   if (!user) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, (ws) => {
     const u = { id: user.id, username: user.username };
@@ -186,13 +191,15 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('message', (data) => {
       let msg: ClientMsg;
       try { msg = JSON.parse(String(data)); } catch { return; }
-      onMessage(ws, u, msg);
+      void onMessage(ws, u, msg);
     });
     ws.on('close', () => onDisconnect(ws, u.id));
+  });
   });
 });
 
 // keep connections alive through proxies
 setInterval(() => wss.clients.forEach((c) => c.ping()), 25_000).unref();
 
-server.listen(PORT, () => console.log(`FaB Trainer server on http://localhost:${PORT}`));
+await initStore();
+server.listen(PORT, () => console.log(`FaB Trainer server on http://localhost:${PORT} (storage: ${store.kind}${ephemeral() ? ', ephemeral' : ''})`));
