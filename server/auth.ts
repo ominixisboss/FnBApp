@@ -1,6 +1,6 @@
 // Password hashing (scrypt) and signed session tokens (HMAC-SHA256), no external libraries.
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { q, sessionSecret } from './db';
+import { sessionSecret, store } from './db';
 import type { UserRow } from './db';
 
 const TOKEN_DAYS = 30;
@@ -22,7 +22,7 @@ export function makeToken(userId: number): string {
   return `${data}.${sign(data)}`;
 }
 
-export function userFromToken(token: string | null | undefined): UserRow | null {
+export async function userFromToken(token: string | null | undefined): Promise<UserRow | null> {
   if (!token) return null;
   const [data, sig] = token.split('.');
   if (!data || !sig) return null;
@@ -31,7 +31,7 @@ export function userFromToken(token: string | null | undefined): UserRow | null 
   try {
     const { u, e } = JSON.parse(Buffer.from(data, 'base64url').toString());
     if (typeof u !== 'number' || Date.now() > e) return null;
-    return (q.userById.get(u) as unknown as UserRow | undefined) ?? null;
+    return (await store.userById(u)) ?? null;
   } catch {
     return null;
   }

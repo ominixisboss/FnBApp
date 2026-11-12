@@ -32,11 +32,15 @@ There are two ways to host it:
 1. **Static only (GitHub Pages)**: `.github/workflows/deploy-pages.yml` builds and tests every pull request and publishes the app on every push to `main`. One-time setup: repo **Settings → Pages → Source: GitHub Actions**. Everything works except accounts and online play. You can point it at a server under *Account → Server settings*.
 2. **Full app with accounts and online play**: run the Node server, which also serves the app.
    - **Render**: New → Blueprint → this repo (uses `render.yaml`: Docker, a 1 GB persistent disk for the database, and a generated `SESSION_SECRET`).
-   - **Render, free tier (testing only)**: New → Blueprint → this repo, with the blueprint path set to `render.free.yaml`. It costs nothing, but the free plan has no persistent disk: accounts, synced decks and online stats are wiped on every restart or redeploy, and the service sleeps after about 15 minutes idle (the first visit then takes about a minute, and online games in progress are lost). The app warns about this on the Account page.
+   - **Completely free, data kept (Render + Neon)**:
+     1. Create a free Postgres database at [neon.com](https://neon.com) and copy its connection string (`postgresql://…?sslmode=require`).
+     2. On Render: New → Blueprint → this repo, set the blueprint path to `render.free.yaml`, and paste the connection string when it asks for `DATABASE_URL`.
+
+     Accounts, decks, stats and the leaderboard live in Neon and survive restarts. The catch is that Render's free service sleeps after about 15 minutes idle: the first visit then takes about a minute, and online games in progress when it sleeps are lost. If you leave `DATABASE_URL` empty, the server still runs but wipes its data on every restart, and the Account page warns about that.
    - **Any Docker host**: `docker build -t fab-trainer . && docker run -p 8787:8787 -v fab-data:/data fab-trainer`
    - **Locally**: `npm run build && npm run server`, then open http://localhost:8787.
 
-   Environment variables: `PORT` (default 8787), `DATA_DIR` (SQLite location, default `./data`), and `SESSION_SECRET` (signs login tokens; a random one is stored in the database if unset). Data lives in one SQLite file via Node's built-in `node:sqlite`, so Node 22.5 or newer is required.
+   Environment variables: `PORT` (default 8787); `DATABASE_URL` (a Postgres connection string; when set, all data is stored there instead of SQLite); `DATA_DIR` (SQLite location, default `./data`); and `SESSION_SECRET` (signs login tokens; a random one is stored in the database if unset). Without `DATABASE_URL`, data lives in one SQLite file via Node's built-in `node:sqlite`, which needs Node 22.5 or newer.
 
 ## Rules engine
 

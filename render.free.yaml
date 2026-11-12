@@ -1,12 +1,15 @@
-# FREE-TIER test deploy on Render (render.com → New → Blueprint → this repo,
+# FREE deploy on Render (render.com → New → Blueprint → this repo,
 # then set "Blueprint path" to render.free.yaml).
 #
-# Limits of Render's free plan:
-#   - no persistent disk: accounts, decks and match history are WIPED on every
-#     restart or redeploy (the app shows a warning on the Account page)
-#   - the service sleeps after ~15 minutes without traffic; the first visit after
-#     that takes ~1 minute to wake it, and online games in progress are lost
-# For anything people will really use, deploy render.yaml (Starter plan + disk).
+# Keep your data for free: create a free Postgres database at neon.com and paste its
+# connection string as DATABASE_URL when Render asks. Accounts, decks, stats and the
+# leaderboard are then stored in Neon and survive restarts and redeploys.
+# Without DATABASE_URL the server still runs, but its data is wiped on every restart
+# (the app shows a warning on the Account page).
+#
+# Render free plan limits: the service sleeps after ~15 minutes without traffic, and
+# the first visit after that takes ~1 minute to wake it. Online games in progress
+# when it sleeps are lost (stats and decks are not).
 services:
   - type: web
     name: fab-trainer-free
@@ -14,9 +17,11 @@ services:
     plan: free
     healthCheckPath: /api/health
     envVars:
+      - key: DATABASE_URL
+        sync: false   # Render asks for this value: your Neon connection string
       - key: SESSION_SECRET
         generateValue: true
       - key: DATA_DIR
         value: /tmp/fab-data
       - key: EPHEMERAL_DATA
-        value: "1"
+        value: "1"    # only takes effect when DATABASE_URL is empty

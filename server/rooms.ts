@@ -8,7 +8,7 @@ import type { Action, GameState, PlayerId } from '../src/engine/types';
 import { validateDeck } from '../src/deck/deck';
 import type { Deck, DeckFormat } from '../src/deck/deck';
 import { viewFor } from '../src/online/view';
-import { q } from './db';
+import { store } from './db';
 
 export type ClientMsg =
   | { t: 'host'; deck: DeckList; format: DeckFormat }
@@ -101,7 +101,7 @@ function record(room: Room) {
       deckId: null, deckName: 'Online deck', difficulty: 'online', won: s.winner === i, turns: s.turn,
       lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: room.seats[1 - i].name,
     };
-    q.putMatch.run(seat.userId, m.id, JSON.stringify(m), m.date, 'online', m.won ? 1 : 0);
+    store.putMatch(seat.userId, m.id, JSON.stringify(m), m.date, 'online', m.won).catch((e) => console.error('could not record match', e));
   });
 }
 
@@ -123,10 +123,10 @@ function start(room: Room) {
   broadcast(room);
 }
 
-function profileOf(userId: number, username: string) {
-  const row = q.getProfile.get(userId) as { json: string } | undefined;
+async function profileOf(userId: number, username: string) {
+  const row = await store.getProfile(userId).catch(() => undefined);
   try {
-    const p = row ? JSON.parse(row.json) : null;
+    const p = row ? JSON.parse(row) : null;
     return { name: (p?.displayName || username).slice(0, 24), avatar: p?.avatarHeroId ?? null };
   } catch {
     return { name: username, avatar: null };
@@ -175,10 +175,10 @@ export function onDisconnect(ws: WebSocket, userId: number) {
   }, RECONNECT_GRACE_MS);
 }
 
-export function onMessage(ws: WebSocket, user: { id: number; username: string }, msg: ClientMsg) {
+export async function onMessage(ws: WebSocket, user: { id: number; username: string }, msg: ClientMsg) {
   const err = (message: string) => send(ws, { t: 'error', message });
-  const current = userRoom.get(user.id);
-  const prof = profileOf(user.id, user.username);
+  const prof = msg.t === 'host' || msg.t === 'queue' || msg.t === 'join' ? await profileOf(user.id, user.username) : { name: user.username, avatar: null };
+  const current = userRoom.get(user.id); // read after the await so concurrent messages see each other's rooms
   switch (msg.t) {
     case 'host':
     case 'queue': {
