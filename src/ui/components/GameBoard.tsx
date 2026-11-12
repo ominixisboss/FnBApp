@@ -47,7 +47,7 @@ function playSounds(a: GameState, b: GameState) {
  * "Magic move": after every render, any card element that is new in the DOM glides from where the
  * same card was last seen (another zone), or from its source pile (your deck, the opponent's hand).
  */
-function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>) {
+function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>, state: GameState) {
   const rects = useRef(new Map<string, DOMRect>());
   const seen = useRef(new WeakSet<Element>());
   useLayoutEffect(() => {
@@ -76,13 +76,14 @@ function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>) {
       const sc = Math.max(0.25, Math.min(2.5, prev.width / r.width));
       const delay = fromDeck ? 90 * drawn++ : 0;
       el.animate([
-        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${fromDeck ? -14 : 0}deg)`, filter: 'brightness(1.5)', opacity: fromDeck ? 0.4 : 1 },
-        { transform: 'translate(0, 0) scale(1.06)', filter: 'brightness(1.15)', opacity: 1, offset: 0.8 },
-        { transform: 'none', filter: 'none', opacity: 1 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${fromDeck ? -14 : 0}deg)`, opacity: fromDeck ? 0.4 : 1 },
+        { transform: 'translate(0, 0) scale(1.04)', opacity: 1, offset: 0.82 },
+        { transform: 'none', opacity: 1 },
       ], { duration: fromDeck ? 520 : 440, delay, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
     }
     rects.current = next;
-  });
+    // only when the game changes: measuring every card forces a layout, so skip renders where nothing moved
+  }, [state, oppHandRef]);
 }
 
 /** Watches state transitions and produces short-lived visual effects. */
@@ -164,7 +165,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
-  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement } | null>(null);
+  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
@@ -186,7 +187,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const showcase = useShowcase(state);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setHandOpen(false); }, [state]);
-  useZoneGlide(oppHandRef);
+  useZoneGlide(oppHandRef, state);
   const colRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = colRef.current;
@@ -408,11 +409,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       d.el.setPointerCapture(e.pointerId);
       d.el.classList.add('dragging');
       setDragging(true);
+      d.handTop = handRef.current?.getBoundingClientRect().top ?? window.innerHeight; // measured once, not per move
     }
     d.el.style.setProperty('--dx', `${dx}px`);
     d.el.style.setProperty('--dy', `${dy}px`);
-    const top = handRef.current?.getBoundingClientRect().top ?? window.innerHeight;
-    d.el.classList.toggle('will-play', e.clientY < top - 30);
+    d.el.classList.toggle('will-play', e.clientY < (d.handTop ?? window.innerHeight) - 30);
   };
   const dragReset = (el: HTMLElement) => {
     el.classList.remove('dragging', 'will-play');
@@ -913,9 +914,13 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     el.animate([
       { transform: 'none' },
       { transform: `translate(${-dx * 0.08}px, ${-dy * 0.08}px) scale(1.08) rotate(${-tilt / 2}deg)`, offset: 0.25 },
-      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, filter: 'brightness(1.6) drop-shadow(0 0 18px #ff8a3d)', offset: 0.55 },
-      { transform: 'none', filter: 'none' },
+      { transform: `translate(${dx}px, ${dy}px) scale(1.25) rotate(${tilt}deg)`, offset: 0.55 },
+      { transform: 'none' },
     ], { duration: l.hit ? 620 : 520, easing: 'cubic-bezier(.3,.7,.2,1)' });
+    // a fiery glow while it lunges (a static class, so the browser only moves a layer instead of repainting)
+    el.classList.add('lunging');
+    const t = setTimeout(() => el.classList.remove('lunging'), l.hit ? 620 : 520);
+    return () => clearTimeout(t);
   }, [l.damage, l.attacker, l.hit]);
   // FLIP: fly the attacking card from where it was played (hand, weapon, or the opponent's side)
   useLayoutEffect(() => {
@@ -932,9 +937,9 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     const dy = from.top + from.height / 2 - (to.top + to.height / 2);
     const sc = Math.max(0.5, Math.min(1.6, from.width / to.width));
     el.animate([
-      { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${l.attacker === HUMAN ? -8 : 8}deg)`, filter: 'brightness(1.6)', zIndex: 30 },
-      { transform: 'translate(0,0) scale(1.15) rotate(0deg)', filter: 'brightness(1.3)', offset: 0.75 },
-      { transform: 'none', filter: 'none' },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(${l.attacker === HUMAN ? -8 : 8}deg)`, zIndex: 30 },
+      { transform: 'translate(0,0) scale(1.12) rotate(0deg)', offset: 0.75 },
+      { transform: 'none' },
     ], { duration: 520, easing: 'cubic-bezier(.2,.8,.3,1)' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
