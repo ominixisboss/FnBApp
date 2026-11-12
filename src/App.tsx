@@ -13,6 +13,8 @@ import ProfilePage, { Avatar } from './ui/pages/ProfilePage';
 import AccountPage from './ui/pages/AccountPage';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
+import { loadMatches } from './stats/matches';
+import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
 const ROUTES = [
@@ -53,6 +55,14 @@ export default function App() {
   useEffect(() => { void checkServer(); }, []);
   const auth = useAuth();
   const [profile, setProfile] = useState(loadProfile);
+  const [level, setLevel] = useState<number | null>(null);
+  useEffect(() => {
+    if (!db) return;
+    const on = () => setLevel(computeProgress(loadMatches()).level);
+    on();
+    for (const e of ['fab-match', 'fab-synced', 'fab-feats']) window.addEventListener(e, on);
+    return () => { for (const e of ['fab-match', 'fab-synced', 'fab-feats']) window.removeEventListener(e, on); };
+  }, [db]);
   useEffect(() => {
     const on = () => setProfile(loadProfile());
     window.addEventListener('fab-profile', on);
@@ -76,7 +86,8 @@ export default function App() {
         <div className="grow" />
         {db && (
           <a href={auth.user ? '#profile' : '#account'} className="me-chip" title={auth.user ? `Signed in as ${auth.user.username}` : 'Sign in to sync and play online'}>
-            <Avatar heroId={profile.avatarHeroId} size={28} />
+            <Avatar heroId={profile.avatarHeroId} size={28} frame={profile.cosmetics?.frame} />
+            {level !== null && <span className="lvl-badge" title={`Level ${level}`}>{level}</span>}
             <span className="anim-label">{auth.user ? profile.displayName : auth.available ? 'Sign in' : profile.displayName}</span>
           </a>
         )}

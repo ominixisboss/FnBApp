@@ -1,3 +1,5 @@
+import { ACHIEVEMENTS, COSMETICS, computeProgress } from '../../stats/progress';
+import type { CosmeticKind } from '../../stats/progress';
 import { useEffect, useMemo, useState } from 'react';
 import { getDb } from '../../data/cardDb';
 import { loadMatches, summarize } from '../../stats/matches';
@@ -12,10 +14,10 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 const FORMAT: Record<string, string> = { blitz: 'Blitz', cc: 'Classic Constructed', casual: 'Casual' };
 const DIFF: Record<string, string> = { easy: 'Easy bot', normal: 'Normal bot', hard: 'Hard bot', online: 'Online players' };
 
-export function Avatar({ heroId, size = 64 }: { heroId: string | null; size?: number }) {
+export function Avatar({ heroId, size = 64, frame }: { heroId: string | null; size?: number; frame?: string }) {
   const hero = heroId ? getDb().byId.get(heroId) : undefined;
   return (
-    <div className="avatar" style={{ width: size, height: size, backgroundImage: hero?.image ? `url(${hero.image})` : undefined }}>
+    <div className={`avatar frame-${frame ?? 'none'}`} style={{ width: size, height: size, backgroundImage: hero?.image ? `url(${hero.image})` : undefined }}>
       {!hero && <span>?</span>}
     </div>
   );
@@ -63,11 +65,15 @@ export default function ProfilePage() {
   const matches = useMemo(() => loadMatches(), [tick]);
   const st = useMemo(() => summarize(matches), [matches]);
   const update = (p: typeof profile) => { setProfile(p); saveProfile(p); auth.pushProfile(p); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const prog = useMemo(() => computeProgress(matches), [matches, tick]);
+  const equipped = { sleeve: 'classic', mat: 'tavern', frame: 'none', ...profile.cosmetics };
+  const equip = (kind: CosmeticKind, id: string) => update({ ...profile, cosmetics: { ...equipped, [kind]: id } });
 
   return (
     <div className="col profile" style={{ gap: '1.2rem' }}>
       <div className="profile-head panel">
-        <button className="avatar-btn" onClick={() => setPicking(true)} title="Change avatar"><Avatar heroId={profile.avatarHeroId} size={96} /></button>
+        <button className="avatar-btn" onClick={() => setPicking(true)} title="Change avatar"><Avatar heroId={profile.avatarHeroId} size={96} frame={equipped.frame} /></button>
         <div className="col grow" style={{ gap: '.3rem' }}>
           <input className="name-input" value={profile.displayName} maxLength={24} onChange={(e) => update({ ...profile, displayName: e.target.value })} aria-label="Display name" />
           <div className="muted small">
@@ -75,6 +81,62 @@ export default function ProfilePage() {
           </div>
           <div className="small muted">Playing since {new Date(profile.createdAt).toLocaleDateString()}</div>
         </div>
+      </div>
+
+      <div className="panel progress-panel">
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0 }}>Level {prog.level} <span className="muted small">· {prog.title}</span></h3>
+          <span className="small muted">{prog.into} / {prog.need} XP</span>
+        </div>
+        <div className="xpbar big"><span style={{ '--from': '0%', '--to': `${Math.round((prog.into / prog.need) * 100)}%` } as React.CSSProperties} /></div>
+        <h4>Daily quests <span className="muted small">· new quests every day</span></h4>
+        <div className="quests">
+          {prog.quests.map((q) => (
+            <div key={q.id} className={`quest ${q.done ? 'done' : ''}`}>
+              <span>{q.done ? '✅' : '◻'} {q.text}</span>
+              <span className="small muted">{q.value}/{q.goal} · +{q.reward} XP</span>
+              <span className="qbar"><span style={{ width: `${(q.value / q.goal) * 100}%` }} /></span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Achievements <span className="muted small">· {prog.achievements.filter((a) => a.done).length}/{prog.achievements.length}</span></h3>
+        <div className="achievements">
+          {prog.achievements.map((a) => (
+            <div key={a.id} className={`ach-tile ${a.done ? 'done' : ''}`} title={`${a.text} · +${a.reward} XP`}>
+              <span className="ach-icon">{a.icon}</span>
+              <b>{a.name}</b>
+              <span className="small muted">{a.text}</span>
+              {!a.done && a.goal > 1 && <span className="qbar"><span style={{ width: `${(a.value / a.goal) * 100}%` }} /></span>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Cosmetics</h3>
+        {(['sleeve', 'mat', 'frame'] as CosmeticKind[]).map((kind) => (
+          <div key={kind} className="cosmetic-row">
+            <div className="lobby-label">{kind === 'sleeve' ? 'Card sleeves' : kind === 'mat' ? 'Playmats' : 'Avatar frames'}</div>
+            <div className="cosmetics">
+              {COSMETICS.filter((c) => c.kind === kind).map((c) => {
+                const open = prog.unlocked.has(c.id);
+                const how = c.unlock.level ? `Reach level ${c.unlock.level}` : `Achievement: ${ACHIEVEMENTS.find((a) => a.id === c.unlock.achievement)?.name}`;
+                return (
+                  <button key={c.id} className={`cosmetic ${equipped[kind] === c.id ? 'on' : ''} ${open ? '' : 'locked'}`} disabled={!open} onClick={() => equip(kind, c.id)} title={open ? c.name : `Locked · ${how}`}>
+                    {kind === 'sleeve' && <span className={`swatch card-back sleeve-${c.id}`} />}
+                    {kind === 'mat' && <span className={`swatch mat-swatch mat-${c.id}`} />}
+                    {kind === 'frame' && <Avatar heroId={profile.avatarHeroId} size={40} frame={c.id} />}
+                    <span className="small">{c.name}</span>
+                    {!open && <span className="lock">🔒 <small>{how}</small></span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="tiles stat-tiles">

@@ -256,7 +256,8 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     }
     if (!bestPitch) return;
     const kept = rest.filter((r) => !bestPitch!.uids.includes(r.uid));
-    const keptValue = kept.reduce((a, k) => a + keepValue(k.c, threat, p.life), 0);
+    // holding cards to block has diminishing returns: you rarely need 3-4 blockers, so don't sit on a full hand
+    const keptValue = kept.map((k) => keepValue(k.c, threat, p.life)).sort((x, y) => y - x).reduce((a, v, i) => a + v * ([1, 0.75, 0.45, 0.25][i] ?? 0.15), 0);
     const arsenalBonus = p.arsenal.length === 0 && kept.some((k) => pitchOf(k.c) !== 3 && cardPlayValue(k.c) > 1) ? 1 : 0;
     let value = plan.reduce((a, i) => a + i.value, 0);
     // attacks into a hand that can block: big attacks tend to be blocked

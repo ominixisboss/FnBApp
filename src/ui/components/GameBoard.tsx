@@ -17,6 +17,9 @@ import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
+import { computeProgress, progressDiff } from '../../stats/progress';
+import type { MatchStats, Progress } from '../../stats/progress';
+import { loadMatches } from '../../stats/matches';
 import { HintArrows, MatchIntro, damageSource, themeOf, useVfx } from './Vfx';
 import type { Theme } from './Vfx';
 import type { ChainLink } from '../../engine/types';
@@ -168,8 +171,12 @@ export interface OnlineLink {
   error: string | null;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online }: {
-  initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState) => void;
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult }: {
+  initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats) => void;
+  /** the player's equipped card sleeve and playmat */
+  cosmetics?: { sleeve?: string; mat?: string };
+  /** extra content for the result screen (gauntlet / puzzle progress) */
+  extraResult?: React.ReactNode;
   /** when set, the game is played on the server: state comes from it and actions are sent to it */
   online?: OnlineLink;
 }) {
@@ -214,6 +221,24 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const lastClick = useRef<DOMRect | null>(null);
   const oppRef = useRef<HTMLDivElement>(null);
   const fx = useFx(state, skipFx);
+  // per-game numbers for quests and achievements
+  const gameStats = useRef<MatchStats & { turnDmg: Record<number, number> }>({ damageDealt: 0, maxTurnDamage: 0, attacks: 0, blocks: 0, cardsPlayed: 0, turnDmg: {} });
+  const statPrev = useRef<GameState | null>(null);
+  useEffect(() => {
+    const b = statPrev.current;
+    statPrev.current = state;
+    if (!b) return;
+    const g = gameStats.current;
+    const dmg = b.players[1].life - state.players[1].life;
+    if (dmg > 0) { g.damageDealt += dmg; g.turnDmg[state.turn] = (g.turnDmg[state.turn] ?? 0) + dmg; g.maxTurnDamage = Math.max(g.maxTurnDamage, g.turnDmg[state.turn]); }
+    if (state.chain.length > b.chain.length && state.chain[state.chain.length - 1].attacker === HUMAN) g.attacks++;
+    const lb = b.chain[b.chain.length - 1];
+    const la = state.chain[state.chain.length - 1];
+    if (la && lb && state.chain.length === b.chain.length) g.blocks += la.defenders.filter((d) => d.inst.owner === HUMAN).length - lb.defenders.filter((d) => d.inst.owner === HUMAN).length;
+    if (state.turn === b.turn) g.cardsPlayed += Math.max(0, state.players[HUMAN].turn.played.length - b.players[HUMAN].turn.played.length);
+  }, [state]);
+  // progress before this game, to show what it earned on the result screen
+  const [progressBefore] = useState<Progress>(() => computeProgress(loadMatches()));
   useVfx(state, motionOk);
   // the "VS" intro plays before the first turn of a new game
   const [intro, setIntro] = useState(() => initial.turn === 1 && initial.chain.length === 0 && motionOk());
@@ -243,7 +268,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const reported = useRef(false);
   useEffect(() => {
     if (state.phase !== 'gameOver') return;
-    if (!reported.current) { reported.current = true; onGameOver?.(state); }
+    if (!reported.current) { const { turnDmg: _t, ...st } = gameStats.current; void _t; reported.current = true; onGameOver?.(state, st); }
     const lethal = state.players.some((p) => p.life <= 0);
     const t = setTimeout(() => setOverlay(true), lethal && motionOk() ? 1700 : 700);
     return () => clearTimeout(t);
@@ -595,7 +620,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const n = me.hand.length;
 
   return (
-    <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''}`}>
+    <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
       <div className="arena-bar">
         <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
         <div className="grow" />
@@ -736,6 +761,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <button className="gold" onClick={onExit}>New game</button>
             <button onClick={() => setOverlay(false)}>View board</button>
           </div>
+          {extraResult}
+          {onGameOver && <ProgressGains before={progressBefore} />}
         </GameOverOverlay>
       )}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
@@ -1196,6 +1223,23 @@ function Showcase({ cardId, mine }: { cardId: string; mine: boolean }) {
         <div className="sc-face"><CardView card={c} width="var(--sc-w)" tilt={false} noPopout /></div>
         {!mine && <div className="sc-back"><CardBack width="var(--sc-w)" /></div>}
       </div>
+    </div>
+  );
+}
+
+/** Result screen: XP earned, level ups, quests and achievements completed, cosmetics unlocked. */
+function ProgressGains({ before }: { before: Progress }) {
+  const [after] = useState(() => computeProgress(loadMatches()));
+  const d = progressDiff(before, after);
+  if (d.xp <= 0) return null;
+  const pct = (p: Progress) => Math.round((p.into / p.need) * 100);
+  return (
+    <div className="gains">
+      <div className="gains-xp"><b className="anim-pop">+{d.xp} XP</b>{d.levelUp ? <span className="lvl-up">Level {d.levelUp}!</span> : <span className="muted small">Level {after.level}</span>}</div>
+      <div className="xpbar"><span style={{ '--from': `${d.levelUp ? 0 : pct(before)}%`, '--to': `${pct(after)}%` } as React.CSSProperties} /></div>
+      {d.quests.map((q) => <div key={q.id} className="gain-row">✅ Quest complete: {q.text} <b>+{q.reward}</b></div>)}
+      {d.achievements.map((a) => <div key={a.id} className="gain-row ach">{a.icon} Achievement: <b>{a.name}</b> <b>+{a.reward}</b></div>)}
+      {d.unlocks.map((c) => <div key={c.id} className="gain-row unlock">🎁 Unlocked {c.kind === 'mat' ? 'playmat' : c.kind === 'sleeve' ? 'card sleeve' : 'avatar frame'}: <b>{c.name}</b></div>)}
     </div>
   );
 }

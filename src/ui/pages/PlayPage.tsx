@@ -6,6 +6,8 @@ import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
+import type { MatchStats } from '../../stats/progress';
+import { loadProfile } from '../../stats/profile';
 import { sfx } from '../sound';
 import { archetypeFor } from '../../deck/archetypes';
 import { getHeroAbility } from '../../engine/heroes';
@@ -60,12 +62,12 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     ], Date.now() & 0x7fffffff, fmt));
   };
 
-  const onGameOver = (s: GameState) => {
+  const onGameOver = (s: GameState, stats: MatchStats) => {
     const [me, them] = s.players;
     recordMatch({
       format: s.format, myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId, deckId: myDeck?.id ?? null,
       deckName: myDeck?.name ?? `${card(me.hero.cardId).name} (auto)`, difficulty: setup.difficulty,
-      won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life,
+      won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life, stats,
     });
   };
 
@@ -83,21 +85,22 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         key={net.matchId ?? 'online'}
         initial={g}
         tutorial={false}
+        cosmetics={loadProfile().cosmetics}
         online={{ state: g, send: online.act, opponent: net.opponent, error: net.error }}
         onExit={() => { if (g.phase === 'gameOver') online.done(); else online.leave(); }}
-        onGameOver={(s) => {
+        onGameOver={(s, stats) => {
           const [me, them] = s.players;
           recordMatch({
             id: net.matchId ?? undefined, format: s.format, myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId, deckId: myDeck?.id ?? null,
             deckName: myDeck?.name ?? 'Online deck', difficulty: 'online', won: s.winner === 0, turns: s.turn,
-            lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: net.opponent?.name,
+            lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: net.opponent?.name, stats,
           });
         }}
       />
     );
   }
 
-  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} onGameOver={onGameOver} />;
+  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} onGameOver={onGameOver} cosmetics={loadProfile().cosmetics} />;
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
   const formatDecks = decks.filter((d) => d.format === setup.format || setup.format === 'casual');
