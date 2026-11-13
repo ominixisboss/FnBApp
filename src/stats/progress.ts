@@ -16,7 +16,7 @@ export interface MatchStats {
 
 // ---------------------------------------------------------------- feats (puzzles, gauntlet)
 
-export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number; tournamentWins?: number; tournamentTop?: number }
+export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number; tournamentWins?: number; tournamentTop?: number; seasonPeak?: number }
 const FEATS_KEY = 'fab-trainer.feats.v1';
 export function loadFeats(): Feats {
   try { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0, ...JSON.parse(localStorage.getItem(FEATS_KEY) ?? '{}') }; } catch { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0 }; }
@@ -110,6 +110,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'wins-50', icon: '👑', name: 'Conqueror', text: 'Win 50 games', goal: 50, reward: 500, check: (ms) => count(ms, won) },
   { id: 'wins-100', icon: '🐉', name: 'Living Legend', text: 'Win 100 games', goal: 100, reward: 1000, check: (ms) => count(ms, won) },
   { id: 'hard', icon: '💀', name: 'Giant Slayer', text: 'Beat a Hard bot', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && (m.difficulty === 'hard' || m.difficulty === 'mythic')) },
+  { id: 'season-gold', icon: '🥇', name: 'Gold Season', text: 'Reach Gold (1250) in a ranked season', goal: 1, reward: 300, check: (_ms, f) => ((f.seasonPeak ?? 0) >= 1250 ? 1 : 0) },
+  { id: 'season-diamond', icon: '💎', name: 'Diamond Season', text: 'Reach Diamond (1550) in a ranked season', goal: 1, reward: 600, check: (_ms, f) => ((f.seasonPeak ?? 0) >= 1550 ? 1 : 0) },
   { id: 'mythic', icon: '🔮', name: 'Fate Breaker', text: 'Beat a Mythic bot', goal: 1, reward: 400, check: (ms) => count(ms, (m) => m.won && m.difficulty === 'mythic') },
   { id: 'online', icon: '🌐', name: 'Proven', text: 'Win an online game', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.mode === 'online') },
   { id: 'classes-5', icon: '🎭', name: 'Versatile', text: 'Win with 5 different classes', goal: 5, reward: 300, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },
@@ -153,6 +155,9 @@ export const COSMETICS: Cosmetic[] = [
   { id: 'goldf', kind: 'frame', name: 'Gold', unlock: { level: 10 } },
   { id: 'flame', kind: 'frame', name: 'Phoenix', unlock: { achievement: 'comeback' } },
   { id: 'mythic', kind: 'frame', name: 'Mythic', unlock: { achievement: 'wins-100' } },
+  { id: 'laurel', kind: 'sleeve', name: 'Season Laurel', unlock: { achievement: 'season-gold' } },
+  { id: 'arena', kind: 'mat', name: 'Grand Arena', unlock: { achievement: 'season-diamond' } },
+  { id: 'diamondf', kind: 'frame', name: 'Diamond', unlock: { achievement: 'season-diamond' } },
 ];
 
 // ---------------------------------------------------------------- everything together

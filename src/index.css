@@ -1327,3 +1327,11 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .drill-opt { text-align: left; padding: .6rem .8rem; }
 .drill-opt.right { border-color: #3fae6a; background: #1c3a2799; }
 .drill-opt.wrong { border-color: #c0392b; background: #3a1c1c99; }
+
+/* season rewards */
+.sleeve-laurel.card-back, .arena.sleeve-laurel .mat-side.me .card-back { background: radial-gradient(circle at 50% 50%, #f6d58e33, transparent 55%), repeating-conic-gradient(from 0deg at 50% 50%, #2e4a1c 0 12deg, #1f3313 12deg 24deg); box-shadow: inset 0 0 0 2px #e8c96a; color: #f6e7b0; }
+.arena.mat-arena, .mat-arena.mat-swatch { background: radial-gradient(ellipse 80% 60% at 50% 45%, #2a3550 0%, #121828 55%, #05070d 100%); }
+.arena.mat-arena .mat { background: radial-gradient(ellipse at 50% 50%, #1c2438e6 0%, #0b101ce6 75%); border-color: #8fd3ff; box-shadow: inset 0 0 0 1px #000, inset 0 0 60px #000c, 0 0 0 2px #8fd3ff44; }
+.avatar.frame-diamondf { border-color: #bdf0ff; box-shadow: 0 0 0 2px #3aa0c8, 0 0 16px #8fe3ffaa; }
+.season-tabs { display: flex; flex-wrap: wrap; gap: .3rem; }
+.season-tabs button.on { background: var(--accent, #b8322a); color: #fff; }

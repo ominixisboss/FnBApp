@@ -176,7 +176,14 @@ export function pushProfile(p: Profile) {
 export interface LeaderRow { name: string; username: string; avatarHeroId: string | null; wins: number; games: number }
 export const leaderboard = () => call<LeaderRow[]>('/api/leaderboard');
 export interface LadderRow { name: string; username: string; avatarHeroId: string | null; rating: number; games: number; tier: string }
-export const ladder = () => call<LadderRow[]>('/api/ladder');
+export const ladder = (format?: string, season?: string) =>
+  call<LadderRow[]>(`/api/ladder${format ? `?format=${encodeURIComponent(format)}${season ? `&season=${encodeURIComponent(season)}` : ''}` : ''}`);
+export interface SeasonRow { season: string; format: string; rating: number; games: number; peak: number; tier: string; peakTier: string }
+export interface SeasonInfo { id: string; ends: number }
+export const mySeasons = async () => {
+  const r = await call<{ seasons?: SeasonRow[]; season?: SeasonInfo }>('/api/me');
+  return { seasons: r.seasons ?? [], season: r.season ?? null };
+};
 export interface MyRating { rating: number; games: number; tier: string }
 export const myRating = async () => (await call<{ rating: MyRating | null }>('/api/me')).rating;
 export interface FriendRow { username: string; name: string; avatarHeroId: string | null; status: 'offline' | 'online' | 'in-game' }

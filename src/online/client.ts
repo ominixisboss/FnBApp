@@ -19,7 +19,7 @@ export interface OnlineState {
   /** a friend challenged you */
   challenge: { from: string; username: string; code: string; format: string } | null;
   /** rating change after a ranked game */
-  rated: { before: number; after: number } | null;
+  rated: { before: number; after: number; season?: string; format?: string } | null;
   /** info line (e.g. a friend declined) */
   notice: string | null;
   /** this room allows manual moves */
@@ -53,7 +53,7 @@ function connect() {
       case 'emote': set({ emote: { id: msg.id, at: Date.now() } }); break;
       case 'challenged': set({ challenge: { from: msg.from, username: msg.username, code: msg.code, format: msg.format } }); break;
       case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
-      case 'rated': set({ rated: { before: msg.before, after: msg.after } }); break;
+      case 'rated': set({ rated: { before: msg.before, after: msg.after, season: msg.season, format: msg.format } }); break;
       case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching }, error: null }); break;
       case 'spectateEnd': set({ spectating: null }); break;
       case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;

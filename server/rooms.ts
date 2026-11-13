@@ -33,13 +33,16 @@ export type ServerMsg =
   | { t: 'emote'; id: string }
   | { t: 'challenged'; from: string; username: string; code: string; format: string }
   | { t: 'declined'; by: string }
-  | { t: 'rated'; before: number; after: number }
+  | { t: 'rated'; before: number; after: number; season?: string; format?: string }
   | { t: 'spectate'; state: GameState; names: [string, string]; watching: string }
   | { t: 'spectateEnd' };
 
 /** The emotes players can send in online games. */
 export const EMOTES = ['hello', 'gg', 'nice', 'thinking', 'oops', 'wow'];
 /** Ranked tiers by rating. */
+/** Ranked seasons last a calendar month (UTC). */
+export const currentSeason = (now = new Date()) => `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+export const seasonEnds = (now = new Date()) => Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
 export const tierOf = (r: number) => (r >= 1700 ? 'Mythic' : r >= 1550 ? 'Diamond' : r >= 1400 ? 'Platinum' : r >= 1250 ? 'Gold' : r >= 1100 ? 'Silver' : 'Bronze');
 const START_RATING = 1000;
 
@@ -162,8 +165,17 @@ async function rate(room: Room) {
   const nb = Math.round(rb + k(b?.games ?? 0) * ((1 - sa) - (1 - ea)));
   await store.setRating(room.seats[0].userId, na, (a?.games ?? 0) + 1);
   await store.setRating(room.seats[1].userId, nb, (b?.games ?? 0) + 1);
-  send(room.seats[0].ws, { t: 'rated', before: ra, after: na });
-  send(room.seats[1].ws, { t: 'rated', before: rb, after: nb });
+  // the season ladder for this format (resets every month)
+  const season = currentSeason();
+  const [sa0, sb0] = await Promise.all(room.seats.map((st) => store.getSeasonRating(st.userId, season, room.format)));
+  const sra = sa0?.rating ?? START_RATING, srb = sb0?.rating ?? START_RATING;
+  const sea = 1 / (1 + 10 ** ((srb - sra) / 400));
+  const sna = Math.round(sra + k(sa0?.games ?? 0) * (sa - sea));
+  const snb = Math.round(srb + k(sb0?.games ?? 0) * ((1 - sa) - (1 - sea)));
+  await store.setSeasonRating(room.seats[0].userId, season, room.format, { rating: sna, games: (sa0?.games ?? 0) + 1, peak: Math.max(sna, sa0?.peak ?? START_RATING) });
+  await store.setSeasonRating(room.seats[1].userId, season, room.format, { rating: snb, games: (sb0?.games ?? 0) + 1, peak: Math.max(snb, sb0?.peak ?? START_RATING) });
+  send(room.seats[0].ws, { t: 'rated', before: sra, after: sna, season, format: room.format });
+  send(room.seats[1].ws, { t: 'rated', before: srb, after: snb, season, format: room.format });
 }
 
 function saveReplay(room: Room) {

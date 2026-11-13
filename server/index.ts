@@ -9,7 +9,7 @@ import { makeDb, setDb } from '../src/data/cardDb';
 import { ephemeral, initStore, store } from './db';
 import type { UserRow } from './db';
 import { checkPassword, hashPassword, makeToken, userFromToken, validateCredentials } from './auth';
-import { onConnect, onDisconnect, onMessage, presence, roomCount, tierOf } from './rooms';
+import { onConnect, onDisconnect, onMessage, presence, roomCount, tierOf, currentSeason, seasonEnds } from './rooms';
 import type { FriendTournament } from './rooms';
 import { randomBytes } from 'node:crypto';
 import type { ClientMsg } from './rooms';
@@ -104,7 +104,10 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
 
     if (path === '/api/ladder' && req.method === 'GET') {
-      const rows = await store.ladder();
+      // ?format=blitz[&season=2026-11] gives a season ladder; without it, the all-time ladder
+      const fmt = url.searchParams.get('format');
+      const season = url.searchParams.get('season') || currentSeason();
+      const rows = fmt ? await store.seasonLadder(season, fmt) : await store.ladder();
       return json(res, 200, rows.map((r) => {
         let p: { displayName?: string; avatarHeroId?: string } = {};
         try { p = r.profile ? JSON.parse(r.profile) : {}; } catch { /* ignore */ }
@@ -120,7 +123,8 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       const row = await store.getProfile(user.id);
       const r = await store.getRating(user.id);
       const rating = r ? { rating: r.rating, games: r.games, tier: tierOf(r.rating) } : null;
-      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row) : null, rating });
+      const seasons = (await store.seasonHistory(user.id)).map((x) => ({ ...x, tier: tierOf(x.rating), peakTier: tierOf(x.peak) }));
+      return json(res, 200, { user: publicUser(user), profile: row ? JSON.parse(row) : null, rating, seasons, season: { id: currentSeason(), ends: seasonEnds() } });
     }
     if (path === '/api/profile' && req.method === 'PUT') {
       const p = (await readBody(req)) as Record<string, unknown>;

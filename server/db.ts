@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 
 export interface UserRow { id: number; username: string; pass_hash: string; salt: string; created_at: number }
 export interface LeaderRow { username: string; profile: string | null; wins: number; games: number }
+export interface SeasonRating { rating: number; games: number; peak: number }
 export interface LadderRow { username: string; profile: string | null; rating: number; games: number }
 export interface FriendRow { id: number; username: string; profile: string | null }
 
@@ -31,6 +32,11 @@ export interface Store {
   getRating(userId: number): Promise<{ rating: number; games: number } | undefined>;
   setRating(userId: number, rating: number, games: number): Promise<void>;
   ladder(): Promise<LadderRow[]>;
+  /** ranked seasons: a rating per season (e.g. "2026-11") and format */
+  getSeasonRating(userId: number, season: string, format: string): Promise<SeasonRating | undefined>;
+  setSeasonRating(userId: number, season: string, format: string, r: SeasonRating): Promise<void>;
+  seasonLadder(season: string, format: string): Promise<LadderRow[]>;
+  seasonHistory(userId: number): Promise<(SeasonRating & { season: string; format: string })[]>;
   /** friendships are stored both ways */
   friends(userId: number): Promise<FriendRow[]>;
   addFriend(userId: number, friendId: number): Promise<void>;
@@ -60,7 +66,15 @@ const EXTRA_TABLES = (big: string) => `
     CREATE TABLE IF NOT EXISTS friends (user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL, created_at ${big} NOT NULL, PRIMARY KEY (user_id, friend_id));
     CREATE TABLE IF NOT EXISTS replays (match_id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at ${big} NOT NULL);
     CREATE TABLE IF NOT EXISTS tournaments (id TEXT PRIMARY KEY, members TEXT NOT NULL, json TEXT NOT NULL, updated_at ${big} NOT NULL);
+    CREATE TABLE IF NOT EXISTS season_ratings (user_id INTEGER NOT NULL, season TEXT NOT NULL, format TEXT NOT NULL, rating INTEGER NOT NULL, games INTEGER NOT NULL, peak INTEGER NOT NULL, PRIMARY KEY (user_id, season, format));
 `;
+const SEASON_LADDER_SQL = (a: string, b: string) => `
+  SELECT u.username AS username, p.json AS profile, r.rating AS rating, r.games AS games
+  FROM season_ratings r JOIN users u ON u.id = r.user_id LEFT JOIN profiles p ON p.user_id = u.id
+  WHERE r.season = ${a} AND r.format = ${b}
+  ORDER BY r.rating DESC, r.games DESC LIMIT 100`;
+const SEASON_UPSERT = (ph: string[]) => `INSERT INTO season_ratings (user_id, season, format, rating, games, peak) VALUES (${ph.join(', ')})
+  ON CONFLICT (user_id, season, format) DO UPDATE SET rating = excluded.rating, games = excluded.games, peak = excluded.peak`;
 // members are stored as ",1,5,9," so a member lookup is a simple LIKE in both databases
 const membersText = (ids: number[]) => `,${ids.join(',')},`;
 
@@ -117,6 +131,10 @@ async function sqliteStore(): Promise<Store> {
     getRating: db.prepare('SELECT rating, games FROM ratings WHERE user_id = ?'),
     setRating: db.prepare('INSERT INTO ratings (user_id, rating, games) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET rating = excluded.rating, games = excluded.games'),
     ladder: db.prepare(LADDER_SQL),
+    getSeason: db.prepare('SELECT rating, games, peak FROM season_ratings WHERE user_id = ? AND season = ? AND format = ?'),
+    setSeason: db.prepare(SEASON_UPSERT(['?', '?', '?', '?', '?', '?'])),
+    seasonLadder: db.prepare(SEASON_LADDER_SQL('?', '?')),
+    seasonHistory: db.prepare('SELECT season, format, rating, games, peak FROM season_ratings WHERE user_id = ? ORDER BY season DESC'),
     friends: db.prepare(FRIENDS_SQL('?')),
     addFriend: db.prepare('INSERT OR IGNORE INTO friends (user_id, friend_id, created_at) VALUES (?, ?, ?)'),
     delFriend: db.prepare('DELETE FROM friends WHERE user_id = ? AND friend_id = ?'),
@@ -147,6 +165,10 @@ async function sqliteStore(): Promise<Store> {
     getRating: async (id) => st.getRating.get(id) as { rating: number; games: number } | undefined,
     setRating: async (id, r, g) => { st.setRating.run(id, r, g); },
     ladder: async () => st.ladder.all() as unknown as LadderRow[],
+    getSeasonRating: async (id, se, f) => st.getSeason.get(id, se, f) as SeasonRating | undefined,
+    setSeasonRating: async (id, se, f, r) => { st.setSeason.run(id, se, f, r.rating, r.games, r.peak); },
+    seasonLadder: async (se, f) => st.seasonLadder.all(se, f) as unknown as LadderRow[],
+    seasonHistory: async (id) => st.seasonHistory.all(id) as unknown as (SeasonRating & { season: string; format: string })[],
     friends: async (id) => st.friends.all(id) as unknown as FriendRow[],
     addFriend: async (a, b) => { const t = Date.now(); st.addFriend.run(a, b, t); st.addFriend.run(b, a, t); },
     removeFriend: async (a, b) => { st.delFriend.run(a, b); st.delFriend.run(b, a); },
@@ -209,6 +231,10 @@ async function postgresStore(url: string): Promise<Store> {
     getRating: (id) => one<{ rating: number; games: number }>('SELECT rating, games FROM ratings WHERE user_id = $1', [id]),
     setRating: async (id, r, g) => { await run('INSERT INTO ratings (user_id, rating, games) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO UPDATE SET rating = excluded.rating, games = excluded.games', [id, r, g]); },
     ladder: async () => (await run(LADDER_SQL)).rows as LadderRow[],
+    getSeasonRating: (id, se, f) => one<SeasonRating>('SELECT rating, games, peak FROM season_ratings WHERE user_id = $1 AND season = $2 AND format = $3', [id, se, f]),
+    setSeasonRating: async (id, se, f, r) => { await run(SEASON_UPSERT(['$1', '$2', '$3', '$4', '$5', '$6']), [id, se, f, r.rating, r.games, r.peak]); },
+    seasonLadder: async (se, f) => (await run(SEASON_LADDER_SQL('$1', '$2'), [se, f])).rows as LadderRow[],
+    seasonHistory: async (id) => (await run('SELECT season, format, rating, games, peak FROM season_ratings WHERE user_id = $1 ORDER BY season DESC', [id])).rows as (SeasonRating & { season: string; format: string })[],
     friends: async (id) => (await run(FRIENDS_SQL('$1'), [id])).rows as FriendRow[],
     addFriend: async (a, b) => { const t = Date.now(); await run('INSERT INTO friends (user_id, friend_id, created_at) VALUES ($1, $2, $3), ($2, $1, $3) ON CONFLICT DO NOTHING', [a, b, t]); },
     removeFriend: async (a, b) => { await run('DELETE FROM friends WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)', [a, b]); },

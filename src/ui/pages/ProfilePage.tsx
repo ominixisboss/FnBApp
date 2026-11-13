@@ -1,8 +1,10 @@
 import { ACHIEVEMENTS, COSMETICS, computeProgress } from '../../stats/progress';
 import { localReplayIds } from '../../stats/replays';
 import { online } from '../../online/client';
-import { friends as friendsApi, ladder } from '../auth';
-import type { FriendRow, LadderRow } from '../auth';
+import { friends as friendsApi, ladder, mySeasons } from '../auth';
+import type { FriendRow, LadderRow, SeasonInfo, SeasonRow } from '../auth';
+import { FORMATS, formatName } from '../../deck/deck';
+import { updateFeats } from '../../stats/progress';
 import type { CosmeticKind } from '../../stats/progress';
 import { useEffect, useMemo, useState } from 'react';
 import { getDb } from '../../data/cardDb';
@@ -66,7 +68,18 @@ export default function ProfilePage() {
   }, []);
   useEffect(() => { if (auth.available) leaderboard().then(setBoard, () => setBoard(null)); }, [auth.available]);
   const [ladderRows, setLadderRows] = useState<LadderRow[] | null>(null);
-  useEffect(() => { if (auth.available) ladder().then(setLadderRows, () => setLadderRows(null)); }, [auth.available]);
+  const [ladderFormat, setLadderFormat] = useState('blitz');
+  const [seasons, setSeasons] = useState<{ seasons: SeasonRow[]; season: SeasonInfo | null }>({ seasons: [], season: null });
+  useEffect(() => { if (auth.available) ladder(ladderFormat).then(setLadderRows, () => setLadderRows(null)); }, [auth.available, ladderFormat]);
+  useEffect(() => {
+    if (!auth.available || !auth.user) return;
+    mySeasons().then((r) => {
+      setSeasons(r);
+      // season rewards are unlocked by your best season peak
+      const peak = Math.max(0, ...r.seasons.map((x) => x.peak));
+      updateFeats((f) => (peak > (f.seasonPeak ?? 0) ? { ...f, seasonPeak: peak } : f));
+    }, () => {});
+  }, [auth.available, auth.user]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const replayIds = useMemo(() => localReplayIds(), [tick]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,9 +211,21 @@ export default function ProfilePage() {
       )}
 
       {auth.user && auth.available && <FriendsManager />}
-      {ladderRows && ladderRows.length > 0 && (
+      {ladderRows && (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Ranked ladder</h3>
+          <h3 style={{ marginTop: 0 }}>Ranked season{seasons.season ? ` ${seasons.season.id}` : ''}</h3>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Quick matches are ranked, with a separate ladder for each format. Seasons last a month{seasons.season ? `; this one ends in ${Math.max(1, Math.ceil((seasons.season.ends - Date.now()) / 864e5))} day${Math.ceil((seasons.season.ends - Date.now()) / 864e5) === 1 ? '' : 's'}` : ''}. Reaching Gold unlocks the Season Laurel sleeve; Diamond unlocks the Grand Arena playmat and a Diamond frame.
+          </p>
+          <div className="season-tabs" style={{ marginBottom: '.5rem' }}>
+            {FORMATS.filter(([f]) => f !== 'casual').map(([f, n]) => <button key={f} className={`small ${ladderFormat === f ? 'on' : ''}`} onClick={() => setLadderFormat(f)}>{n}</button>)}
+          </div>
+          {seasons.seasons.length > 0 && (
+            <div className="small" style={{ marginBottom: '.5rem' }}>
+              Your seasons: {seasons.seasons.slice(0, 6).map((x) => <span key={x.season + x.format} className={`tier tier-${x.peakTier.toLowerCase()}`} style={{ marginRight: '.3rem' }}>{x.season} {formatName(x.format)}: {x.rating} (peak {x.peakTier})</span>)}
+            </div>
+          )}
+          {ladderRows.length === 0 && <p className="small muted">No ranked games in {formatName(ladderFormat)} this season yet.</p>}
           <table className="history">
             <thead><tr><th>#</th><th>Player</th><th>Tier</th><th>Rating</th><th>Ranked games</th></tr></thead>
             <tbody>

@@ -201,6 +201,12 @@ describe('online play', () => {
     const byName = Object.fromEntries(lad.map((r: { username: string; rating: number }) => [r.username, r.rating]));
     expect(byName.dana).toBeGreaterThan(1000);
     expect(byName.eve).toBeLessThan(1000);
+    // the same game counts on this month's season ladder for its format, and in each player's season history
+    const season = await (await fetch(`${BASE}/api/ladder?format=blitz`)).json();
+    expect(season.map((r: { username: string }) => r.username).sort()).toEqual(['dana', 'eve']);
+    const me = await (await fetch(`${BASE}/api/me`, { headers: auth(a.token) })).json();
+    expect(me.seasons).toEqual([expect.objectContaining({ format: 'blitz', games: 1, peak: expect.any(Number) })]);
+    expect(me.season.id).toMatch(/^\d{4}-\d{2}$/);
     ca.ws.close();
     cb.ws.close();
   }, 30_000);
