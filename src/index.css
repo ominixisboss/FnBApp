@@ -1290,12 +1290,13 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 @media (orientation: landscape) { .lc-side.flip { transform: none; } }
 .lc-side.low { box-shadow: inset 0 0 80px #b8000099; }
 .lc-side select { max-width: 90%; }
+@media (orientation: landscape) { .lc-side { padding-top: calc(3.2rem + var(--sa-t)); } }
 .lc-life { display: flex; align-items: center; gap: 1.2rem; }
 .lc-num { font: 800 clamp(4rem, 20vmin, 9rem)/1 Inter, system-ui, sans-serif; min-width: 2.2ch; text-align: center; text-shadow: 0 4px 20px #000; font-variant-numeric: tabular-nums; }
 .lc-btn { width: clamp(64px, 16vmin, 110px); height: clamp(64px, 16vmin, 110px); border-radius: 50%; font-size: 2.4rem; font-weight: 800; background: #0008; touch-action: manipulation; user-select: none; }
 .lc-small { display: flex; gap: 1.5rem; font-size: 1.1rem; }
 .lc-small button { padding: .1em .6em; }
-.lc-bar { position: fixed; z-index: 61; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: .5rem; align-items: center; padding: .3rem .7rem; border-radius: 999px; background: #15110df2; border: 1px solid #a57c46; }
+.lc-bar { position: fixed; z-index: 61; left: 50%; top: calc(.4rem + var(--sa-t, 0px)); transform: translateX(-50%); display: flex; gap: .5rem; align-items: center; padding: .3rem .7rem; border-radius: 999px; background: #15110df2; border: 1px solid #a57c46; }
 .sample-hand { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .6rem; }
 .deck-sheet { background: #fff; color: #111; padding: 1.5rem; border-radius: 6px; font-family: Georgia, serif; }
 .deck-sheet h2 { margin-top: 0; color: #111; }
@@ -1309,3 +1310,4 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
   .deck-sheet { border-radius: 0; padding: 0; }
 }
 .tag.persona { display: block; margin: .2rem auto 0; width: max-content; }
+.cup-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1rem; margin-top: .6rem; } @media (max-width: 900px) { .cup-grid { grid-template-columns: 1fr; } } .cup .pairing { grid-template-columns: 1fr auto 1fr auto auto; }

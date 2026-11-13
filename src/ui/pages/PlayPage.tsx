@@ -119,6 +119,17 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     return null;
   };
 
+  if (net.spectating && net.status !== 'playing') {
+    const sp = net.spectating;
+    return (
+      <>
+        <GameBoard key={`spec-${sp.names.join('-')}`} initial={sp.state} tutorial={false} onExit={() => online.unspectate()}
+          online={{ state: sp.state, send: () => {}, opponent: null, error: null }} />
+        <div className="replay-shield" />
+        <div className="replay-bar"><span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span><button className="small" onClick={() => online.unspectate()}>Stop watching</button></div>
+      </>
+    );
+  }
   if (net.status === 'playing' && net.game) {
     const g = net.game;
     return (
@@ -175,6 +186,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         {!tutorial && (
           <div className="more-modes">
             <a href="#tournament">🏅 Armory night</a>
+            <a href="#cups">🏆 Friend cups</a>
             <a href="#gauntlet">🏟 Gauntlet</a>
             <a href="#limited">📦 Sealed &amp; Draft</a>
             <a href="#puzzles">🧩 Lethal puzzles</a>
@@ -343,7 +355,9 @@ function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; on
         <div key={f.username} className="friend-row">
           <span className={`presence ${f.status}`} title={f.status} />
           <span className="grow">{f.name}</span>
-          <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : f.status === 'in-game' ? 'In a game' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>
+          {f.status === 'in-game'
+            ? <button className="small" title="Watch their game" onClick={() => online.spectate(f.username)}>👁 Watch</button>
+            : <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>}
         </div>
       ))}
     </div>

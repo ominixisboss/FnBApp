@@ -19,7 +19,9 @@ export type ClientMsg =
   | { t: 'leave' }
   | { t: 'emote'; id: string }
   | { t: 'challenge'; to: string; deck: DeckList; format: DeckFormat }
-  | { t: 'decline'; code: string };
+  | { t: 'decline'; code: string }
+  | { t: 'spectate'; username: string }
+  | { t: 'unspectate' };
 
 export type ServerMsg =
   | { t: 'hello'; user: string; inGame: boolean }
@@ -31,7 +33,9 @@ export type ServerMsg =
   | { t: 'emote'; id: string }
   | { t: 'challenged'; from: string; username: string; code: string; format: string }
   | { t: 'declined'; by: string }
-  | { t: 'rated'; before: number; after: number };
+  | { t: 'rated'; before: number; after: number }
+  | { t: 'spectate'; state: GameState; names: [string, string]; watching: string }
+  | { t: 'spectateEnd' };
 
 /** The emotes players can send in online games. */
 export const EMOTES = ['hello', 'gg', 'nice', 'thinking', 'oops', 'wow'];
@@ -60,6 +64,8 @@ interface Room {
   /** for replays: the starting position and every action in order (concessions note who conceded) */
   initial?: GameState;
   actions: { a: Action; by?: PlayerId }[];
+  /** friends watching: each follows one player's view */
+  spectators?: { ws: WebSocket; seat: PlayerId }[];
 }
 
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS ?? 120_000);
@@ -116,6 +122,9 @@ function seatOf(room: Room, userId: number): number {
 
 function broadcast(room: Room) {
   if (!room.state) return;
+  for (const sp of room.spectators ?? []) {
+    send(sp.ws, { t: 'spectate', state: viewFor(room.state, sp.seat), names: [room.seats[sp.seat].name, room.seats[1 - sp.seat]?.name ?? '?'], watching: room.seats[sp.seat].name });
+  }
   room.seats.forEach((seat, i) => {
     const opp = room.seats[1 - i];
     send(seat.ws, {
@@ -166,11 +175,34 @@ function saveReplay(room: Room) {
   return store.putReplay(`online-${room.code}`, json).catch((e) => console.error('could not save replay', e));
 }
 
+/** A finished online game between two members of a friend tournament fills in their open game there. */
+async function tournamentResult(room: Room) {
+  if (!room.state || room.state.winner === null || room.seats.length < 2) return;
+  const [a, b] = room.seats.map((x) => x.userId);
+  const winner = room.seats[room.state.winner].userId;
+  for (const raw of await store.tournamentsFor(a)) {
+    const t = JSON.parse(raw) as FriendTournament;
+    if (t.format !== room.format) continue;
+    const g = t.games.find((x) => x.winner === undefined && ((x.a === a && x.b === b) || (x.a === b && x.b === a)));
+    if (!g) continue;
+    g.winner = winner;
+    g.matchId = `online-${room.code}`;
+    await store.putTournament(t.id, t.players.map((p) => p.id), JSON.stringify(t));
+    return;
+  }
+}
+
+export interface FriendTournament {
+  id: string; name: string; format: string; owner: number; created: number;
+  players: { id: number; username: string; name: string }[];
+  games: { a: number; b: number; winner?: number; matchId?: string }[];
+}
+
 function finish(room: Room) {
   if (room.ended) return;
   room.ended = true;
   // save the result first, so stats and the leaderboard are up to date when players see "game over"
-  void Promise.all([record(room), saveReplay(room)]).finally(() => { broadcast(room); void rate(room).catch((e) => console.error('rating failed', e)); });
+  void Promise.all([record(room), saveReplay(room), tournamentResult(room)]).finally(() => { broadcast(room); void rate(room).catch((e) => console.error('rating failed', e)); });
   room.seats.forEach((s) => { if (s.leaveTimer) clearTimeout(s.leaveTimer); userRoom.delete(s.userId); });
   setTimeout(() => rooms.delete(room.code), 60_000);
 }
@@ -218,6 +250,7 @@ export function onConnect(ws: WebSocket, user: { id: number; username: string })
 
 export function onDisconnect(ws: WebSocket, userId: number) {
   if (sockets.get(userId) === ws) sockets.delete(userId);
+  for (const r of rooms.values()) if (r.spectators) r.spectators = r.spectators.filter((sp) => sp.ws !== ws);
   const code = userRoom.get(userId);
   const room = code ? rooms.get(code) : undefined;
   if (!room) return;
@@ -365,6 +398,24 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       rooms.delete(room.code);
       userRoom.delete(room.seats[0].userId);
       send(room.seats[0].ws, { t: 'cancelled' });
+      return;
+    }
+    case 'spectate': {
+      const target = await store.userByName(String(msg.username ?? ''));
+      if (!target) return err('No player with that name.');
+      if (!(await store.friends(user.id)).some((f) => f.id === target.id)) return err('You can only watch friends.');
+      const code = userRoom.get(target.id);
+      const room = code ? rooms.get(code) : undefined;
+      if (!room?.state || room.ended) return err(`${target.username} isn’t in a game right now.`);
+      for (const r of rooms.values()) if (r.spectators) r.spectators = r.spectators.filter((sp) => sp.ws !== ws);
+      const seat = seatOf(room, target.id) as PlayerId;
+      (room.spectators ??= []).push({ ws, seat });
+      send(ws, { t: 'spectate', state: viewFor(room.state, seat), names: [room.seats[seat].name, room.seats[1 - seat].name], watching: room.seats[seat].name });
+      return;
+    }
+    case 'unspectate': {
+      for (const r of rooms.values()) if (r.spectators) r.spectators = r.spectators.filter((sp) => sp.ws !== ws);
+      send(ws, { t: 'spectateEnd' });
       return;
     }
     default:

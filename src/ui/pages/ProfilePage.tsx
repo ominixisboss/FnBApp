@@ -1,5 +1,6 @@
 import { ACHIEVEMENTS, COSMETICS, computeProgress } from '../../stats/progress';
 import { localReplayIds } from '../../stats/replays';
+import { online } from '../../online/client';
 import { friends as friendsApi, ladder } from '../auth';
 import type { FriendRow, LadderRow } from '../auth';
 import type { CosmeticKind } from '../../stats/progress';
@@ -270,6 +271,7 @@ function FriendsManager() {
           <div key={f.username} className="friend-row">
             <span className={`presence ${f.status}`} title={f.status} /><Avatar heroId={f.avatarHeroId} size={26} />
             <span className="grow">{f.name} <span className="small muted">@{f.username} · {f.status === 'in-game' ? 'in a game' : f.status}</span></span>
+            {f.status === 'in-game' && <button className="small" onClick={() => { online.spectate(f.username); location.hash = 'play/online'; }}>👁 Watch</button>}
             <button className="small" onClick={() => { void friendsApi.remove(f.username).then(load); }}>Remove</button>
           </div>
         ))}
