@@ -23,6 +23,7 @@ import { loadMatches } from './stats/matches';
 import { online, useOnline } from './online/client';
 import ReplayPage from './ui/pages/ReplayPage';
 import PrivacyPage from './ui/pages/PrivacyPage';
+import GuidesPage from './ui/pages/GuidesPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -125,6 +126,7 @@ export default function App() {
             {route === 'cups' && <CupsPage />}
             {route === 'replay' && <ReplayPage id={rest[0]} />}
             {route === 'privacy' && <PrivacyPage />}
+            {route === 'guides' && <GuidesPage heroId={rest[0]} />}
           </div>
         )}
       </main>

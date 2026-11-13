@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { card } from '../../data/cardDb';
 import type { DeckFormat } from '../../deck/deck';
+import { botDeck } from '../../deck/botDecks';
 import { FORMATS, FORMAT_RULES, autoBuildDeck, formatName, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
@@ -42,13 +43,17 @@ interface Setup {
 interface Opponent { heroId: string; name: string; deck: DeckList }
 
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
-  const hashDeck = preselect ?? location.hash.split('/')[1];
+  const hashParts = location.hash.slice(1).split('/');
+  const hashDeck = preselect ?? hashParts[1];
+  // #play/as/<heroId> plays that hero's starter deck; #play/vs/<heroId> picks the opponent
+  const asHero = hashParts[1] === 'as' ? hashParts[2] : undefined;
+  const vsHero = hashParts[1] === 'vs' ? hashParts[2] : undefined;
   const decks = loadDecks();
   const preDeck = decks.find((d) => d.id === hashDeck);
   const [setup, setSetup] = useState<Setup>({
     format: preDeck?.format ?? 'blitz',
-    myDeckId: preDeck?.id ?? '',
-    oppHeroId: 'random',
+    myDeckId: preDeck?.id ?? (asHero ? `auto:${asHero}` : ''),
+    oppHeroId: vsHero ?? 'random',
     difficulty: tutorial ? 'easy' : 'normal',
     tutorial: !!tutorial,
   });
@@ -76,10 +81,10 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const rules = FORMAT_RULES[setup.format === 'casual' ? 'blitz' : setup.format];
   const start = () => {
     const fmt = setup.format;
-    const pool = myDeck ? toDeckList(myDeck) : myAutoHero ? toDeckList(autoBuildDeck(myAutoHero, fmt, Date.now() & 0xffff)) : null;
+    const pool = myDeck ? toDeckList(myDeck) : myAutoHero ? botDeck(myAutoHero, fmt, Date.now() & 0xffff) : null;
     if (!pool) return;
     const oppHero = setup.oppHeroId === 'random' ? heroes[Math.floor(Math.random() * heroes.length)].id : setup.oppHeroId;
-    const opp = { heroId: oppHero, name: `${card(oppHero).name.split(',')[0]} (bot)`, deck: toDeckList(autoBuildDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff)) };
+    const opp = { heroId: oppHero, name: `${card(oppHero).name.split(',')[0]} (bot)`, deck: botDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff) };
     setCtx({ pool, opp });
     setMatch(setup.bestOf === 3 ? { wins: [0, 0] } : null);
     setPre({ step: poolHasChoices(pool, rules.minDeck) && !setup.tutorial ? 'loadout' : 'dice' });
@@ -284,8 +289,8 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         {setup.oppHeroId !== 'random' && <button className="small" onClick={() => setSetup({ ...setup, oppHeroId: 'random' })}>🎲 Random opponent</button>}
         <div className="lobby-label">Difficulty</div>
         <div className="seg">
-          {(['easy', 'normal', 'hard', 'goldfish'] as Difficulty[]).map((d) => (
-            <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d[0].toUpperCase() + d.slice(1)}</button>
+          {(['easy', 'normal', 'hard', 'mythic', 'goldfish'] as Difficulty[]).map((d) => (
+            <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : d === 'mythic' ? 'Plays out many possible futures before each big decision. Takes about a second to think.' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d === 'mythic' ? '🔮 Mythic' : d[0].toUpperCase() + d.slice(1)}</button>
           ))}
         </div>
         <div className="row small">

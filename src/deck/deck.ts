@@ -222,6 +222,17 @@ function autoScore(c: Card, arch?: Archetype): number {
 const weaponScore = (w: Card) => n(w.power) - (getScript(w).activations.find((a) => a.attack)?.cost ?? 2) * 0.8;
 
 /** Build a legal, playable deck for any hero from the full card pool. */
+/** Main-deck cards a hero may play in a format, best first by the auto-builder's rough score. */
+export function mainDeckPool(heroId: string, format: DeckFormat): Card[] {
+  const hero = card(heroId);
+  const r = FORMAT_RULES[format];
+  const arch = archetypeFor(hero);
+  return getDb().cards
+    .filter((c) => eligibleForHero(c, hero) && (!r.legalKey || c.legal.includes(r.legalKey as never)))
+    .filter((c) => !isArenaCard(c) && !has(c, 'Hero') && c.pitch !== null && !c.types.includes('Resource') && !c.keywords.includes('Legendary'))
+    .sort((a, b) => autoScore(b, arch) - autoScore(a, arch));
+}
+
 export function autoBuildDeck(heroId: string, format: DeckFormat, seed = 1): Deck {
   const hero = card(heroId);
   const fmt: DeckFormat = format;

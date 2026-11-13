@@ -8,7 +8,7 @@ const MAX_IMAGES = 4000;
 const IMAGE_HOSTS = ['legendstory-production-s3-public.s3.amazonaws.com', 'storage.googleapis.com'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['./', './data/cards.json', './manifest.webmanifest']).catch(() => {})));
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['./', './data/cards.json', './data/bot-decks.json', './manifest.webmanifest']).catch(() => {})));
   self.skipWaiting();
 });
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));

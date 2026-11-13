@@ -45,6 +45,7 @@ const realWin = (m: MatchRecord) => m.won && m.oppLifeLeft <= 0;
 export function matchXp(m: MatchRecord): number {
   let xp = 40 + (m.won ? 60 : 0);
   if (m.difficulty === 'hard') xp += 20;
+  if (m.difficulty === 'mythic') xp += 40;
   if (m.mode === 'online') xp += 30;
   return xp;
 }
@@ -74,7 +75,7 @@ function questPool(seed: number): Quest[] {
     { id: 'dmg30', text: 'Deal 30 damage', goal: 30, reward: 120, progress: (ms) => ms.reduce((a, m) => a + (st(m)?.damageDealt ?? 0), 0) },
     { id: 'atk8', text: 'Attack 8 times', goal: 8, reward: 100, progress: (ms) => ms.reduce((a, m) => a + (st(m)?.attacks ?? 0), 0) },
     { id: 'blk6', text: 'Block with 6 cards', goal: 6, reward: 100, progress: (ms) => ms.reduce((a, m) => a + (st(m)?.blocks ?? 0), 0) },
-    { id: 'hard', text: 'Beat a Normal or Hard bot', goal: 1, reward: 150, progress: (ms) => ms.filter((m) => m.won && (m.difficulty === 'normal' || m.difficulty === 'hard')).length },
+    { id: 'hard', text: 'Beat a Normal or Hard bot', goal: 1, reward: 150, progress: (ms) => ms.filter((m) => m.won && (m.difficulty === 'normal' || m.difficulty === 'hard' || m.difficulty === 'mythic')).length },
     { id: 'burst10', text: 'Deal 10+ damage in one turn', goal: 1, reward: 150, progress: (ms) => ms.filter((m) => (st(m)?.maxTurnDamage ?? 0) >= 10).length },
   ];
 }
@@ -108,7 +109,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'wins-10', icon: '⚔', name: 'Seasoned', text: 'Win 10 games', goal: 10, reward: 200, check: (ms) => count(ms, won) },
   { id: 'wins-50', icon: '👑', name: 'Conqueror', text: 'Win 50 games', goal: 50, reward: 500, check: (ms) => count(ms, won) },
   { id: 'wins-100', icon: '🐉', name: 'Living Legend', text: 'Win 100 games', goal: 100, reward: 1000, check: (ms) => count(ms, won) },
-  { id: 'hard', icon: '💀', name: 'Giant Slayer', text: 'Beat a Hard bot', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.difficulty === 'hard') },
+  { id: 'hard', icon: '💀', name: 'Giant Slayer', text: 'Beat a Hard bot', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && (m.difficulty === 'hard' || m.difficulty === 'mythic')) },
+  { id: 'mythic', icon: '🔮', name: 'Fate Breaker', text: 'Beat a Mythic bot', goal: 1, reward: 400, check: (ms) => count(ms, (m) => m.won && m.difficulty === 'mythic') },
   { id: 'online', icon: '🌐', name: 'Proven', text: 'Win an online game', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.mode === 'online') },
   { id: 'classes-5', icon: '🎭', name: 'Versatile', text: 'Win with 5 different classes', goal: 5, reward: 300, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },
   { id: 'classes-all', icon: '🌈', name: 'Master of All', text: 'Win with 10 different classes', goal: 10, reward: 800, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },

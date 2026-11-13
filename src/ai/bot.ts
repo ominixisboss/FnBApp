@@ -12,6 +12,7 @@ import {
 import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
+import { chooseMythic } from './mythic';
 
 export interface BotDecision {
   action: Action;
@@ -539,6 +540,7 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
     const a: Action = s.phase === 'defend' ? { type: 'defend', uids: [] } : s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' };
     return { action: a, reason: 'Goldfish: does nothing.' };
   }
+  if (diff === 'mythic') return chooseMythic(s, pid);
   if (s.phase === 'action' && s.stack?.length) return planStackResponse(s, pid, diff);
   switch (s.phase) {
     case 'defend': return planDefense(s, pid, diff);
