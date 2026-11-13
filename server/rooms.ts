@@ -9,6 +9,7 @@ import { formatName, validateDeck } from '../src/deck/deck';
 import type { Deck, DeckFormat } from '../src/deck/deck';
 import { viewFor } from '../src/online/view';
 import { store } from './db';
+import { notify as pushNotify } from './push';
 import { createPod, joinPod, leavePod, pick as podPick, podDeck, startPod, submitDeck, userPod, viewFor as podView } from './pods';
 import type { PodView } from './pods';
 
@@ -270,9 +271,16 @@ export function onConnect(ws: WebSocket, user: { id: number; username: string })
     return;
   }
   send(ws, { t: 'hello', user: user.username, inGame: false });
+  const ch = pendingChallenge.get(user.id);
+  const chRoom = ch ? rooms.get(ch.code) : undefined;
+  if (ch && chRoom && !chRoom.state && !chRoom.ended && chRoom.seats[0].ws) send(ws, { t: 'challenged', ...ch });
+  else pendingChallenge.delete(user.id);
   const pod = userPod(user.id);
   if (pod) send(ws, { t: 'pod', pod: podView(pod, user.id) });
 }
+
+/** the latest challenge for each player, re-sent when they connect (it may have arrived while they were away) */
+const pendingChallenge = new Map<number, { from: string; username: string; code: string; format: string }>();
 
 const notifyPod = (userId: number, view: PodView | null) => send(sockets.get(userId) ?? null, { t: 'pod', pod: view });
 
@@ -411,8 +419,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       const target = await store.userByName(String(msg.to ?? ''));
       if (!target) return err('No player with that name.');
       if (!(await store.friends(user.id)).some((f) => f.id === target.id)) return err('You can only challenge friends.');
-      const tws = sockets.get(target.id);
-      if (!tws) return err(`${target.username} isn’t online right now.`);
+      const tws = sockets.get(target.id) ?? null; // offline friends get a push notification and see it when they open the app
       if (presence(target.id) === 'in-game') return err(`${target.username} is in a game.`);
       const format: DeckFormat = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(msg.format) ? msg.format : 'blitz';
       const bad = checkDeck(msg.deck, format);
@@ -423,6 +430,8 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       userRoom.set(user.id, room.code);
       send(ws, { t: 'waiting', code: room.code, format, queue: false });
       send(tws, { t: 'challenged', from: p.name, username: user.username, code: room.code, format });
+      pendingChallenge.set(target.id, { from: p.name, username: user.username, code: room.code, format });
+      void pushNotify(target.id, '⚔ Challenge!', `${p.name} challenges you to ${formatName(format)}.`, '/#play/online');
       return;
     }
     case 'podCreate': {
@@ -456,6 +465,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       userRoom.set(user.id, room.code);
       send(ws, { t: 'waiting', code: room.code, format: 'casual', queue: false });
       send(tws, { t: 'challenged', from: p.name, username: user.username, code: room.code, format: `${mine.pod.mode} table ${mine.pod.code}` });
+      void pushNotify(opp.userId!, '⚔ Challenge!', `${p.name} wants to play you with your ${mine.pod.mode} deck.`, '/#play/online');
       return;
     }
     case 'decline': {

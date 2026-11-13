@@ -13,6 +13,7 @@ import type { StatLine } from '../../stats/matches';
 import { loadProfile, saveProfile } from '../../stats/profile';
 import { HeroPicker } from './DecksPage';
 import { leaderboard, useAuth } from '../auth';
+import { disablePush, enablePush, pushEnabled, pushSupported } from '../push';
 import type { LeaderRow } from '../auth';
 
 const heroName = (id: string) => getDb().byId.get(id)?.name ?? 'Unknown hero';
@@ -210,6 +211,7 @@ export default function ProfilePage() {
         </>
       )}
 
+      {auth.user && auth.available && <NotificationsToggle />}
       {auth.user && auth.available && <FriendsManager />}
       {ladderRows && (
         <div className="panel">
@@ -304,3 +306,22 @@ function FriendsManager() {
     </div>
   );
 }
+
+function NotificationsToggle() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { void pushEnabled().then(setOn); }, []);
+  if (!pushSupported()) return null;
+  return (
+    <div className="panel row" style={{ justifyContent: 'space-between' }}>
+      <div><b>🔔 Notifications</b> <span className="small muted">when a friend challenges you or adds you to a friend cup, even with the app closed.</span>{msg && <div className="small err">{msg}</div>}</div>
+      <button className={on ? '' : 'primary'} disabled={on === null} onClick={async () => {
+        setMsg(null);
+        if (on) { await disablePush(); setOn(false); return; }
+        const e = await enablePush().catch((x: Error) => x.message);
+        if (e) setMsg(e); else setOn(true);
+      }}>{on ? 'Turn off' : 'Turn on'}</button>
+    </div>
+  );
+}
+

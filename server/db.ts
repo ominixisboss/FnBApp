@@ -48,6 +48,10 @@ export interface Store {
   putTournament(id: string, members: number[], json: string): Promise<void>;
   getTournament(id: string): Promise<string | undefined>;
   tournamentsFor(userId: number): Promise<string[]>;
+  /** web push subscriptions (JSON), one row per device */
+  addPushSub(userId: number, endpoint: string, json: string): Promise<void>;
+  removePushSub(endpoint: string): Promise<void>;
+  pushSubs(userId: number): Promise<string[]>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
 }
@@ -66,6 +70,7 @@ const EXTRA_TABLES = (big: string) => `
     CREATE TABLE IF NOT EXISTS friends (user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL, created_at ${big} NOT NULL, PRIMARY KEY (user_id, friend_id));
     CREATE TABLE IF NOT EXISTS replays (match_id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at ${big} NOT NULL);
     CREATE TABLE IF NOT EXISTS tournaments (id TEXT PRIMARY KEY, members TEXT NOT NULL, json TEXT NOT NULL, updated_at ${big} NOT NULL);
+    CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, json TEXT NOT NULL, created_at ${big} NOT NULL);
     CREATE TABLE IF NOT EXISTS season_ratings (user_id INTEGER NOT NULL, season TEXT NOT NULL, format TEXT NOT NULL, rating INTEGER NOT NULL, games INTEGER NOT NULL, peak INTEGER NOT NULL, PRIMARY KEY (user_id, season, format));
 `;
 const SEASON_LADDER_SQL = (a: string, b: string) => `
@@ -135,6 +140,9 @@ async function sqliteStore(): Promise<Store> {
     setSeason: db.prepare(SEASON_UPSERT(['?', '?', '?', '?', '?', '?'])),
     seasonLadder: db.prepare(SEASON_LADDER_SQL('?', '?')),
     seasonHistory: db.prepare('SELECT season, format, rating, games, peak FROM season_ratings WHERE user_id = ? ORDER BY season DESC'),
+    addPush: db.prepare('INSERT INTO push_subs (endpoint, user_id, json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, json = excluded.json'),
+    delPush: db.prepare('DELETE FROM push_subs WHERE endpoint = ?'),
+    pushSubs: db.prepare('SELECT json FROM push_subs WHERE user_id = ?'),
     friends: db.prepare(FRIENDS_SQL('?')),
     addFriend: db.prepare('INSERT OR IGNORE INTO friends (user_id, friend_id, created_at) VALUES (?, ?, ?)'),
     delFriend: db.prepare('DELETE FROM friends WHERE user_id = ? AND friend_id = ?'),
@@ -169,6 +177,9 @@ async function sqliteStore(): Promise<Store> {
     setSeasonRating: async (id, se, f, r) => { st.setSeason.run(id, se, f, r.rating, r.games, r.peak); },
     seasonLadder: async (se, f) => st.seasonLadder.all(se, f) as unknown as LadderRow[],
     seasonHistory: async (id) => st.seasonHistory.all(id) as unknown as (SeasonRating & { season: string; format: string })[],
+    addPushSub: async (id, e, json) => { st.addPush.run(e, id, json, Date.now()); },
+    removePushSub: async (e) => { st.delPush.run(e); },
+    pushSubs: async (id) => (st.pushSubs.all(id) as { json: string }[]).map((r) => r.json),
     friends: async (id) => st.friends.all(id) as unknown as FriendRow[],
     addFriend: async (a, b) => { const t = Date.now(); st.addFriend.run(a, b, t); st.addFriend.run(b, a, t); },
     removeFriend: async (a, b) => { st.delFriend.run(a, b); st.delFriend.run(b, a); },
@@ -235,6 +246,9 @@ async function postgresStore(url: string): Promise<Store> {
     setSeasonRating: async (id, se, f, r) => { await run(SEASON_UPSERT(['$1', '$2', '$3', '$4', '$5', '$6']), [id, se, f, r.rating, r.games, r.peak]); },
     seasonLadder: async (se, f) => (await run(SEASON_LADDER_SQL('$1', '$2'), [se, f])).rows as LadderRow[],
     seasonHistory: async (id) => (await run('SELECT season, format, rating, games, peak FROM season_ratings WHERE user_id = $1 ORDER BY season DESC', [id])).rows as (SeasonRating & { season: string; format: string })[],
+    addPushSub: async (id, e, json) => { await run('INSERT INTO push_subs (endpoint, user_id, json, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, json = excluded.json', [e, id, json, Date.now()]); },
+    removePushSub: async (e) => { await run('DELETE FROM push_subs WHERE endpoint = $1', [e]); },
+    pushSubs: async (id) => (await run('SELECT json FROM push_subs WHERE user_id = $1', [id])).rows.map((r) => r.json),
     friends: async (id) => (await run(FRIENDS_SQL('$1'), [id])).rows as FriendRow[],
     addFriend: async (a, b) => { const t = Date.now(); await run('INSERT INTO friends (user_id, friend_id, created_at) VALUES ($1, $2, $3), ($2, $1, $3) ON CONFLICT DO NOTHING', [a, b, t]); },
     removeFriend: async (a, b) => { await run('DELETE FROM friends WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)', [a, b]); },

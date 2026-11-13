@@ -205,3 +205,12 @@ export function useAuth() {
   const s = useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f); }, () => state);
   return { ...s, signIn, register, signOut, syncAll, pushProfile, setServerUrl, checkServer };
 }
+
+// ---------------------------------------------------------------- push notifications (web / installed web app)
+
+export const pushApi = {
+  key: () => call<{ key: string | null }>('/api/push/key'),
+  subscribe: (subscription: PushSubscriptionJSON) => call<{ ok: boolean }>('/api/push', { method: 'POST', body: JSON.stringify({ subscription }) }),
+  unsubscribe: (endpoint: string) => call<{ ok: boolean }>('/api/push', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+};
+

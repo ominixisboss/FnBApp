@@ -71,3 +71,24 @@ self.addEventListener('fetch', (e) => {
     }
   })());
 });
+
+// push notifications (friend challenges, friend cups); skipped if the app is open and visible
+self.addEventListener('push', (e) => {
+  let d = { title: 'FaB Trainer', body: '', url: '/' };
+  try { d = { ...d, ...e.data.json() }; } catch { /* plain text */ }
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (wins.some((w) => w.visibilityState === 'visible')) return;
+    await self.registration.showNotification(d.title, { body: d.body, icon: './icons/icon-192.png', badge: './icons/icon-192.png', data: { url: d.url }, tag: d.url });
+  })());
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || '/', self.registration.scope).href;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) { if ('focus' in w) { await w.focus(); if ('navigate' in w) await w.navigate(url).catch(() => {}); return; } }
+    await self.clients.openWindow(url);
+  })());
+});

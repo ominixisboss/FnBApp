@@ -315,4 +315,25 @@ describe('online play', () => {
     ca.ws.close();
     cb.ws.close();
   }, 30_000);
+
+  it('push: the server has a key, stores subscriptions, and an offline friend sees a challenge when they connect', async () => {
+    const key = await (await fetch(`${BASE}/api/push/key`)).json();
+    expect(key.key).toMatch(/^[A-Za-z0-9_-]{60,}$/);
+    const [a, b] = [await account('tess'), await account('ugo')];
+    const H = (t: string) => ({ 'content-type': 'application/json', authorization: `Bearer ${t}` });
+    expect((await fetch(`${BASE}/api/push`, { method: 'POST', headers: H(b.token), body: JSON.stringify({ subscription: { endpoint: 'not a url' } }) })).status).toBe(400);
+    const sub = { endpoint: 'https://push.invalid/abc', keys: { p256dh: 'BOr1', auth: 'x1' } };
+    expect((await fetch(`${BASE}/api/push`, { method: 'POST', headers: H(b.token), body: JSON.stringify({ subscription: sub }) })).status).toBe(200);
+    await fetch(`${BASE}/api/friends`, { method: 'POST', headers: H(a.token), body: JSON.stringify({ username: 'ugo' }) });
+    const ca = await connect(a.token);
+    ca.ws.send(JSON.stringify({ t: 'challenge', to: 'ugo', deck: toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1)), format: 'blitz' }));
+    await until(() => !!ca.waiting);
+    expect(ca.errors).toEqual([]); // ugo is offline, but the challenge still goes out
+    const cb = await connect(b.token);
+    await until(() => !!cb.challenged);
+    expect(cb.challenged).toEqual(expect.objectContaining({ username: 'tess' }));
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
 });
+
