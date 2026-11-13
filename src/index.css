@@ -1616,3 +1616,20 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .bar-more .portrait-only { display: none; }
 .event-chip { position: absolute; z-index: 11; right: calc(10px + var(--sa-r)); top: calc(94px + var(--sa-t)); max-width: 46vw; padding: 4px 10px; border-radius: 999px; background: #1a1006e6; border: 1px solid #c9a24a88; color: #f1e4cc; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pit-in .35s var(--spring); }
 @media (max-width: 640px) and (orientation: portrait) { .event-chip { top: calc(40px + var(--sa-t)); right: 6px; font-size: .62rem; } }
+/* phones: the dock spans the width (the corner buttons moved into ☰), message beside the button, nothing clipped */
+@media (max-width: 640px) and (orientation: portrait) {
+  .dock { left: 8px; right: 8px; width: auto; }
+  .dock .phase-ladder { display: none; }
+  .arena .prompt { flex-direction: row; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; }
+  .arena .prompt .msg { flex: 1; max-height: none; overflow: visible; font-size: .74rem; text-align: left; }
+  .arena .prompt button { width: auto; flex: 0 0 46%; }
+  .arena .prompt button.primary { min-height: 52px; font-size: .9rem; padding: .7em .6em; }
+  .stack-zone { right: 4px; transform: translateY(-50%) scale(.78); transform-origin: right center; }
+}
+/* phones: "Build a deck" is a slim row, not a half-screen card; PLAY appears once you've picked a deck */
+@media (max-width: 640px) and (orientation: portrait) {
+  .deckbox-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+  .deckbox-grid .deckbox-new { grid-column: 1 / -1; aspect-ratio: auto; min-height: 56px; grid-auto-flow: column; justify-content: center; gap: .5rem; }
+  .deckbox-grid .deckbox-new span { font-size: 1.4rem; }
+  .lobby-side .play-big:disabled { display: none; }
+}
