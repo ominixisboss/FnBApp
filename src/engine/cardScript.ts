@@ -11,11 +11,14 @@ export type AttackFilter =
   | { kind: 'subtype'; value: string } // dagger, sword, arrow, ...
   | { kind: 'class'; value: string } // Warrior, Ninja, ...
   | { kind: 'anyClass'; values: string[] } // "Assassin or Mystic"
-  | { kind: 'boosted' }; // "the next attack you boost"
+  | { kind: 'boosted' } // "the next attack you boost"
+  | { kind: 'runeGated' } // "the next attack action card you rune gate"
+  | { kind: 'classAttackAction'; value: string }; // "your next Guardian attack action card"
 
 export type Effect =
-  | { kind: 'arcane'; amount: number }
-  | { kind: 'damage'; amount: number }
+  /** any: "to any target" (allies too), otherwise a hero */
+  | { kind: 'arcane'; amount: number; any?: boolean }
+  | { kind: 'damage'; amount: number; any?: boolean }
   | { kind: 'gainLife'; amount: number }
   | { kind: 'loseLifeOpp'; amount: number }
   | { kind: 'draw'; amount: number }
@@ -59,6 +62,11 @@ export type Effect =
   | { kind: 'ifCond'; cond: Condition; effects: Effect[] }
   | { kind: 'nextWagerPower'; amount: number; overpower?: boolean }
   | { kind: 'noDefenseReactions' }
+  | { kind: 'costLess'; amount: number; filter: AttackFilter }
+  /** "This gets +N{p} for each Evo you have equipped" */
+  | { kind: 'perEvoPower'; amount: number }
+  /** steal a Gold token from each hero that controls more Gold than you */
+  | { kind: 'stealGold' }
   /** "Target defending (attack) action card gets +N{d}" */
   | { kind: 'buffDefender'; amount: number; cards: 'attackAction' | 'action' | 'any' }
   /** Clash: each hero reveals the top card of their deck; the greater {p} wins */
@@ -103,6 +111,12 @@ export type Condition =
   | { kind: 'oppTalent'; talent: string }
   | { kind: 'wageredThisLink' }
   | { kind: 'cheered' }
+  | { kind: 'hasAim' }
+  | { kind: 'scrapped' }
+  | { kind: 'beatChest' }
+  | { kind: 'noChest' }
+  | { kind: 'evoEquipped'; n: number }
+  | { kind: 'all'; conds: Condition[] }
   | { kind: 'booed' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
@@ -111,7 +125,7 @@ export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedB
 export type OptionalCostKind =
   | { kind: 'reveal'; talent: string } // Fusion: reveal an Ice / Earth / Lightning card from hand
   | { kind: 'charge'; pitch?: number } // put a card from hand into your hero's soul
-  | { kind: 'discard'; pitch?: number }
+  | { kind: 'discard'; pitch?: number; power?: number }
   | { kind: 'pay'; amount: number }
   | { kind: 'banishGrave'; n: number }
   | { kind: 'destroyTop' }
@@ -121,7 +135,7 @@ export type OptionalCostKind =
   | { kind: 'destroyOwn'; name?: string; type?: string }
   | { kind: 'arsenalToBottom' }
   /** banish a specific kind of card from your graveyard ("an aura", "a Nimblism") */
-  | { kind: 'banishGraveMatch'; name?: string; type?: string }
+  | { kind: 'banishGraveMatch'; name?: string; type?: string; types?: string[] }
   /** Decompose: banish N Earth cards and an action card from your graveyard */
   | { kind: 'decompose'; earth: number };
 
@@ -213,6 +227,19 @@ export interface CardScript {
   /** "Whenever the crowd cheers / boos you, ..." (permanents) */
   onCheer: Effect[];
   onBoo: Effect[];
+  /** keywords */
+  fragment?: boolean;
+  onFragment: Effect[];
+  runeGate?: boolean;
+  wateryGrave?: boolean;
+  heave?: number;
+  quell?: number;
+  suspense?: boolean;
+  mirage?: boolean;
+  guardwell?: boolean;
+  spectra?: boolean;
+  /** an Evo equipment card: played from hand, it replaces your base equipment in that slot */
+  evoSlot?: string;
   /** lasting effects */
   unpreventable?: boolean;
   noFromHand?: boolean;
@@ -268,10 +295,10 @@ export function parseEffect(raw: string): Effect[] | null {
     }
     return out;
   }
-  if ((m = s.match(/^deal (\d+) arcane damage(?: to (?:any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
-    return [{ kind: 'arcane', amount: +m[1] }];
-  if ((m = s.match(/^deal (\d+) damage to (?:target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
-    return [{ kind: 'damage', amount: +m[1] }];
+  if ((m = s.match(/^deal (\d+) arcane damage(?: to (any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
+    return [{ kind: 'arcane', amount: +m[1], ...(m[2]?.toLowerCase() === 'any target' ? { any: true } : {}) }];
+  if ((m = s.match(/^deal (\d+) damage to (target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
+    return [{ kind: 'damage', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}) }];
   if ((m = s.match(/^(?:you )?gain (\d+)\{h\}$/i))) return [{ kind: 'gainLife', amount: +m[1] }];
   if ((m = s.match(/^(?:target|each) (?:opposing )?hero loses (\d+)\{h\}$/i)))
     return [{ kind: 'loseLifeOpp', amount: +m[1] }];
@@ -356,6 +383,10 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'crowd', cheer: m[1].toLowerCase() === 'cheers', who }];
   }
   if (/^defense reactions?(?: cards)? can't be played this chain link$/i.test(s)) return [{ kind: 'noDefenseReactions' }];
+  if ((m = s.match(/^your next (\w+) attack action card this turn costs \{r\} less to play$/i))) return [{ kind: 'costLess', amount: 1, filter: { kind: 'classAttackAction', value: m[1] } }];
+  if ((m = s.match(/^the next attack action card you rune gate this turn gets \+(\d+)\{p\}$/i))) return [{ kind: 'nextAttackPower', amount: +m[1], filter: { kind: 'runeGated' } }];
+  if ((m = s.match(/^this gets \+(\d+)\{p\} for each evo you have equipped$/i))) return [{ kind: 'perEvoPower', amount: +m[1] }];
+  if (/^for each hero that controls more gold than you, steal a gold token they control$/i.test(s)) return [{ kind: 'stealGold' }];
   if ((m = s.match(/^target defending (attack action|action)? ?card gets \+(\d+)\{d\}(?: this chain link)?$/i)))
     return [{ kind: 'buffDefender', amount: +m[2], cards: m[1]?.toLowerCase() === 'attack action' ? 'attackAction' : m[1] ? 'action' : 'any' }];
   if ((m = s.match(/^the next time an attack you control wagers this turn, it gets \+(\d+)\{p\}$/i))) return [{ kind: 'nextWagerPower', amount: +m[1] }];
@@ -447,6 +478,15 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you have less \{h\} than (?:them|each other hero|the defending hero)$/.test(t)) return { kind: 'lessLife' };
   if (/^you have more \{h\} than (?:them|each other hero|the defending hero|an opposing hero)$/.test(t)) return { kind: 'moreLife' };
   if (/^you've wagered this chain link$/.test(t)) return { kind: 'wageredThisLink' };
+  if (/^this has an aim counter$/.test(t) || /^it has an aim counter$/.test(t)) return { kind: 'hasAim' };
+  if (/^it scrapped a card$/.test(t)) return { kind: 'scrapped' };
+  if (/^you've beaten chest this turn$/.test(t)) return { kind: 'beatChest' };
+  if (/^you don't control a chest equipment$/.test(t)) return { kind: 'noChest' };
+  if ((m = t.match(/^you have (\d+) or more evos equipped$/))) return { kind: 'evoEquipped', n: +m[1] };
+  if (/ and /.test(t)) {
+    const parts = t.split(/ and /).map((x) => parseCondition(x));
+    if (parts.every(Boolean)) return { kind: 'all', conds: parts as Condition[] };
+  }
   if (/^you've been cheered this turn$/.test(t) || /^the crowd has cheered you this turn$/.test(t)) return { kind: 'cheered' };
   if (/^you've been booed this turn$/.test(t) || /^the crowd has booed you this turn$/.test(t)) return { kind: 'booed' };
   if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
@@ -501,7 +541,7 @@ function emptyScript(): CardScript {
     spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false, steam: 0, steamUpkeep: false,
     intimidateOnAttack: false, additionalCost: {}, onPlay: [], onAttack: [], onHit: [],
     conditional: [], activations: [], modes: [], unparsed: [], coverage: 'full',
-    onDestroy: [], noEquipDefense: false, unity: 0, onDefend: [], crank: false, ephemeral: false, onCheer: [], onBoo: [],
+    onDestroy: [], noEquipDefense: false, unity: 0, onDefend: [], crank: false, ephemeral: false, onCheer: [], onBoo: [], onFragment: [],
   };
 }
 
@@ -531,6 +571,16 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^stealth$/i.test(s)) return true; // only referenced by other effects
   if (/^phantasm$/i.test(s)) return (sc.phantasm = true);
   if (/^crank$/i.test(s)) return (sc.crank = true);
+  if (/^fragment$/i.test(s)) return (sc.fragment = true);
+  if (/^rune gate$/i.test(s)) return (sc.runeGate = true);
+  if (/^watery grave$/i.test(s)) return (sc.wateryGrave = true);
+  if (/^suspense$/i.test(s)) return (sc.suspense = true);
+  if (/^mirage$/i.test(s)) return (sc.mirage = true);
+  if (/^guardwell$/i.test(s)) return (sc.guardwell = true);
+  if (/^spectra$/i.test(s)) return (sc.spectra = true);
+  if (/^cloaked$/i.test(s)) return true; // equipped face-down: no effect on play here
+  if ((m = s.match(/^heave (\d+)$/i))) return !!(sc.heave = +m[1]);
+  if ((m = s.match(/^quell (\d+)$/i))) return !!(sc.quell = +m[1]);
   if (/^ephemeral$/i.test(s)) return (sc.ephemeral = true);
   if (/^reload$/i.test(s)) { sc.onPlay.push({ kind: 'reload' }); return true; }
   if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
@@ -569,6 +619,14 @@ function compile(c: Card): CardScript {
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
+    if (/^scrap$/i.test(line) && !sc.optional) {
+      sc.optional = { timing: 'play', cost: { kind: 'banishGraveMatch', types: ['Item', 'Equipment'] }, effects: [], costText: 'scrap: banish an item or equipment from your graveyard', effectText: 'scrapped' };
+      continue;
+    }
+    if (/^beat chest$/i.test(line) && !sc.optional) {
+      sc.optional = { timing: 'play', cost: { kind: 'discard', power: 6 }, effects: [], costText: 'beat chest: discard a card with 6 or more {p}', effectText: 'beaten chest' };
+      continue;
+    }
     // modal cards: "Choose 1;" followed by one option per line
     if (/^choose 1;?$/i.test(line)) {
       while (li + 1 < lines.length && /[.!]$/.test(lines[li + 1])) {
@@ -705,6 +763,13 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if (keywordSentence(sc, sent)) return;
   let m: RegExpMatchArray | null;
   if (/^damage that would be dealt by this can't be prevented\.?$/i.test(sent)) { sc.unpreventable = true; return; }
+  sent = sent.replace(/^evo upgrade - /i, '');
+  if ((m = sent.match(/^whenever this fragments, (.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.onFragment.push(...e);
+  }
+  if ((m = sent.match(/^if you have a base (head|chest|arms|legs) equipped, transform it into this, then equip this\.?$/i))) { sc.evoSlot = titleCase(m[1]); return; }
+  if ((m = sent.match(/^this gets \+(\d+)\{p\} for each evo you have equipped\.?$/i)) && isAttack) { sc.onAttack.push({ kind: 'perEvoPower', amount: +m[1] }); return; }
   if (/^defense reactions?(?: cards)? can't be played this chain link\.?$/i.test(sent) && isAttack) { sc.onAttack.push({ kind: 'noDefenseReactions' }); return; }
   if (/^this can't be played from (?:your )?hand\.?$/i.test(sent)) { sc.noFromHand = true; return; }
   if ((m = sent.match(/^(?:this gets \+(\d+)\{d\} while defending a weapon attack|while this is defending a weapon attack, this gets \+(\d+)\{d\})\.?$/i))) {
@@ -846,7 +911,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if (/^this can't be defended by equipment\.?$/i.test(sent)) { sc.noEquipDefense = true; return; }
   if (/^this costs \{r\} less to play for each draconic chain link you control\.?$/i.test(sent)) { sc.costLessPer = 'draconicLink'; return; }
   if ((m = sent.match(/^if you control (?:a|an) ([a-z' ]+), this costs \{r\} less to play\.?$/i))) { sc.costLessIf = titleCase(m[1]); return; }
-  if ((m = sent.match(/^when this is destroyed, (.+)$/i))) {
+  if ((m = sent.match(/^when this (?:is destroyed|leaves the arena), (.+)$/i))) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onDestroy.push(...e);
   }
@@ -888,5 +953,7 @@ export function describeFilter(f: AttackFilter): string {
     case 'class': return `${f.value} attack`;
     case 'anyClass': return `${f.values.join(' or ')} attack`;
     case 'boosted': return 'attack you boost';
+    case 'runeGated': return 'attack action card you rune gate';
+    case 'classAttackAction': return `${f.value} attack action card`;
   }
 }

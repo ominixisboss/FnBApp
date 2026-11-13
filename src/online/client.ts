@@ -27,12 +27,16 @@ export interface OnlineState {
   notice: string | null;
   /** this room allows manual moves */
   sandbox: boolean;
+  /** a table that is filling up: who has joined, how many it seats, and whether you host it */
+  table: { seats: string[]; size: number; host: boolean } | null;
+  /** everyone at the table, starting with you (Ultimate Pit Fight) */
+  players: { name: string; avatar: string | null; connected: boolean; bot: boolean }[] | null;
   /** watching a friend's game */
   spectating: { state: GameState; names: [string, string]; watching: string } | null;
 }
 
 let ws: WebSocket | null = null;
-let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null, sandbox: false, spectating: null, pod: null };
+let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null, sandbox: false, spectating: null, pod: null, table: null, players: null };
 const subs = new Set<() => void>();
 const set = (p: Partial<OnlineState>) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
 let pending: object | null = null;
@@ -52,7 +56,7 @@ function connect() {
     const msg = JSON.parse(String(ev.data));
     switch (msg.t) {
       case 'hello': if (!msg.inGame && state.status === 'connecting') set({ status: 'idle' }); break;
-      case 'waiting': set({ status: 'waiting', code: msg.code ?? null, queue: !!msg.queue, format: msg.format, error: null }); break;
+      case 'waiting': set({ status: 'waiting', code: msg.code ?? null, queue: !!msg.queue, format: msg.format, error: null, table: msg.seats ? { seats: msg.seats, size: msg.size ?? 2, host: !!msg.host } : null }); break;
       case 'emote': set({ emote: { id: msg.id, at: Date.now() } }); break;
       case 'challenged': set({ challenge: { from: msg.from, username: msg.username, code: msg.code, format: msg.format } }); break;
       case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
@@ -60,7 +64,7 @@ function connect() {
       case 'rated': set({ rated: { before: msg.before, after: msg.after, season: msg.season, format: msg.format } }); break;
       case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching }, error: null }); break;
       case 'spectateEnd': set({ spectating: null }); break;
-      case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
+      case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null, table: null, players: msg.players ?? null }); break;
       case 'opponent': if (state.opponent) set({ opponent: { ...state.opponent, connected: msg.connected } }); break;
       case 'cancelled': set({ status: 'idle', code: null, queue: false, game: null, opponent: null }); break;
       case 'error': set({ error: msg.message, status: state.status === 'connecting' ? 'idle' : state.status }); break;
@@ -90,7 +94,9 @@ export const online = {
     ws?.close();
     set({ status: 'offline', game: null, code: null, opponent: null });
   },
-  host: (deck: DeckList, format: DeckFormat, sandbox = false) => sendMsg({ t: 'host', deck, format, sandbox }),
+  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number) => sendMsg({ t: 'host', deck, format, sandbox, size }),
+  /** Ultimate Pit Fight: start now, with bots in the empty seats */
+  fillBots: () => sendMsg({ t: 'fillBots' }),
   queue: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'queue', deck, format }),
   join: (code: string, deck: DeckList) => sendMsg({ t: 'join', code, deck }),
   cancel: () => sendMsg({ t: 'cancel' }),

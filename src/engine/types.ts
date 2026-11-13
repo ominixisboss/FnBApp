@@ -1,6 +1,7 @@
 import type { AttackFilter, Effect } from './cardScript';
 
-export type PlayerId = 0 | 1;
+/** seats around the table: 2 players normally, up to 4 in Ultimate Pit Fight */
+export type PlayerId = 0 | 1 | 2 | 3;
 /** 'goldfish' = an opponent that never acts (for testing decks in the sandbox) */
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'mythic' | 'goldfish';
 
@@ -8,6 +9,12 @@ export interface CardInst {
   uid: number;
   cardId: string;
   owner: PlayerId;
+  /** an arrow with an aim counter */
+  aim?: boolean;
+  /** turned face-up in the arsenal */
+  faceUp?: boolean;
+  /** watery grave: turned face-down in the graveyard */
+  faceDown?: boolean;
 }
 
 export interface EquipState {
@@ -15,6 +22,8 @@ export interface EquipState {
   defenseMod: number; // negative counters (battleworn / temper)
   destroyed: boolean;
   usedThisTurn: boolean;
+  /** quell was used: destroyed at the beginning of the end phase */
+  quelled?: boolean;
 }
 
 export interface WeaponState {
@@ -29,6 +38,12 @@ export interface PermanentState {
   ward: number;
   steam?: number; // Mechanologist steam counters
   counters?: number; // sandbox: generic counters
+  suspense?: number; // suspense counters
+  quelled?: boolean; // quell was used: destroyed at the beginning of the end phase
+  /** damage marked on an ally (it's destroyed when this reaches its life) */
+  damage?: number;
+  /** stolen: goes back to this player at the end of the action phase */
+  returnTo?: PlayerId;
 }
 
 export type TurnEffect =
@@ -38,7 +53,9 @@ export type TurnEffect =
   | { kind: 'preventNext'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string }
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
-  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string };
+  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }
+  /** "your next Guardian attack action card this turn costs {r} less" (Seismic Surge) */
+  | { kind: 'costLess'; amount: number; filter: AttackFilter; source: string };
 
 export interface PlayerState {
   id: PlayerId;
@@ -55,6 +72,20 @@ export interface PlayerState {
   graveyard: CardInst[];
   banished: CardInst[];
   intimidated: CardInst[];
+  /** counters on the hero card (e.g. Blaze's energy counters) */
+  heroCounters?: number;
+  /** knocked out of a multiplayer game */
+  eliminated?: boolean;
+  /** the opponent this player has chosen to attack next (multiplayer) */
+  focus?: PlayerId;
+  /** Shiyana: the hero she is copying until the start of her next turn */
+  copyOf?: string;
+  /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */
+  inventory?: string[];
+  /** Yoji: the next damage to this hero this turn is dealt to that player instead (1 of it prevented) */
+  redirectTo?: PlayerId;
+  /** extra intellect until the end of this player's next turn (The Librarian) */
+  bonusIntellect?: number;
   weapons: WeaponState[];
   equipment: EquipState[];
   permanents: PermanentState[]; // auras, items, allies, tokens
@@ -90,6 +121,7 @@ export interface TurnInfo {
   arcaneTaken?: boolean;
   clashesWon?: number;
   cheers?: number;
+  beatChest?: boolean;
   boos?: number;
 }
 
@@ -123,6 +155,10 @@ export interface ChainLink {
   /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
   wagers?: { tokens: string[]; winnerDraw?: number }[];
   noDefenseReactions?: boolean;
+  /** the defending hero (in a two-player game, the attacker's opponent) */
+  defender?: PlayerId;
+  /** attacking an ally (its permanent uid) instead of the hero */
+  target?: number;
   unpreventable?: boolean;
 }
 
@@ -152,7 +188,7 @@ export interface LogEntry {
 /** A decision a player makes in the middle of an effect: which cards to keep on top (opt), what to reload, or yes/no. */
 export interface PendingChoice {
   player: PlayerId;
-  kind: 'opt' | 'reload' | 'yesno';
+  kind: 'opt' | 'reload' | 'yesno' | 'target';
   prompt: string;
   /** the cards involved (opt: the top of your deck; reload: your hand) */
   options: { uid: number; cardId: string }[];
@@ -160,7 +196,11 @@ export interface PendingChoice {
     | { type: 'opt' }
     | { type: 'reload' }
     | { type: 'wager'; tokens: string[]; winnerDraw?: number; link: number }
-    | { type: 'betsy'; link: number };
+    | { type: 'betsy'; link: number }
+    | { type: 'attackTarget'; link: number }
+    | { type: 'damageTarget'; amount: number; arcane: boolean; source: string }
+    /** a hero ability's "you may": answered by `owner`'s ability (onChoice); bots answer `botYes` */
+    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
@@ -173,7 +213,7 @@ export interface GameState {
   phase: Phase;
   priority: PlayerId; // who must act now
   passes: number; // consecutive passes in reaction step
-  players: [PlayerState, PlayerState];
+  players: PlayerState[];
   chain: ChainLink[];
   chainOpen: boolean;
   winner: PlayerId | null;
@@ -196,6 +236,10 @@ export type Action =
   | { type: 'concede' }
   | { type: 'orderTriggers'; order: number[] }
   | { type: 'choose'; picks?: number[]; yes?: boolean }
+  /** Heave: at the end of your turn, pay to put a card from hand face-up into your arsenal */
+  | { type: 'heave'; uid: number; pitch: number[] }
+  /** multiplayer: choose which opponent you'll attack next */
+  | { type: 'focus'; player: PlayerId }
   | ManualAction;
 
 export type ManualAction =

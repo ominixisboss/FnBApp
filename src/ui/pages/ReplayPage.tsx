@@ -1,6 +1,6 @@
 // Watch a finished game again, step by step. AI games are stored in the browser, online games on the server.
 import { useEffect, useMemo, useState } from 'react';
-import { applyAction } from '../../engine/game';
+import { applyAction, concedeSeat } from '../../engine/game';
 import type { Action, GameState, PlayerId } from '../../engine/types';
 import { viewFor } from '../../online/view';
 import { loadLocalReplay } from '../../stats/replays';
@@ -31,7 +31,7 @@ export default function ReplayPage({ id }: { id?: string }) {
     const out: GameState[] = [data.initial];
     let s = data.initial;
     for (const st of data.steps) {
-      try { s = st.by !== undefined ? applyAction({ ...s, priority: st.by }, st.a) : applyAction(s, st.a); } catch { break; }
+      try { s = st.by !== undefined ? concedeSeat(s, st.by) : applyAction(s, st.a); } catch { break; }
       out.push(s);
     }
     return out.map((x) => quiet(data.viewer === 1 ? viewFor(x, 1) : x));

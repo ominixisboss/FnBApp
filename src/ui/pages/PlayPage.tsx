@@ -38,9 +38,19 @@ interface Setup {
   bestOf?: 1 | 3;
   /** chess clock: minutes per player (0 = off) */
   clock?: number;
+  /** Ultimate Pit Fight: how many bot opponents (2 or 3) */
+  pitBots?: 2 | 3;
 }
 
 interface Opponent { heroId: string; name: string; deck: DeckList }
+
+/** The pool cards left out of the chosen loadout are the inventory (Taylor's equipment, The Librarian's Tomes). */
+function withInventory(pool: DeckList, chosen?: DeckList): DeckList {
+  if (!chosen) return pool;
+  const left = [...pool.equipmentIds, ...pool.cardIds];
+  for (const id of [...chosen.equipmentIds, ...chosen.cardIds]) { const i = left.indexOf(id); if (i >= 0) left.splice(i, 1); }
+  return { ...chosen, inventoryIds: left.filter((id) => { const c = card(id); return c.types.includes('Equipment') || c.name.includes('Tome'); }) };
+}
 
 /** Games from a draft/sealed table use the deck the server holds for you; this placeholder is replaced there. */
 export const TABLE_DECK = { heroId: '', weaponIds: [], equipmentIds: [], cardIds: [] };
@@ -78,9 +88,10 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const myAutoHero = setup.myDeckId.startsWith('auto:') ? setup.myDeckId.slice(5) : null;
 
   // a match: your card pool and the opponent stay the same across games; between games you sideboard
-  const [ctx, setCtx] = useState<{ pool: DeckList; opp: Opponent } | null>(null);
+  const [ctx, setCtx] = useState<{ pool: DeckList; opp: Opponent; more?: Opponent[] } | null>(null);
   const [match, setMatch] = useState<{ wins: [number, number]; lastLoser?: PlayerId } | null>(null);
   const [pre, setPre] = useState<{ step: 'loadout' | 'dice'; chosen?: DeckList; chooser?: PlayerId } | null>(null);
+  const diceNames = useMemo(() => (ctx ? ['You', ctx.opp.name, ...(ctx.more ?? []).map((o) => o.name)] : []), [ctx]);
   const rules = FORMAT_RULES[setup.format === 'casual' ? 'blitz' : setup.format];
   const start = () => {
     const fmt = setup.format;
@@ -88,15 +99,27 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     if (!pool) return;
     const oppHero = setup.oppHeroId === 'random' ? heroes[Math.floor(Math.random() * heroes.length)].id : setup.oppHeroId;
     const opp = { heroId: oppHero, name: `${card(oppHero).name.split(',')[0]} (bot)`, deck: botDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff) };
-    setCtx({ pool, opp });
-    setMatch(setup.bestOf === 3 ? { wins: [0, 0] } : null);
+    // Ultimate Pit Fight: more bots around the table, each a different random hero
+    const more: Opponent[] = [];
+    if (fmt === 'upf') {
+      const used = new Set([oppHero, pool.heroId]);
+      for (let i = 1; i < (setup.pitBots ?? 3); i++) {
+        const left = heroes.filter((h) => !used.has(h.id));
+        const h = (left.length ? left : heroes)[Math.floor(Math.random() * (left.length || heroes.length))].id;
+        used.add(h);
+        more.push({ heroId: h, name: `${card(h).name.split(',')[0]} (bot)`, deck: botDeck(h, fmt, (Date.now() + i * 977) & 0xffff) });
+      }
+    }
+    setCtx({ pool, opp, more });
+    setMatch(setup.bestOf === 3 && fmt !== 'upf' ? { wins: [0, 0] } : null);
     setPre({ step: poolHasChoices(pool, rules.minDeck) && !setup.tutorial ? 'loadout' : 'dice' });
   };
   const begin = (first: PlayerId) => {
     if (!ctx || !pre) return;
     setGame(createGame([
-      { name: 'You', isBot: false, deck: pre.chosen ?? ctx.pool },
+      { name: 'You', isBot: false, deck: withInventory(ctx.pool, pre.chosen) },
       { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
+      ...(ctx.more ?? []).map((o) => ({ name: o.name, isBot: true, difficulty: setup.difficulty, deck: o.deck })),
     ], Date.now() & 0x7fffffff, setup.format, first));
     setPre(null);
   };
@@ -164,7 +187,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   if (pre && ctx) {
     return pre.step === 'loadout'
       ? <Loadout pool={ctx.pool} minDeck={rules.minDeck} maxDeck={rules.maxDeck} title={match && (match.wins[0] + match.wins[1] > 0) ? `Sideboarding · game ${match.wins[0] + match.wins[1] + 1}` : 'Your loadout'} onDone={(d) => setPre({ ...pre, chosen: d, step: 'dice' })} />
-      : <DiceRoll names={['You', ctx.opp.name]} chooser={pre.chooser} onDone={begin} />;
+      : <DiceRoll names={diceNames} chooser={pre.chooser} onDone={begin} />;
   }
   if (game) {
     const practice = setup.sandbox || setup.difficulty === 'goldfish';
@@ -247,7 +270,14 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                       <div className="room-code">{net.code}</div>
                       <button className="small" onClick={() => navigator.clipboard?.writeText(net.code!)}>Copy code</button>
                     </>
-                  ) : <div className="searching">Searching for an opponent<span className="dots" /></div>}
+                  ) : <div className="searching">{net.table && net.table.size > 2 ? 'Finding a Pit Fight table' : 'Searching for an opponent'}<span className="dots" /></div>}
+                  {net.table && net.table.size > 2 && (
+                    <>
+                      <div className="pit-wait">{Array.from({ length: net.table.size }, (_, i) => <span key={i} className={net.table!.seats[i] ? 'in' : ''}>{net.table!.seats[i] ?? 'empty seat'}</span>)}</div>
+                      <div className="small muted">{net.code ? 'The game starts when every seat is taken.' : 'Bots take the empty seats 30 seconds after a second player joins.'}</div>
+                      {(net.table.host || !net.code) && <button className="primary" onClick={() => online.fillBots()}>Start now with bots in the empty seats</button>}
+                    </>
+                  )}
                   <button onClick={() => online.cancel()}>Cancel</button>
                 </div>
               ) : (
@@ -265,8 +295,19 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     </div>
                   )}
                   {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}
-                  <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
-                  <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                  {setup.format === 'upf' ? (
+                    <>
+                      <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
+                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Find a Pit Fight table</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
+                      <div className="small muted">Pit Fight games are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
+                    </>
+                  ) : (
+                    <>
+                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                    </>
+                  )}
                   <label className="row small" title="Both players can move cards by hand, like a tabletop (for cards the simulator doesn't automate). Every move shows in the log."><input type="checkbox" checked={roomSandbox} onChange={(e) => setRoomSandbox(e.target.checked)} /> Allow manual moves in my room</label>
                   <div className="row">
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />
@@ -299,6 +340,13 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
             <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : d === 'mythic' ? 'Plays out many possible futures before each big decision. Takes about a second to think.' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d === 'mythic' ? '🔮 Mythic' : d[0].toUpperCase() + d.slice(1)}</button>
           ))}
         </div>
+        {setup.format === 'upf' && (
+          <div className="row small">
+            <span className="lobby-label">Table</span>
+            <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} heroes</button>)}</div>
+            <span className="muted">Offline vs bots. You can attack the heroes on your left and right; last one standing wins.</span>
+          </div>
+        )}
         <div className="row small">
           <span className="lobby-label">Match</span>
           <div className="seg">{([1, 3] as const).map((b) => <button key={b} className={(setup.bestOf ?? 1) === b ? 'on' : ''} onClick={() => setSetup({ ...setup, bestOf: b })}>{b === 1 ? 'Single game' : 'Best of 3'}</button>)}</div>

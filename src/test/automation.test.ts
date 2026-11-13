@@ -41,7 +41,7 @@ describe('conditions', () => {
 
 describe('optional costs', () => {
   it('paying "discard a card" gives the payoff, declining does not', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
     const s0 = game([c.id, filler(), filler()]);
     const uid = s0.players[0].hand[0].uid;
     const discard = s0.players[0].hand[1].uid;
@@ -52,7 +52,7 @@ describe('optional costs', () => {
     expect(yes.log.length).toBeGreaterThan(no.log.length);
   });
   it('the bot makes a decision on optional costs, with a card to pay when needed', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && o.timing !== 'defend' && o.minPower === undefined; });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.timing !== 'defend' && o.minPower === undefined; });
     const s = game([c.id, filler(), filler()]);
     const d = decideOptional(s, s.players[0], s.players[0].hand[0].uid, []);
     expect(d).toBeDefined();

@@ -2,19 +2,23 @@
 // player only what they may see (see src/online/view.ts).
 import type { WebSocket } from 'ws';
 import { getDb, isHero } from '../src/data/cardDb';
-import { applyAction, createGame } from '../src/engine/game';
+import { applyAction, concedeSeat, createGame } from '../src/engine/game';
 import type { DeckList } from '../src/engine/game';
 import type { Action, GameState, PlayerId } from '../src/engine/types';
 import { formatName, validateDeck } from '../src/deck/deck';
 import type { Deck, DeckFormat } from '../src/deck/deck';
-import { viewFor } from '../src/online/view';
+import { fromView, viewFor } from '../src/online/view';
+import { chooseAction } from '../src/ai/bot';
+import { botDeck } from '../src/deck/botDecks';
+import { heroesFor } from '../src/deck/deck';
 import { store } from './db';
 import { notify as pushNotify } from './push';
 import { createPod, joinPod, leavePod, pick as podPick, podDeck, startPod, submitDeck, userPod, viewFor as podView } from './pods';
 import type { PodView } from './pods';
 
 export type ClientMsg =
-  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean }
+  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number }
+  | { t: 'fillBots' }
   | { t: 'join'; code: string; deck: DeckList }
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
   | { t: 'cancel' }
@@ -35,8 +39,8 @@ export type ClientMsg =
 
 export type ServerMsg =
   | { t: 'hello'; user: string; inGame: boolean }
-  | { t: 'waiting'; code?: string; format: string; queue?: boolean }
-  | { t: 'state'; code: string; state: GameState; opponent: { name: string; avatar: string | null; connected: boolean }; matchId: string; sandbox?: boolean }
+  | { t: 'waiting'; code?: string; format: string; queue?: boolean; seats?: string[]; size?: number; host?: boolean }
+  | { t: 'state'; code: string; state: GameState; opponent: { name: string; avatar: string | null; connected: boolean }; matchId: string; sandbox?: boolean; players?: SeatInfo[] }
   | { t: 'opponent'; connected: boolean }
   | { t: 'error'; message: string }
   | { t: 'cancelled' }
@@ -57,8 +61,13 @@ export const seasonEnds = (now = new Date()) => Date.UTC(now.getUTCFullYear(), n
 export const tierOf = (r: number) => (r >= 1700 ? 'Mythic' : r >= 1550 ? 'Diamond' : r >= 1400 ? 'Platinum' : r >= 1250 ? 'Gold' : r >= 1100 ? 'Silver' : 'Bronze');
 const START_RATING = 1000;
 
+/** each player at the table as the viewer sees them (index 0 is the viewer) */
+export interface SeatInfo { name: string; avatar: string | null; connected: boolean; bot: boolean }
+
 interface Seat {
+  /** negative for a bot the server plays */
   userId: number;
+  bot?: boolean;
   name: string;
   avatar: string | null;
   deck: DeckList;
@@ -70,6 +79,12 @@ interface Room {
   code: string;
   format: DeckFormat;
   seats: Seat[];
+  /** players at the table: 2, or 3-4 in Ultimate Pit Fight */
+  size: number;
+  /** Pit Fight queue: when the waiting players get bots and start */
+  fillTimer?: ReturnType<typeof setTimeout>;
+  /** a bot's next move is scheduled */
+  botTimer?: ReturnType<typeof setTimeout>;
   state: GameState | null;
   isPrivate: boolean;
   ended: boolean;
@@ -101,7 +116,7 @@ export function presence(userId: number): 'offline' | 'online' | 'in-game' {
 
 /** Concede for seat i (records it for the replay). */
 function concede(room: Room, i: PlayerId) {
-  room.state = applyAction({ ...room.state!, priority: i }, { type: 'concede' });
+  room.state = concedeSeat(room.state!, i);
   room.actions.push({ a: { type: 'concede' }, by: i });
 }
 
@@ -139,13 +154,17 @@ function seatOf(room: Room, userId: number): number {
 function broadcast(room: Room) {
   if (!room.state) return;
   for (const sp of room.spectators ?? []) {
-    send(sp.ws, { t: 'spectate', state: viewFor(room.state, sp.seat), names: [room.seats[sp.seat].name, room.seats[1 - sp.seat]?.name ?? '?'], watching: room.seats[sp.seat].name });
+    send(sp.ws, { t: 'spectate', state: viewFor(room.state, sp.seat), names: [room.seats[sp.seat].name, room.seats[(sp.seat + 1) % room.seats.length]?.name ?? '?'], watching: room.seats[sp.seat].name });
   }
+  const n = room.seats.length;
+  const info = (x: Seat): SeatInfo => ({ name: x.name, avatar: x.avatar, connected: !!x.ws || !!x.bot, bot: !!x.bot });
   room.seats.forEach((seat, i) => {
-    const opp = room.seats[1 - i];
+    if (seat.bot) return;
+    const opp = room.seats[(i + 1) % n];
     send(seat.ws, {
       t: 'state', code: room.code, state: viewFor(room.state!, i as PlayerId), matchId: `online-${room.code}`,
-      opponent: { name: opp.name, avatar: opp.avatar, connected: !!opp.ws }, sandbox: !!room.sandbox,
+      opponent: { name: opp.name, avatar: opp.avatar, connected: !!opp.ws || !!opp.bot }, sandbox: !!room.sandbox,
+      players: room.seats.map((_, k) => info(room.seats[(i + k) % n])),
     });
   });
 }
@@ -153,13 +172,15 @@ function broadcast(room: Room) {
 /** Save the result to both players' histories (resolves once both writes have finished). */
 function record(room: Room): Promise<unknown> {
   const s = room.state!;
+  const n = room.seats.length;
   return Promise.all(room.seats.map((seat, i) => {
+    if (seat.bot) return null;
     const me = s.players[i];
-    const them = s.players[1 - i];
+    const them = s.players[(i + 1) % n];
     const m = {
       id: `online-${room.code}`, date: Date.now(), format: room.format, myHeroId: me.hero.cardId, oppHeroId: them.hero.cardId,
       deckId: null, deckName: 'Online deck', difficulty: 'online', won: s.winner === i, turns: s.turn,
-      lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: room.seats[1 - i].name,
+      lifeLeft: me.life, oppLifeLeft: them.life, mode: 'online', opponentName: n > 2 ? room.seats.filter((_, k) => k !== i).map((x) => x.name).join(', ') : room.seats[1 - i].name,
     };
     return store.putMatch(seat.userId, m.id, JSON.stringify(m), m.date, 'online', m.won).catch((e) => console.error('could not record match', e));
   }));
@@ -167,7 +188,7 @@ function record(room: Room): Promise<unknown> {
 
 /** Ranked games (quick match) move both players' Elo ratings. */
 async function rate(room: Room) {
-  if (room.isPrivate || !room.state || room.state.winner === null) return;
+  if (room.isPrivate || !room.state || room.state.winner === null || room.size > 2) return; // Pit Fight is unranked
   const [a, b] = await Promise.all(room.seats.map((s) => store.getRating(s.userId)));
   const ra = a?.rating ?? START_RATING;
   const rb = b?.rating ?? START_RATING;
@@ -195,14 +216,14 @@ function saveReplay(room: Room) {
   if (!room.initial || !room.state) return Promise.resolve();
   const json = JSON.stringify({
     matchId: `online-${room.code}`, date: Date.now(), format: room.format, ranked: !room.isPrivate,
-    users: room.seats.map((s) => s.userId), names: room.seats.map((s) => s.name), initial: room.initial, actions: room.actions,
+    users: room.seats.filter((s) => !s.bot).map((s) => s.userId), names: room.seats.map((s) => s.name), initial: room.initial, actions: room.actions,
   });
   return store.putReplay(`online-${room.code}`, json).catch((e) => console.error('could not save replay', e));
 }
 
 /** A finished online game between two members of a friend tournament fills in their open game there. */
 async function tournamentResult(room: Room) {
-  if (!room.state || room.state.winner === null || room.seats.length < 2) return;
+  if (!room.state || room.state.winner === null || room.seats.length !== 2) return;
   const [a, b] = room.seats.map((x) => x.userId);
   const winner = room.seats[room.state.winner].userId;
   for (const raw of await store.tournamentsFor(a)) {
@@ -228,20 +249,77 @@ function finish(room: Room) {
   room.ended = true;
   // save the result first, so stats and the leaderboard are up to date when players see "game over"
   void Promise.all([record(room), saveReplay(room), tournamentResult(room)]).finally(() => { broadcast(room); void rate(room).catch((e) => console.error('rating failed', e)); });
-  room.seats.forEach((s) => { if (s.leaveTimer) clearTimeout(s.leaveTimer); userRoom.delete(s.userId); });
+  if (room.botTimer) clearTimeout(room.botTimer);
+  room.seats.forEach((s) => { if (s.leaveTimer) clearTimeout(s.leaveTimer); if (userRoom.get(s.userId) === room.code) userRoom.delete(s.userId); });
   setTimeout(() => rooms.delete(room.code), 60_000);
 }
 
 function start(room: Room) {
-  const [a, b] = room.seats;
-  room.state = createGame([
-    { name: a.name, isBot: false, deck: a.deck },
-    { name: b.name, isBot: false, deck: b.deck },
-  ], Math.floor(Math.random() * 2 ** 31), room.format);
+  if (room.fillTimer) clearTimeout(room.fillTimer);
+  if (queues.get(queueKey(room.format)) === room) queues.delete(queueKey(room.format));
+  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format);
   room.initial = room.state;
   room.actions = [];
   broadcast(room);
+  runBots(room);
 }
+
+const queueKey = (format: DeckFormat) => format;
+const BOT_DELAY_MS = Number(process.env.BOT_DELAY_MS ?? 700);
+
+/** Ultimate Pit Fight: fill the empty seats with bots the server plays. */
+function fillWithBots(room: Room) {
+  const heroes = heroesFor('blitz');
+  const used = new Set(room.seats.map((x) => x.deck.heroId));
+  while (room.seats.length < room.size) {
+    const left = heroes.filter((h) => !used.has(h.id));
+    const h = (left.length ? left : heroes)[Math.floor(Math.random() * (left.length || heroes.length))];
+    used.add(h.id);
+    const k = room.seats.length;
+    room.seats.push({ userId: -k, bot: true, name: `${h.name.split(',')[0]} (bot)`, avatar: h.id, deck: botDeck(h.id, 'upf', Math.floor(Math.random() * 0xffff)), ws: null });
+  }
+  start(room);
+}
+
+/** Whoever must act next: the player making a choice, else the one with priority. */
+const actorOf = (s: GameState): PlayerId => s.pendingChoices?.[0]?.player ?? s.pendingTriggers?.player ?? s.priority;
+
+/** Play the bots' moves one at a time, so the humans can follow them. */
+function runBots(room: Room) {
+  if (room.botTimer || !room.state || room.ended) return;
+  const who = actorOf(room.state);
+  if (!room.seats[who]?.bot || room.state.players[who].eliminated) return;
+  room.botTimer = setTimeout(() => {
+    room.botTimer = undefined;
+    if (!room.state || room.ended) return;
+    const pid = actorOf(room.state);
+    if (!room.seats[pid]?.bot) return;
+    try {
+      const a = chooseAction(room.state, pid).action;
+      room.state = applyAction(room.state, a);
+      room.actions.push({ a });
+    } catch (e) {
+      // a bot that can't find a legal move concedes rather than stall the table
+      console.error('bot move failed', e);
+      concede(room, pid);
+    }
+    afterAction(room);
+  }, BOT_DELAY_MS);
+}
+
+/** After any move: end the game, or show everyone the new state and let the bots move. */
+function afterAction(room: Room) {
+  if (room.state!.phase === 'gameOver') finish(room);
+  else { broadcast(room); runBots(room); }
+}
+
+/** Tell everyone in a room that is still filling up who has joined. */
+function waitingUpdate(room: Room) {
+  room.seats.forEach((x, i) => send(x.ws, { t: 'waiting', code: room.isPrivate ? room.code : undefined, format: room.format, queue: !room.isPrivate, seats: room.seats.map((y) => y.name), size: room.size, host: i === 0 }));
+}
+
+/** the others at the table */
+const othersOf = (room: Room, i: number) => room.seats.filter((_, k) => k !== i);
 
 async function profileOf(userId: number, username: string) {
   const row = await store.getProfile(userId).catch(() => undefined);
@@ -266,8 +344,8 @@ export function onConnect(ws: WebSocket, user: { id: number; username: string })
     send(ws, { t: 'hello', user: user.username, inGame: !!room.state });
     if (room.state) {
       broadcast(room);
-      send(room.seats[1 - i]?.ws ?? null, { t: 'opponent', connected: true });
-    } else send(ws, { t: 'waiting', code: room.isPrivate ? room.code : undefined, format: room.format, queue: !room.isPrivate });
+      for (const o of othersOf(room, i)) send(o.ws, { t: 'opponent', connected: true });
+    } else waitingUpdate(room);
     return;
   }
   send(ws, { t: 'hello', user: user.username, inGame: false });
@@ -294,18 +372,16 @@ export function onDisconnect(ws: WebSocket, userId: number) {
   if (i < 0 || room.seats[i].ws !== ws) return;
   room.seats[i].ws = null;
   if (!room.state) {
-    // still waiting for an opponent: drop the room
-    rooms.delete(room.code);
-    userRoom.delete(userId);
-    if (queues.get(room.format) === room) queues.delete(room.format);
+    // still waiting for players: leave the room (it closes when nobody is left, or the host leaves a private one)
+    leaveWaiting(room, userId);
     return;
   }
   if (room.ended) return;
-  send(room.seats[1 - i].ws, { t: 'opponent', connected: false });
+  for (const o of othersOf(room, i)) send(o.ws, { t: 'opponent', connected: false });
   room.seats[i].leaveTimer = setTimeout(() => {
     if (room.seats[i].ws || room.ended || !room.state) return;
     concede(room, i as PlayerId);
-    finish(room);
+    afterAction(room);
   }, RECONNECT_GRACE_MS);
 }
 
@@ -317,32 +393,41 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
     case 'host':
     case 'queue': {
       if (current && rooms.get(current) && !rooms.get(current)!.ended) return err('You’re already in a game.');
-      const format: DeckFormat = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(msg.format) ? msg.format : 'blitz';
+      const format = parseFormat(msg.format);
       const bad = checkDeck(msg.deck, format);
       if (bad) return err(bad);
       const seat: Seat = { userId: user.id, name: prof.name, avatar: prof.avatar, deck: msg.deck, ws };
+      const size = format === 'upf' ? (msg.t === 'host' && Number((msg as { size?: number }).size) === 3 ? 3 : 4) : 2;
       if (msg.t === 'queue') {
-        const waiting = queues.get(format);
-        if (waiting && waiting.seats[0].userId !== user.id && waiting.seats[0].ws) {
-          queues.delete(format);
+        const waiting = queues.get(queueKey(format));
+        if (waiting && !waiting.seats.some((x) => x.userId === user.id) && waiting.seats.every((x) => x.ws)) {
           waiting.seats.push(seat);
           userRoom.set(user.id, waiting.code);
-          start(waiting);
+          if (waiting.seats.length >= waiting.size) start(waiting);
+          else { waitingUpdate(waiting); armFill(waiting); }
           return;
         }
       }
-      const room: Room = { code: newCode(), format, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox };
+      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
-      if (msg.t === 'queue') queues.set(format, room);
-      send(ws, { t: 'waiting', code: room.isPrivate ? room.code : undefined, format, queue: msg.t === 'queue' });
+      if (msg.t === 'queue') queues.set(queueKey(format), room);
+      waitingUpdate(room);
+      return;
+    }
+    case 'fillBots': {
+      const room = current ? rooms.get(current) : undefined;
+      if (!room || room.state || room.ended || room.format !== 'upf') return err('There’s no Pit Fight table waiting.');
+      if (room.isPrivate && room.seats[0].userId !== user.id) return err('Only the host can start the table.');
+      fillWithBots(room);
       return;
     }
     case 'join': {
       if (current && rooms.get(current) && !rooms.get(current)!.ended) return err('You’re already in a game.');
       const room = rooms.get(String(msg.code ?? '').trim().toUpperCase());
       if (!room || room.state || room.ended) return err('No open room with that code.');
-      if (room.seats[0].userId === user.id) return err('That’s your own room. Share the code with a friend.');
+      if (room.seats.some((x) => x.userId === user.id)) return err('That’s your own room. Share the code with a friend.');
+      if (room.seats.length >= room.size) return err('That table is full.');
       let deck = msg.deck;
       if (room.pod) {
         const pd = podDeck(user.id);
@@ -353,7 +438,8 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (bad) return err(bad);
       room.seats.push({ userId: user.id, name: prof.name, avatar: prof.avatar, deck, ws });
       userRoom.set(user.id, room.code);
-      start(room);
+      if (room.seats.length >= room.size) start(room);
+      else waitingUpdate(room);
       return;
     }
     case 'cancel':
@@ -362,13 +448,11 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (!room) return send(ws, { t: 'cancelled' });
       if (room.state && !room.ended) {
         const i = seatOf(room, user.id);
-        concede(room, i as PlayerId);
-        room.seats[i].ws = null; // they left: only the opponent gets the final state
-        finish(room);
-      } else {
-        rooms.delete(room.code);
-        if (queues.get(room.format) === room) queues.delete(room.format);
-      }
+        if (!room.state.players[i].eliminated) concede(room, i as PlayerId);
+        room.seats[i].ws = null; // they left: only the others get the final state
+        userRoom.delete(user.id);
+        afterAction(room);
+      } else if (!room.state) leaveWaiting(room, user.id);
       userRoom.delete(user.id);
       send(ws, { t: 'cancelled' });
       return;
@@ -384,7 +468,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
         if (!room.sandbox) return err('Manual moves aren’t allowed in this room.');
         if (a.op === 'power') return err('Use the attack’s own cards to change its power.');
         // each client sees itself as player 0: translate to the real seat
-        const real = 'player' in a ? { ...a, player: (a.player === 0 ? i : 1 - i) as PlayerId } : a;
+        const real = 'player' in a ? { ...a, player: fromView(a.player as PlayerId, i, room.seats.length) } : a;
         if ('player' in real && real.player !== i) return err('You can only move your own cards.');
         try { room.state = applyAction(room.state, real); room.actions.push({ a: real }); } catch (e) { return err(e instanceof Error ? e.message : String(e)); }
         broadcast(room);
@@ -396,14 +480,14 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           // a choice is answered by whoever is choosing; everything else needs priority
           const chooser = room.state.pendingChoices?.[0]?.player;
           if (a.type === 'choose' ? chooser !== i : room.state.priority !== i) return err('It’s not your move.');
-          room.state = applyAction(room.state, a);
-          room.actions.push({ a });
+          const real = a.type === 'focus' ? { ...a, player: fromView(a.player, i, room.seats.length) } : a;
+          room.state = applyAction(room.state, real);
+          room.actions.push({ a: real });
         }
       } catch (e) {
         return err(e instanceof Error ? e.message : String(e));
       }
-      if (room.state.phase === 'gameOver') finish(room);
-      else broadcast(room);
+      afterAction(room);
       return;
     }
     case 'emote': {
@@ -412,8 +496,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       const now = Date.now();
       if (now - (lastEmote.get(user.id) ?? 0) < 2000) return; // no spamming
       lastEmote.set(user.id, now);
-      const i = seatOf(room, user.id);
-      send(room.seats[1 - i]?.ws ?? null, { t: 'emote', id: msg.id });
+      for (const o of othersOf(room, seatOf(room, user.id))) send(o.ws, { t: 'emote', id: msg.id });
       return;
     }
     case 'challenge': {
@@ -423,11 +506,12 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (!(await store.friends(user.id)).some((f) => f.id === target.id)) return err('You can only challenge friends.');
       const tws = sockets.get(target.id) ?? null; // offline friends get a push notification and see it when they open the app
       if (presence(target.id) === 'in-game') return err(`${target.username} is in a game.`);
-      const format: DeckFormat = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(msg.format) ? msg.format : 'blitz';
+      const format = parseFormat(msg.format);
+      if (format === 'upf') return err('Create a Pit Fight room and share its code instead.');
       const bad = checkDeck(msg.deck, format);
       if (bad) return err(bad);
       const p = await profileOf(user.id, user.username);
-      const room: Room = { code: newCode(), format, seats: [{ userId: user.id, name: p.name, avatar: p.avatar, deck: msg.deck, ws }], state: null, isPrivate: true, ended: false, actions: [] };
+      const room: Room = { code: newCode(), format, size: 2, seats: [{ userId: user.id, name: p.name, avatar: p.avatar, deck: msg.deck, ws }], state: null, isPrivate: true, ended: false, actions: [] };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       send(ws, { t: 'waiting', code: room.code, format, queue: false });
@@ -462,7 +546,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       if (!tws) return err(`${opp.name} isn’t online right now.`);
       if (presence(opp.userId!) === 'in-game') return err(`${opp.name} is in a game.`);
       const p = await profileOf(user.id, user.username);
-      const room: Room = { code: newCode(), format: 'casual', seats: [{ userId: user.id, name: p.name, avatar: p.avatar, deck: mine.deck, ws }], state: null, isPrivate: true, ended: false, actions: [], pod: mine.pod.code };
+      const room: Room = { code: newCode(), format: 'casual', size: 2, seats: [{ userId: user.id, name: p.name, avatar: p.avatar, deck: mine.deck, ws }], state: null, isPrivate: true, ended: false, actions: [], pod: mine.pod.code };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       send(ws, { t: 'waiting', code: room.code, format: 'casual', queue: false });
@@ -489,7 +573,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       for (const r of rooms.values()) if (r.spectators) r.spectators = r.spectators.filter((sp) => sp.ws !== ws);
       const seat = seatOf(room, target.id) as PlayerId;
       (room.spectators ??= []).push({ ws, seat });
-      send(ws, { t: 'spectate', state: viewFor(room.state, seat), names: [room.seats[seat].name, room.seats[1 - seat].name], watching: room.seats[seat].name });
+      send(ws, { t: 'spectate', state: viewFor(room.state, seat), names: [room.seats[seat].name, room.seats[(seat + 1) % room.seats.length].name], watching: room.seats[seat].name });
       return;
     }
     case 'unspectate': {
@@ -500,6 +584,33 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
     default:
       return err('Unknown message');
   }
+}
+
+const FORMATS_ONLINE: DeckFormat[] = ['blitz', 'cc', 'll', 'sage', 'commoner', 'upf', 'casual'];
+const parseFormat = (f: unknown): DeckFormat => (FORMATS_ONLINE.includes(f as DeckFormat) ? f as DeckFormat : 'blitz');
+
+/** Pit Fight queue: once two or more are waiting, bots fill the empty seats after a short wait. */
+const FILL_MS = Number(process.env.PIT_FILL_MS ?? 30_000);
+function armFill(room: Room) {
+  if (room.fillTimer || room.seats.length < 2) return;
+  room.fillTimer = setTimeout(() => { room.fillTimer = undefined; if (!room.state && !room.ended && room.seats.length >= 2) fillWithBots(room); }, FILL_MS);
+}
+
+/** A player leaves a table that hasn't started. */
+function leaveWaiting(room: Room, userId: number) {
+  const i = seatOf(room, userId);
+  if (i < 0) return;
+  userRoom.delete(userId);
+  room.seats.splice(i, 1);
+  // a private room closes when its host leaves; any room closes when it's empty
+  if (!room.seats.length || (room.isPrivate && i === 0)) {
+    if (room.fillTimer) clearTimeout(room.fillTimer);
+    rooms.delete(room.code);
+    if (queues.get(queueKey(room.format)) === room) queues.delete(queueKey(room.format));
+    for (const x of room.seats) { userRoom.delete(x.userId); send(x.ws, { t: 'cancelled' }); }
+    return;
+  }
+  waitingUpdate(room);
 }
 
 export function roomCount() {

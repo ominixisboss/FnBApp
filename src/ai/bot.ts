@@ -6,10 +6,9 @@ import { getScript } from '../engine/cardScript';
 import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
-  defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, other, pitchOf,
-  playOptions, powerOf,
+  defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, pitchOf,
+  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf,
 } from '../engine/game';
-import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
 import { chooseMythic } from './mythic';
@@ -94,7 +93,7 @@ interface Item {
 function itemsFor(s: GameState, p: PlayerState): Item[] {
   return playOptions(s, p.id).map((opt) => {
     if (opt.kind === 'card') {
-      const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === opt.uid)!;
+      const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === opt.uid)!;
       const c = cardOf(inst);
       const sc = getScript(c);
       const fromArsenal = p.arsenal.some((a) => a.uid === opt.uid);
@@ -117,7 +116,7 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
       return { opt, value, goAgain: false, usesAP: false, isAttack: false, cost: opt.cost, uidInHand: opt.uid };
     }
     if (opt.index >= HERO_INDEX) {
-      const a = getHeroAbility(cardOf(p.hero))!.activations![opt.index - HERO_INDEX];
+      const a = heroAbilityOf(p)!.activations![opt.index - HERO_INDEX];
       const value = a.botValue?.(heroCtx(s, p)) ?? 0.5;
       return { opt, value, goAgain: !!a.goAgain, usesAP: !a.instant, isAttack: false, cost: opt.cost, uidInHand: null };
     }
@@ -130,11 +129,12 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
 
 /** Should the bot pay a card's optional cost ("you may discard a card. If you do, ...")? And with what? */
 export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch: number[]): OptionalChoice | undefined {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   if (!inst) return undefined;
   const oc = getScript(cardOf(inst)).optional;
   if (!oc || oc.timing === 'defend' || !optionalPayable(p, oc, uid)) return undefined;
-  const gain = effectValue(oc.effects);
+  // Scrap / Beat Chest have no effect of their own: their payoff is in the card's "if it scrapped / if you've beaten chest" text
+  const gain = oc.effects.length ? effectValue(oc.effects) : 1.5;
   const pool = p.hand.filter((h) => h.uid !== uid && !pitch.includes(h.uid));
   const cheapest = (filter: (c: Card) => boolean) =>
     pool.filter((h) => filter(cardOf(h))).sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
@@ -144,7 +144,8 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
   switch (oc.cost.kind) {
     case 'discard': case 'handToBottom': case 'banishHand': {
       const want = oc.cost.kind === 'discard' ? oc.cost.pitch : undefined;
-      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c));
+      const minP = oc.cost.kind === 'discard' ? oc.cost.power ?? 0 : 0;
+      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c) && powerOf(c) >= minP);
       if (!h) return { accept: false };
       choice = { accept: true, uid: h.uid };
       cost = cardPlayValue(cardOf(h)) * (oc.cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4;
@@ -190,7 +191,7 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
 /** Build a "play" action including mode and optional-cost decisions, with pitch that covers any extra cost. */
 function playAction(s: GameState, p: PlayerState, uid: number, cost: number, pitchPool: number[]): Action | null {
   let optional = decideOptional(s, p, uid, []);
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid)!;
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid)!;
   const oc = getScript(cardOf(inst)).optional;
   const extra = optional?.accept && oc?.cost.kind === 'pay' ? oc.cost.amount : 0;
   const pool = pitchPool.filter((u) => u !== optional?.uid);
@@ -201,7 +202,7 @@ function playAction(s: GameState, p: PlayerState, uid: number, cost: number, pit
 }
 
 function modeFor(p: PlayerState, uid: number): number {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   return inst ? bestMode(cardOf(inst)) : 0;
 }
 
@@ -236,7 +237,7 @@ function keepValue(c: Card, threat: number, life: number): number {
 }
 
 function opponentThreat(s: GameState, p: PlayerState): number {
-  const o = s.players[other(p.id)];
+  const o = s.players[oppOf(s, p.id)];
   // rough expectation: ~2.5 damage per card in hand + weapon
   return o.intellect * 2.5 + (o.weapons.length ? 2 : 0);
 }
@@ -254,7 +255,7 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     return { action: { type: 'pass' }, reason: 'Nothing worth playing.' };
   }
   const threat = opponentThreat(s, p);
-  const opp = s.players[other(p.id)];
+  const opp = s.players[oppOf(s, p.id)];
   const cands = items.slice(0, 10);
   let best: { plan: Item[]; score: number; pitch: number[] } = { plan: [], score: -Infinity, pitch: [] };
   const handCards = p.hand.map((h) => ({ uid: h.uid, c: cardOf(h) }));
@@ -474,7 +475,7 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
   const opts = playOptions(s, pid).filter((o) => o.kind === 'card');
   let best: { opt: PlayOption; gain: number } | null = null;
   for (const o of opts) {
-    const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!;
+    const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === o.uid)!;
     const c = cardOf(inst);
     const sc = getScript(c);
     let gain = 0;
@@ -483,7 +484,7 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
       const extra = effectValue(sc.onPlay.filter((e) => e.kind !== 'targetAttackPower' && e.kind !== 'weakenAttack'));
       if (sc.onPlay.some((e) => e.kind === 'weakenAttack')) continue;
       gain = Math.max(0, power + bonus - def) - Math.max(0, power - def) + extra * 0.7;
-      if (power + bonus - def >= s.players[other(pid)].life) gain += 50;
+      if (power + bonus - def >= s.players[oppOf(s, pid)].life) gain += 50;
     } else if (has(c, 'Defense Reaction')) {
       const d = (defenseOf(c) ?? 0) + sc.onPlay.reduce((a, e) => a + (e.kind === 'thisDefense' ? e.amount : 0), 0);
       gain = Math.min(d, Math.max(0, power - def));
@@ -510,7 +511,7 @@ function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty):
   if (difficulty === 'easy' || top.controller === pid || !has(cardOf(top.inst), 'Attack')) return pass;
   const p = s.players[pid];
   for (const o of playOptions(s, pid).filter((x) => x.kind === 'card')) {
-    const c = cardOf([...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!);
+    const c = cardOf([...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === o.uid)!);
     const prevent = getScript(c).onPlay.reduce((a, e) => a + (e.kind === 'preventNext' ? e.amount : 0), 0);
     if (prevent >= 2 && o.cost <= 1) {
       const a = playAction(s, p, o.uid, o.cost, p.hand.filter((h) => h.uid !== o.uid).map((h) => h.uid));
@@ -524,6 +525,10 @@ function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty):
 
 function planArsenal(s: GameState, pid: PlayerId): BotDecision {
   const p = s.players[pid];
+  // Heave: a big attack goes face-up into the arsenal and leaves Seismic Surge tokens for next turn
+  const hv = heaveOptions(s, pid).sort((a, b) => cardPlayValue(cardOf([...p.hand].find((h) => h.uid === b.uid)!)) - cardPlayValue(cardOf([...p.hand].find((h) => h.uid === a.uid)!)))[0];
+  // only when it doesn't strip the hand bare: leftover resources, or plenty of cards to pitch
+  if (hv && (p.resources >= hv.cost || p.hand.length >= 4)) return { action: { type: 'heave', uid: hv.uid, pitch: [] }, reason: `Heave ${cardOf(p.hand.find((h) => h.uid === hv.uid)!).name}: it waits face-up in the arsenal and the Seismic Surge tokens make next turn's Guardian attacks cheaper.` };
   const best = [...p.hand]
     .map((h) => ({ h, v: cardPlayValue(cardOf(h)) + (has(cardOf(h), 'Defense Reaction') ? 1.5 : 0) }))
     .sort((a, b) => b.v - a.v)[0];
@@ -551,6 +556,8 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
       const best = [...pc.options].sort((a, b) => cardPlayValue(C(b.cardId)) - cardPlayValue(C(a.cardId)))[0];
       return { action: { type: 'choose', picks: best ? [best.uid] : [] }, reason: 'Reload the strongest card.' };
     }
+    if (pc.kind === 'target') return { action: { type: 'choose', picks: [pc.options[0].uid] }, reason: 'Go for the hero.' };
+    if (pc.resume.type === 'hero') return { action: { type: 'choose', yes: pc.resume.botYes }, reason: pc.resume.botYes ? 'Worth it.' : 'Not worth it.' };
     return { action: { type: 'choose', yes: true }, reason: 'Take the bet.' };
   }
   if (s.pendingTriggers) {
@@ -575,7 +582,7 @@ function nameOfUid(s: GameState, uid: number): string {
 }
 
 function modeLabel(p: PlayerState, uid: number, mode: number): string | undefined {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   return inst ? getScript(cardOf(inst)).modes[mode]?.label : undefined;
 }
 
@@ -583,7 +590,7 @@ function modeLabel(p: PlayerState, uid: number, mode: number): string | undefine
 export function describeAction(s: GameState, a: Action): string {
   const p = s.players[s.priority];
   const nameOf = (uid: number) => {
-    const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid) ?? findSourceInst(p, uid);
+    const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid) ?? findSourceInst(p, uid);
     return inst ? cardOf(inst).name : '?';
   };
   switch (a.type) {
@@ -592,6 +599,8 @@ export function describeAction(s: GameState, a: Action): string {
     case 'defend': return a.uids.length ? `Defend with ${a.uids.map(nameOf).join(', ')}` : 'Don’t defend';
     case 'arsenal': return a.uid === null ? 'Leave arsenal empty' : `Put ${nameOf(a.uid)} in arsenal`;
     case 'pass': return s.phase === 'action' ? 'End your turn' : 'Pass';
+    case 'heave': return `Heave ${nameOf(a.uid)} into the arsenal`;
+    case 'choose': return a.picks ? 'Confirm the choice' : a.yes ? 'Yes' : 'No';
     case 'orderTriggers': return `Resolve triggers: ${a.order.map((u) => nameOfUid(s, u)).join(', then ')}`;
     default: return a.type;
   }
