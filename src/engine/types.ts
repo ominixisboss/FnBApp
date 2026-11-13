@@ -10,6 +10,8 @@ export interface CardInst {
   owner: PlayerId;
   /** an arrow with an aim counter */
   aim?: boolean;
+  /** turned face-up in the arsenal */
+  faceUp?: boolean;
   /** watery grave: turned face-down in the graveyard */
   faceDown?: boolean;
 }
@@ -69,6 +71,10 @@ export interface PlayerState {
   graveyard: CardInst[];
   banished: CardInst[];
   intimidated: CardInst[];
+  /** counters on the hero card (e.g. Blaze's energy counters) */
+  heroCounters?: number;
+  /** Shiyana: the hero she is copying until the start of her next turn */
+  copyOf?: string;
   weapons: WeaponState[];
   equipment: EquipState[];
   permanents: PermanentState[]; // auras, items, allies, tokens

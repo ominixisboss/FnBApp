@@ -7,9 +7,8 @@ import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
   defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, other, pitchOf,
-  heaveOptions, playOptions, powerOf,
+  heaveOptions, heroAbilityOf, playOptions, powerOf,
 } from '../engine/game';
-import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
 import { chooseMythic } from './mythic';
@@ -94,7 +93,7 @@ interface Item {
 function itemsFor(s: GameState, p: PlayerState): Item[] {
   return playOptions(s, p.id).map((opt) => {
     if (opt.kind === 'card') {
-      const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === opt.uid)!;
+      const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === opt.uid)!;
       const c = cardOf(inst);
       const sc = getScript(c);
       const fromArsenal = p.arsenal.some((a) => a.uid === opt.uid);
@@ -117,7 +116,7 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
       return { opt, value, goAgain: false, usesAP: false, isAttack: false, cost: opt.cost, uidInHand: opt.uid };
     }
     if (opt.index >= HERO_INDEX) {
-      const a = getHeroAbility(cardOf(p.hero))!.activations![opt.index - HERO_INDEX];
+      const a = heroAbilityOf(p)!.activations![opt.index - HERO_INDEX];
       const value = a.botValue?.(heroCtx(s, p)) ?? 0.5;
       return { opt, value, goAgain: !!a.goAgain, usesAP: !a.instant, isAttack: false, cost: opt.cost, uidInHand: null };
     }
@@ -130,7 +129,7 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
 
 /** Should the bot pay a card's optional cost ("you may discard a card. If you do, ...")? And with what? */
 export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch: number[]): OptionalChoice | undefined {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   if (!inst) return undefined;
   const oc = getScript(cardOf(inst)).optional;
   if (!oc || oc.timing === 'defend' || !optionalPayable(p, oc, uid)) return undefined;
@@ -192,7 +191,7 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
 /** Build a "play" action including mode and optional-cost decisions, with pitch that covers any extra cost. */
 function playAction(s: GameState, p: PlayerState, uid: number, cost: number, pitchPool: number[]): Action | null {
   let optional = decideOptional(s, p, uid, []);
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid)!;
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid)!;
   const oc = getScript(cardOf(inst)).optional;
   const extra = optional?.accept && oc?.cost.kind === 'pay' ? oc.cost.amount : 0;
   const pool = pitchPool.filter((u) => u !== optional?.uid);
@@ -203,7 +202,7 @@ function playAction(s: GameState, p: PlayerState, uid: number, cost: number, pit
 }
 
 function modeFor(p: PlayerState, uid: number): number {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   return inst ? bestMode(cardOf(inst)) : 0;
 }
 
@@ -476,7 +475,7 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
   const opts = playOptions(s, pid).filter((o) => o.kind === 'card');
   let best: { opt: PlayOption; gain: number } | null = null;
   for (const o of opts) {
-    const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!;
+    const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === o.uid)!;
     const c = cardOf(inst);
     const sc = getScript(c);
     let gain = 0;
@@ -512,7 +511,7 @@ function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty):
   if (difficulty === 'easy' || top.controller === pid || !has(cardOf(top.inst), 'Attack')) return pass;
   const p = s.players[pid];
   for (const o of playOptions(s, pid).filter((x) => x.kind === 'card')) {
-    const c = cardOf([...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!);
+    const c = cardOf([...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === o.uid)!);
     const prevent = getScript(c).onPlay.reduce((a, e) => a + (e.kind === 'preventNext' ? e.amount : 0), 0);
     if (prevent >= 2 && o.cost <= 1) {
       const a = playAction(s, p, o.uid, o.cost, p.hand.filter((h) => h.uid !== o.uid).map((h) => h.uid));
@@ -582,7 +581,7 @@ function nameOfUid(s: GameState, uid: number): string {
 }
 
 function modeLabel(p: PlayerState, uid: number, mode: number): string | undefined {
-  const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid);
+  const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid);
   return inst ? getScript(cardOf(inst)).modes[mode]?.label : undefined;
 }
 
@@ -590,7 +589,7 @@ function modeLabel(p: PlayerState, uid: number, mode: number): string | undefine
 export function describeAction(s: GameState, a: Action): string {
   const p = s.players[s.priority];
   const nameOf = (uid: number) => {
-    const inst = [...p.hand, ...p.arsenal].find((i) => i.uid === uid) ?? findSourceInst(p, uid);
+    const inst = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((i) => i.uid === uid) ?? findSourceInst(p, uid);
     return inst ? cardOf(inst).name : '?';
   };
   switch (a.type) {
