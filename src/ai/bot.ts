@@ -1,7 +1,7 @@
 // Heuristic AI for Flesh and Blood. The same evaluator powers the bots and the
 // "hint" button in practice games.
 import type { Card } from '../data/types';
-import { has } from '../data/cardDb';
+import { getDb, has } from '../data/cardDb';
 import { getScript } from '../engine/cardScript';
 import type { Effect } from '../engine/cardScript';
 import {
@@ -539,6 +539,19 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
     // a practice dummy: never plays, never blocks
     const a: Action = s.phase === 'defend' ? { type: 'defend', uids: [] } : s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' };
     return { action: a, reason: 'Goldfish: does nothing.' };
+  }
+  const pc = s.pendingChoices?.[0];
+  if (pc && pc.player === pid) {
+    const C = (id: string) => getDb().byId.get(id)!;
+    if (pc.kind === 'opt') {
+      const keep = pc.options.filter((o) => pitchOf(C(o.cardId)) !== 3 || has(C(o.cardId), 'Defense Reaction')).map((o) => o.uid);
+      return { action: { type: 'choose', picks: keep }, reason: 'Keep the strong cards on top, put the blues on the bottom.' };
+    }
+    if (pc.kind === 'reload') {
+      const best = [...pc.options].sort((a, b) => cardPlayValue(C(b.cardId)) - cardPlayValue(C(a.cardId)))[0];
+      return { action: { type: 'choose', picks: best ? [best.uid] : [] }, reason: 'Reload the strongest card.' };
+    }
+    return { action: { type: 'choose', yes: true }, reason: 'Take the bet.' };
   }
   if (s.pendingTriggers) {
     // order start-of-turn triggers: resources first (Vigor), then the rest as they are

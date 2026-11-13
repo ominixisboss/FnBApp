@@ -51,6 +51,16 @@ export type Effect =
   | { kind: 'createInHand'; name: string }
   /** your next X attack this turn gets "When this hits, <effects>" */
   | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: Effect[] }
+  | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: Effect[] }
+  /** wager with the defending hero (on the current attack); the winner creates the tokens / draws */
+  | { kind: 'wager'; tokens: string[]; winnerDraw?: number; optional: boolean; target?: boolean }
+  | { kind: 'crowd'; cheer: boolean; who: 'self' | 'opp' | 'revered' | 'reviled' }
+  /** "if <condition>, <effects>" checked when the effect resolves */
+  | { kind: 'ifCond'; cond: Condition; effects: Effect[] }
+  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean }
+  | { kind: 'noDefenseReactions' }
+  /** "Target defending (attack) action card gets +N{d}" */
+  | { kind: 'buffDefender'; amount: number; cards: 'attackAction' | 'action' | 'any' }
   /** Clash: each hero reveals the top card of their deck; the greater {p} wins */
   | { kind: 'clash'; winnerToken?: string; ifWin?: Effect[]; guardianOnly?: boolean };
 
@@ -88,7 +98,12 @@ export type Condition =
   | { kind: 'reprise' }
   | { kind: 'defendedByAttackAction' }
   | { kind: 'chainLinkAtLeast'; n: number }
-  | { kind: 'arcaneTaken' };
+  | { kind: 'arcaneTaken' }
+  | { kind: 'moreLife' }
+  | { kind: 'oppTalent'; talent: string }
+  | { kind: 'wageredThisLink' }
+  | { kind: 'cheered' }
+  | { kind: 'booed' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
@@ -195,6 +210,16 @@ export interface CardScript {
   crank: boolean;
   /** Ephemeral: ceases to exist instead of going to the graveyard */
   ephemeral: boolean;
+  /** "Whenever the crowd cheers / boos you, ..." (permanents) */
+  onCheer: Effect[];
+  onBoo: Effect[];
+  /** lasting effects */
+  unpreventable?: boolean;
+  noFromHand?: boolean;
+  /** "+N{d} while defending a weapon attack" / "if an attack reaction has been played this chain link, +N{d}" */
+  defendBonus?: { amount: number; when: 'weaponAttack' | 'reactionThisLink' };
+  /** a permanent: "Your (non-)attack action cards get +N{d} while defending" */
+  grantDefend?: { amount: number; cards: 'attackAction' | 'nonAttackAction' };
   unparsed: string[];
   coverage: 'full' | 'partial' | 'none';
 }
@@ -230,7 +255,10 @@ export function parseEffect(raw: string): Effect[] | null {
   let m: RegExpMatchArray | null;
   if (!s) return [];
   // compound "X and Y" / "X, then Y"
-  const parts = s.split(/,? then |\. Then |\.\s+(?=[A-Z])/i);
+  // "wager with the defending hero. The winner draws a card" is one effect, not two
+  const wm = s.match(/^(you may )?wager with (?:them|the defending hero)\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token)$/i);
+  if (wm) return [{ kind: 'wager', tokens: wm[4] ? [wm[4]] : [], winnerDraw: wm[3] ? toNum(wm[3].toLowerCase()) : undefined, optional: !!wm[1] }];
+  const parts = /"/.test(s) ? [s] : s.split(/,? then |\. Then |\.\s+(?=[A-Z])/i); // never split inside a quoted grant
   if (parts.length > 1) {
     const out: Effect[] = [];
     for (const p of parts) {
@@ -316,8 +344,42 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'draw', amount: toNum(m[1].toLowerCase()) }, { kind: 'discardRandom', amount: toNum(m[2].toLowerCase()) }];
   if ((m = s.match(/^discard (a|two|\d+) random cards?$/i))) return [{ kind: 'discardRandom', amount: toNum(m[1].toLowerCase()) }];
   if (/^reload$/i.test(s)) return [{ kind: 'reload' }];
+  if ((m = s.match(/^(you may )?wager (?:a|an) ([A-Z]\w*(?:, [A-Z]\w*)*(?:,? and [A-Z]\w*)?) tokens? with (?:them|the defending hero)$/))) {
+    const tokens = m[2].split(/,? and |, /).map((x) => x.trim()).filter(Boolean);
+    return [{ kind: 'wager', tokens, optional: !!m[1] }];
+  }
+  if ((m = s.match(/^(you may )?wager with (?:them|the defending hero)(?:\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token))?$/i))) {
+    return [{ kind: 'wager', tokens: m[4] ? [m[4]] : [], winnerDraw: m[3] ? toNum(m[3].toLowerCase()) : undefined, optional: !!m[1] }];
+  }
+  if ((m = s.match(/^the crowd (cheers|boos) (you|them|each revered hero|each reviled hero)$/i))) {
+    const who = { you: 'self', them: 'opp', 'each revered hero': 'revered', 'each reviled hero': 'reviled' }[m[2].toLowerCase()] as 'self';
+    return [{ kind: 'crowd', cheer: m[1].toLowerCase() === 'cheers', who }];
+  }
+  if (/^defense reactions?(?: cards)? can't be played this chain link$/i.test(s)) return [{ kind: 'noDefenseReactions' }];
+  if ((m = s.match(/^target defending (attack action|action)? ?card gets \+(\d+)\{d\}(?: this chain link)?$/i)))
+    return [{ kind: 'buffDefender', amount: +m[2], cards: m[1]?.toLowerCase() === 'attack action' ? 'attackAction' : m[1] ? 'action' : 'any' }];
+  if ((m = s.match(/^the next time an attack you control wagers this turn, it gets \+(\d+)\{p\}$/i))) return [{ kind: 'nextWagerPower', amount: +m[1] }];
+  if ((m = s.match(/^the next attack that wagers this turn gets \+(\d+)\{p\}( and overpower)?$/i))) return [{ kind: 'nextWagerPower', amount: +m[1], overpower: !!m[2] }];
+  if ((m = s.match(/^target (?:([\w]+) )?attack gets \+(\d+)\{p\} and wagers with the defending hero$/i))) {
+    const f = parseFilter(m[1] ?? '');
+    return f ? [{ kind: 'targetAttackPower', amount: +m[2], filter: f }, { kind: 'wager', tokens: [], optional: false, target: true }] : null;
+  }
+  if ((m = s.match(/^if (.+?), (.+)$/i))) {
+    const cond = parseCondition(m[1]);
+    const e = cond && parseEffect(m[2]);
+    if (cond && e) return [{ kind: 'ifCond', cond, effects: e }];
+  }
   if ((m = s.match(/^banish the top (?:(\d+) )?cards? of your deck$/i))) return [{ kind: 'banishTopSelf', amount: m[1] ? +m[1] : 1 }];
   if ((m = s.match(/^create (?:a|an) ([A-Z][\w' ]*?) in your hand$/))) return [{ kind: 'createInHand', name: m[1] }];
+  if ((m = s.match(/^(?:your next (?:([\w ]+?) )?attack|the next attack action card you play) this turn gets (?:\+(\d+)\{p\} and )?"when this attacks(?: a hero)?, (.+?)\.?"$/i))) {
+    const f = /^the next attack action card/i.test(s) ? { kind: 'attackAction' as const } : parseFilter(m[1] ?? '');
+    const e = parseEffect(m[3]);
+    if (!f || !e) return null;
+    const out: Effect[] = [];
+    if (m[2]) out.push({ kind: 'nextAttackPower', amount: +m[2], filter: f });
+    out.push({ kind: 'nextAttackOnAttack', filter: f, effects: e });
+    return out;
+  }
   if ((m = s.match(/^your next (?:([\w ]+?) )?attack this turn gets (?:\+(\d+)\{p\} and )?"(?:when|if) this hits(?: a hero)?, (.+?)\.?"$/i))) {
     const f = parseFilter(m[1] ?? '');
     const e = parseEffect(m[3]);
@@ -382,6 +444,11 @@ export function parseCondition(raw: string): Condition | null {
   if (/^(?:it's|it is|this is) defended by an attack action card$/.test(t)) return { kind: 'defendedByAttackAction' };
   if ((m = t.match(/^this is played (?:on|as|at) chain link (\d+) or higher$/))) return { kind: 'chainLinkAtLeast', n: +m[1] };
   if (/^you've been dealt arcane damage this turn$/.test(t)) return { kind: 'arcaneTaken' };
+  if (/^you have less \{h\} than (?:them|each other hero|the defending hero)$/.test(t)) return { kind: 'lessLife' };
+  if (/^you have more \{h\} than (?:them|each other hero|the defending hero|an opposing hero)$/.test(t)) return { kind: 'moreLife' };
+  if (/^you've wagered this chain link$/.test(t)) return { kind: 'wageredThisLink' };
+  if (/^you've been cheered this turn$/.test(t) || /^the crowd has cheered you this turn$/.test(t)) return { kind: 'cheered' };
+  if (/^you've been booed this turn$/.test(t) || /^the crowd has booed you this turn$/.test(t)) return { kind: 'booed' };
   if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
   return null;
 }
@@ -434,7 +501,7 @@ function emptyScript(): CardScript {
     spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false, steam: 0, steamUpkeep: false,
     intimidateOnAttack: false, additionalCost: {}, onPlay: [], onAttack: [], onHit: [],
     conditional: [], activations: [], modes: [], unparsed: [], coverage: 'full',
-    onDestroy: [], noEquipDefense: false, unity: 0, onDefend: [], crank: false, ephemeral: false,
+    onDestroy: [], noEquipDefense: false, unity: 0, onDefend: [], crank: false, ephemeral: false, onCheer: [], onBoo: [],
   };
 }
 
@@ -567,7 +634,7 @@ function compile(c: Card): CardScript {
         continue;
       }
     }
-    const sentences = line.split(/(?<=\.)\s+(?=[A-Z])/).map((x) => x.trim());
+    const sentences = joinQuotes(line.split(/(?<=\.)\s+(?=[A-Z])/).map((x) => x.trim()));
     // an optional cost on one line and its "If you do, ..." on the next
     if (li + 1 < lines.length && !sc.optional) {
       const nextFirst = lines[li + 1].split(/(?<=\.)\s+(?=[A-Z])/)[0];
@@ -622,10 +689,54 @@ function parseClash(a: string, b: string): { timing: 'attack' | 'defend'; effect
   return null;
 }
 
+/** Keep a quoted grant ("When this attacks, ... . The winner ...") in one sentence. */
+function joinQuotes(parts: string[]): string[] {
+  const out: string[] = [];
+  for (const p of parts) {
+    const prev = out[out.length - 1];
+    if (prev !== undefined && (prev.match(/"/g) ?? []).length % 2 === 1) out[out.length - 1] = `${prev} ${p}`;
+    else out.push(p);
+  }
+  return out;
+}
+
 function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPermanentLike: boolean) {
   if (!sent) return;
   if (keywordSentence(sc, sent)) return;
   let m: RegExpMatchArray | null;
+  if (/^damage that would be dealt by this can't be prevented\.?$/i.test(sent)) { sc.unpreventable = true; return; }
+  if (/^defense reactions?(?: cards)? can't be played this chain link\.?$/i.test(sent) && isAttack) { sc.onAttack.push({ kind: 'noDefenseReactions' }); return; }
+  if (/^this can't be played from (?:your )?hand\.?$/i.test(sent)) { sc.noFromHand = true; return; }
+  if ((m = sent.match(/^(?:this gets \+(\d+)\{d\} while defending a weapon attack|while this is defending a weapon attack, this gets \+(\d+)\{d\})\.?$/i))) {
+    sc.defendBonus = { amount: +(m[1] ?? m[2]), when: 'weaponAttack' }; return;
+  }
+  if ((m = sent.match(/^if an attack reaction has been played or activated this chain link, this gets \+(\d+)\{d\}\.?$/i))) {
+    sc.defendBonus = { amount: +m[1], when: 'reactionThisLink' }; return;
+  }
+  if ((m = sent.match(/^(?:your )?(attack action|non-attack action) cards(?: you control)? get \+(\d+)\{d\} while defending\.?$/i))) {
+    sc.grantDefend = { amount: +m[2], cards: m[1].toLowerCase() === 'attack action' ? 'attackAction' : 'nonAttackAction' }; return;
+  }
+  if ((m = sent.match(/^whenever the crowd (cheers|boos) you, (.+)$/i))) {
+    const e = parseEffect(m[2]);
+    if (e) return void (m[1].toLowerCase() === 'cheers' ? sc.onCheer : sc.onBoo).push(...e);
+  }
+  // "The winner creates a Flurry token." belongs to the wager before it
+  if ((m = sent.match(/^the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([a-z][\w ]*?) token)\.?$/i))) {
+    const w = [...sc.onPlay, ...sc.onAttack].reverse().find((x) => x.kind === 'wager');
+    if (w && w.kind === 'wager') { if (m[3]) w.tokens.push(m[3]); else w.winnerDraw = toNum(m[2].toLowerCase()); return; }
+  }
+  if ((m = sent.match(/^when this attacks or defends, (.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) { sc.onAttack.push(...e); sc.onDefend.push(...e); return; }
+  }
+  if ((m = sent.match(/^when this (attacks|hits) an? (revered|reviled) hero, (.+)$/i))) {
+    const e = parseEffect(m[3]);
+    if (e) return void (m[1].toLowerCase() === 'attacks' ? sc.onAttack : sc.onHit).push({ kind: 'ifCond', cond: { kind: 'oppTalent', talent: titleCase(m[2]) }, effects: e });
+  }
+  if ((m = sent.match(/^when this attacks a hero, (.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.onAttack.push(...e);
+  }
   // keyword-labelled conditions ("Rupture - If ...", "Starfall - If ...", "High Tide - If ...", "Reprise - If ...")
   sent = sent.replace(/^(?:rupture|starfall|high tide|reprise) - (?=if )/i, '');
   if ((m = sent.match(/^when this defends, (.+)$/i)) && !/^when this defends, (?:you may|clash)/i.test(sent)) {

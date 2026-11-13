@@ -1586,3 +1586,6 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
   .arena .mat-info .mat-name { font-size: .66rem; }
   .arena .mat-info .res { gap: .2rem; font-size: .7rem; }
 }
+.choice-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .7rem; }
+.choice-card { display: flex; flex-direction: column; align-items: center; gap: .25rem; cursor: pointer; transition: transform .2s var(--spring); }
+.choice-card.on { transform: translateY(-6px); }

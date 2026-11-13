@@ -103,3 +103,33 @@ describe('rules scenarios', () => {
     expect(s.players[0].effects.some((e) => e.kind === 'nextAttackPower')).toBe(true); // Might
   });
 });
+
+describe('lasting effects', () => {
+  it('unpreventable damage ignores prevention', () => {
+    let s = setup([id('Malign', 1)]);
+    s.players[1].effects.push({ kind: 'preventNext', amount: 3, source: 'test' });
+    s = play(s);
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = resolveLink(s);
+    expect(s.players[1].life).toBe(17);
+  });
+
+  it('defense reactions can’t be played on a Command and Conquer chain link', () => {
+    let s = setup([id('Command and Conquer', 1)], [id('Sink Below', 1)]);
+    s = play(s);
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' }); // attacker passes; the defender has priority but no legal reaction
+    expect(s.players[1].hand.length).toBe(1);
+    expect(s.chain.at(-1)!.noDefenseReactions).toBe(true);
+  });
+
+  it('target defending attack action card gets +4 defense', () => {
+    let s = setup([id('Wounding Blow', 1)], [id('Wounding Blow', 1), id('Reinforce the Line', 1)]);
+    s = play(s);
+    if (s.stack?.length) s = applyAction(s, { type: 'pass' }); // the opponent could respond with their instant; they don't yet
+    s = applyAction(s, { type: 'defend', uids: [s.players[1].hand[0].uid] });
+    s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'play', uid: s.players[1].hand[0].uid, pitch: [] });
+    expect(s.chain.at(-1)!.defenders[0].defense).toBe(3 + 4);
+  });
+});

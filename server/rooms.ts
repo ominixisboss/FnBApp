@@ -393,7 +393,9 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       try {
         if (a.type === 'concede') concede(room, i);
         else {
-          if (room.state.priority !== i) return err('It’s not your move.');
+          // a choice is answered by whoever is choosing; everything else needs priority
+          const chooser = room.state.pendingChoices?.[0]?.player;
+          if (a.type === 'choose' ? chooser !== i : room.state.priority !== i) return err('It’s not your move.');
           room.state = applyAction(room.state, a);
           room.actions.push({ a });
         }

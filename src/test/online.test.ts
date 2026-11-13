@@ -98,7 +98,9 @@ describe('online play', () => {
       for (let i = 0; i < 200 && ca.states.length !== cb.states.length; i++) await wait(5);
       const sa = ca.states.at(-1)!;
       if (sa.phase === 'gameOver') break;
-      const mover = sa.priority === 0 ? ca : cb;
+      // a pending choice is answered by whoever is choosing; otherwise the player with priority moves
+      const chooser = sa.pendingChoices?.[0]?.player;
+      const mover = (chooser ?? sa.priority) === 0 ? ca : cb;
       const view = mover.states.at(-1)!;
       const before = ca.states.length;
       mover.ws.send(JSON.stringify({ t: 'act', action: chooseAction(view, 0, 'normal').action }));

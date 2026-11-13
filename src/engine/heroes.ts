@@ -17,6 +17,7 @@ export interface HeroApi {
   /** destroy a permanent you control with this name; false if there is none */
   destroyNamed(p: PlayerState, name: string): boolean;
   discard(p: PlayerState, inst: CardInst): void;
+  crowd(p: PlayerState, cheer: boolean): void;
 }
 
 export interface HeroCtx {
@@ -58,6 +59,9 @@ export interface HeroAbility {
   activationCostMod?(ctx: HeroCtx, source: Card): number;
   onPitch?(ctx: HeroCtx, c: Card): void;
   onCrank?(ctx: HeroCtx): void;
+  onCheer?(ctx: HeroCtx): void;
+  onBoo?(ctx: HeroCtx): void;
+  onWagerWin?(ctx: HeroCtx, link: ChainLink): void;
   /** Levia: skip blood debt this end phase */
   skipBloodDebt?(ctx: HeroCtx): boolean;
   /** Lyath: halve base power / defense */
@@ -321,8 +325,8 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'tuffnut',
-    summary: 'Instant (once per turn, tap): pitch the top card of your deck.',
-    partial: true,
+    summary: 'Instant (tap): pitch the top card of your deck; if it has 6+ {p}, the crowd cheers you. Whenever the crowd cheers you, create a Toughness token.',
+    onCheer: ({ p, api }) => api.createToken(p, 'Toughness', 1),
     match: (t) => t.startsWith('Instant - {t}: Pitch the top card of your deck'),
     activations: [{
       label: 'Pitch the top card of your deck', instant: true, oncePerTurn: true,
@@ -333,6 +337,7 @@ export const HERO_ABILITIES: HeroAbility[] = [
         p.pitch.push(top);
         p.resources += cardOf(top).pitch ?? 0;
         api.log(p, `${p.name} pitches ${cardOf(top).name} from the top of the deck (+${cardOf(top).pitch ?? 0}).`);
+        if (Number(cardOf(top).power ?? 0) >= 6) api.crowd(p, true);
       },
       botValue: ({ s, p }) => (s.turnPlayer === p.id && s.phase === 'action' ? 0.3 : -1),
     }],
@@ -581,6 +586,58 @@ HERO_ABILITIES.push(
       resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.draw(p, 1); const d = lowestValue(p.hand); if (d) api.discard(p, d); },
       botValue: () => 1,
     }],
+  },
+);
+
+// ---------------------------------------------------------------- wagers and the crowd (Heavy Hitters, Super Slam)
+
+HERO_ABILITIES.push(
+  {
+    id: 'betsy',
+    summary: 'Whenever an attack you control wagers, you may pay {r}{r}: it gets +1{p} and overpower.',
+    match: (t) => t.startsWith('Whenever an attack you control wagers, you may pay {r}{r}'),
+    // handled where the wager is made (addWager), so you're asked at the right moment
+  },
+  {
+    id: 'olympia',
+    summary: 'The first time each of your attacks wins a wager, create a Gold token.',
+    match: (t) => t.startsWith('The first time each of your attacks wins a wager, create a Gold token'),
+    onWagerWin: ({ s, p, api }, l) => {
+      if (l.attacker !== p.id || p.turn.flags[`olyWin${l.inst.uid}`]) return;
+      p.turn.flags[`olyWin${l.inst.uid}`] = 1;
+      api.createToken(p, 'Gold', 1);
+      void s;
+    },
+  },
+  {
+    id: 'zane',
+    summary: 'Whenever you win a wager, the crowd cheers you. The first time the crowd cheers you each turn, each hero draws a card.',
+    partial: true, // 2H swords as 1H isn't modelled (decks are built normally)
+    match: (t) => t.includes('Whenever you win a wager, the crowd cheers you'),
+    onWagerWin: ({ p, api }) => api.crowd(p, true),
+    onCheer: ({ s, p, api }) => {
+      if (flag(p, 'zaneCheer')) return;
+      setFlag(p, 'zaneCheer');
+      for (const pl of s.players) api.draw(pl, 1);
+    },
+  },
+  {
+    id: 'pleiades',
+    summary: 'Whenever the crowd cheers you, create a Confidence token.',
+    partial: true, // the suspense-counter ability isn't automated
+    match: (t) => t.includes('Whenever the crowd cheers you, create a Confidence token'),
+    onCheer: ({ p, api }) => api.createToken(p, 'Confidence', 1),
+  },
+  {
+    id: 'killjoy',
+    summary: 'The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}.',
+    partial: true, // stealing Gold isn't automated
+    match: (t) => t.includes('The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}'),
+    onBoo: ({ s, p, api }) => {
+      if (flag(p, 'kjBoo')) return;
+      setFlag(p, 'kjBoo');
+      for (const pl of s.players) if (pl.id !== p.id && pl.life > p.life) { pl.life -= 1; api.log(pl, `${pl.name} loses 1 life (${pl.life}).`); }
+    },
   },
 );
 
