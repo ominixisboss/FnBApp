@@ -102,17 +102,17 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,560 |
-| Partly automated | ~1,430 |
-| Stats only (text not automated) | ~1,830 |
+| Fully automated | ~1,610 |
+| Partly automated | ~1,400 |
+| Stats only (text not automated) | ~1,810 |
 
 The cards people actually play come first: 92% of the card copies in the bots' meta decklists are fully automated (including Guardian crush payoffs, Frontline and Adversity equipment, Ninja combo grants and Enlightened Strike).
 
-Hero abilities for all 86 heroes are automated. Bolfar's extra hero defends the crush attack with its own block; Yorick's heroes share one deck and one graveyard; Theryon triggers on every automated "destroy a card you don't control". Fightmaster Kox's event deck doesn't exist in this simulator (event formats aren't simulated), so looking at it does nothing. Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
+Hero abilities for all 86 heroes are automated. Bolfar's extra hero defends the crush attack with its own block; Yorick's heroes share one deck and one graveyard; Theryon triggers on every automated "destroy a card you don't control". Fightmaster Kox arranges the Smash Palace event deck (see below). Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
 
 Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, reprise, decompose, chi, and choosing the order of your start-of-turn triggers. `src/test/rules.test.ts` checks rules scenarios (go again, dominate, blade break, temper, arcane barrier, intimidate, the chain closing, trigger order).
 
-**Your choices:** when an effect lets you decide, the game asks: which cards Opt keeps on top and in what order, which card Reload puts in your arsenal, whether to take a wager, and whether Betsy pays for her bonus. Anything that happens after the choice in the same effect waits for your answer. Bots decide instantly, and online the other player only sees that you're choosing, not the cards.
+**Your choices:** when an effect lets you decide, the game asks (including which card goes to the bottom for Enlightened Strike and Crown of Providence, which name Righteous Cleansing banishes, which card protects another hero, and where Bolfar's and Taipanis's attacks go): which cards Opt keeps on top and in what order, which card Reload puts in your arsenal, whether to take a wager, and whether Betsy pays for her bonus. Anything that happens after the choice in the same effect waits for your answer. Bots decide instantly, and online the other player only sees that you're choosing, not the cards.
 
 **Wagers and the crowd:** a wager is settled when its chain link resolves. If the attack hit, the attacker wins the wager; otherwise the defender does, and the winner creates the wagered tokens or gets the winner's bonus. The crowd cheering or booing does nothing by itself, but cards and heroes react to it ("whenever the crowd cheers you", "if you've been cheered this turn").
 
@@ -127,7 +127,9 @@ Also automated: heave (from the arsenal at end of turn, making Seismic Surge), a
 - **Create a Pit Fight room** seats 3 or 4. Share the code; the host can start any time with bots in the empty seats.
 - The server plays the bots, and every player sees the table from their own seat.
 - A player who leaves or disconnects for more than two minutes is knocked out, and the game goes on.
-- The public table is ranked on its own monthly Pit Fight ladder: your finishing place counts as a win against everyone below you and a loss to everyone above (bots don't count). It doesn't change your one-on-one rating. Rooms are unranked, and friend challenges and friend cups stay one-on-one.
+- The public table is ranked on its own monthly Pit Fight ladder: your finishing place counts as a win against everyone below you and a loss to everyone above (bots don't count). It doesn't change your one-on-one rating. Rooms are unranked. The host of a room can invite friends from the waiting screen, and spectators can switch seats.
+- **Pit Fight friend cups**: 3 or 4 friends play 3 tables; 1st place scores 3 points, 2nd 2, 3rd 1. A finished table with exactly the cup's players fills in the next round.
+- **Smash Palace event deck** (offline Pit Fight or a Pit Fight room; always on with Fightmaster Kox): at the start of every turn the turn player reveals the top of a shared deck of the 26 event cards and follows it. Kox can look at the top 3 and put them back in any order.
 - Pit Fight bots pick targets by threat: a hero they can knock out, a hero on low life, the table leader, or whoever keeps attacking them. They protect a hero when losing them would leave the bot alone with the attacker.
 
 The bots play every card using its stats plus whatever text is automated.

@@ -150,3 +150,23 @@ describe('your own choices', () => {
     expect(s.players[0].hand.some((h) => h.uid === keep)).toBe(true);
   });
 });
+
+describe('long tail', () => {
+  it('contracts, Ironhide, Cloak of Darkness, Bluster Buff and "enters the arena" are automated', () => {
+    for (const n of ['Already Dead', 'Ironhide Gauntlet', 'Cloak of Darkness', 'Bluster Buff', 'Concealed Object']) expect([n, getScript(findCard(n)!).coverage]).toEqual([n, 'full']);
+    expect(getScript(findCard('Already Dead')!).contract).toBe('nonAction');
+  });
+  it('Cloak of Darkness is banished to prevent 2 damage', () => {
+    const cloak = findCard('Cloak of Darkness')!.id;
+    const mk = (equip: string[]): DeckList => ({ heroId: findCard('Dorinthea')!.id, weaponIds: [], equipmentIds: equip, cardIds: Array(30).fill(filler()) });
+    let s = createGame([{ name: 'A', isBot: false, deck: mk([]) }, { name: 'B', isBot: false, deck: mk([cloak]) }], 3, 'blitz', 0);
+    s = structuredClone(s); s.players[0].actionPoints = 1; s.players[0].resources = 10;
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    const power = linkPower(currentLink(s)!);
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' }); s = applyAction(s, { type: 'pass' });
+    expect(s.players[1].banished.some((b) => b.cardId === cloak)).toBe(true);
+    expect(life - s.players[1].life).toBe(Math.max(0, power - 2)); // the attack minus the 2 prevented
+  });
+});

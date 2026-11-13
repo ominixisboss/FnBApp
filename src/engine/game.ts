@@ -763,6 +763,7 @@ function cleanseName(s: GameState, p: PlayerState, t: PlayerState, n: number, na
   const gone = top.filter((x) => cardOf(x).name === name);
   t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !gone.includes(x)));
   t.banished.push(...gone);
+  for (const g of gone) banishedFromOpp(s, p, g);
   log(s, p.id, `${src}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${gone.length} ${name}.`);
 }
 
@@ -925,8 +926,34 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
     case 'purse': { const q = hero(); if (q) { createToken(s, p, 'Gold', 1); createToken(s, q, 'Gold', 1); } break; }
     case 'drink': { const q = hero(); if (q) drink(s, p, q); break; }
     case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
+    case 'payOrWeaken': {
+      const [li, amount, cost] = _data!;
+      const l = s.chain[li];
+      if (!l) break;
+      if (yes && availableResources(p) >= cost) { pay(s, p, cost, autoPitch(p, Math.max(0, cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${cost} for ${cardOf(l.inst).name}.`); }
+      else { l.powerMod -= amount; log(s, p.id, `${cardOf(l.inst).name} gets -${amount}{p} (${linkPower(l)}).`); }
+      break;
+    }
   }
   void c;
+}
+
+/** `by` banished an opponent's card: contracts on `by`'s combat chain may be completed (each creates a Silver). */
+function banishedFromOpp(s: GameState, by: PlayerState, inst: CardInst) {
+  const c = cardOf(inst);
+  const pitch = c.pitch ?? 0;
+  const ok: Record<NonNullable<ReturnType<typeof getScript>['contract']>, boolean> = {
+    nonAction: !has(c, 'Action'), attackAction: has(c, 'Attack') && has(c, 'Action'), nonAttackAction: has(c, 'Action') && !has(c, 'Attack'),
+    red: pitch === 1, yellow: pitch === 2, blue: pitch === 3, reaction: has(c, 'Attack Reaction') || has(c, 'Defense Reaction'),
+    lowDefense: (defenseOf(c) ?? 99) <= 2, cheap: costOf(c) <= 1, costly: costOf(c) >= 2, goAgain: getScript(c).goAgain,
+  };
+  for (const l of s.chain) {
+    if (l.attacker !== by.id) continue;
+    const k = getScript(cardOf(l.inst)).contract;
+    if (!k || !ok[k]) continue;
+    log(s, by.id, `${cardOf(l.inst).name}: contract completed (${c.name} banished).`, 'Contract: when you banish a card of the named kind from an opponent, the contract is completed.');
+    createToken(s, by, 'Silver', 1);
+  }
 }
 
 /** A hero destroyed a card someone else controls: Theryon may punish it. */
@@ -2138,6 +2165,7 @@ function closeChain(s: GameState) {
     const e = s.players[d.inst.owner].equipment.find((x) => x.inst.uid === d.inst.uid);
     if (e && !e.destroyed) { e.defenseMod -= equipDefense(e); log(s, d.inst.owner, `${cardOf(e.inst).name} (guardwell) loses its defense.`); }
   }
+  for (const pl of s.players) for (const e of pl.equipment) if (!e.destroyed && pl.turn.flags[`closeDestroy${e.inst.uid}`]) { e.destroyed = true; pl.turn.flags[`closeDestroy${e.inst.uid}`] = 0; log(s, pl.id, `${cardOf(e.inst).name} is destroyed as the combat chain closes.`); }
   if (s.chain.length) log(s, null, 'The combat chain closes.', RULES.chainClose);
   s.chain = [];
   s.chainOpen = false;
@@ -2179,6 +2207,7 @@ function endTurn(s: GameState) {
   // quelled equipment is destroyed at the beginning of the end phase; stolen cards go home
   { const tp = s.players[s.turnPlayer]; if (tp.turn.flags.ire && tp.turn.attackActionHits + tp.turn.weaponHits === 0) { tp.life -= 2; log(s, tp.id, `Ire of the Crowd: ${tp.name} didn't hit a hero this turn and loses 2 life (${tp.life}).`); checkWin(s); if (s.phase === 'gameOver') return; } }
   for (const w of s.players[s.turnPlayer].weapons) if (getScript(cardOf(w.inst)).secondHitCounter && w.counters && !s.players[s.turnPlayer].turn.flags[`hits${w.inst.uid}`]) { w.counters = 0; log(s, s.turnPlayer, `${cardOf(w.inst).name} didn't hit this turn: its +1{p} counters are removed.`); }
+  { const tp = s.players[s.turnPlayer]; for (const pm of [...tp.permanents]) if (getScript(cardOf(pm.inst)).destroyAtEnd) removePermanent(s, tp, pm.inst.uid); }
   for (const e of s.players[s.turnPlayer].equipment) if (!e.destroyed && getScript(cardOf(e.inst)).endPhaseWear) { e.defenseMod -= 1; log(s, s.turnPlayer, `${cardOf(e.inst).name} gets a -1{d} counter (${equipDefense(e)}).`); }
   for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
@@ -2283,6 +2312,16 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
     dmg -= prevented;
     e.quelled = true;
     log(s, target, `${p.name} pays ${q} for ${cardOf(e.inst).name} (quell): ${prevented} damage prevented.`, 'Quell N: if you would be dealt damage, you may pay N resources to prevent N of it. If you do, destroy this at the beginning of the end phase.');
+  }
+  // "If you would be dealt damage, you may banish this to prevent N of that damage" (always worth it)
+  for (const e of [...p.equipment]) {
+    const bp = getScript(cardOf(e.inst)).banishPrevent;
+    if (!bp || e.destroyed || dmg <= 0) continue;
+    p.equipment = p.equipment.filter((x) => x !== e);
+    p.banished.push(e.inst);
+    const prevented = Math.min(bp, dmg);
+    dmg -= prevented;
+    log(s, target, `${p.name} banishes ${cardOf(e.inst).name} to prevent ${prevented} damage.`);
   }
   // ward
   for (const pm of [...p.permanents]) {
@@ -2402,6 +2441,31 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       }
       case 'optDealt': if (p.turn.flags.lastArcane) resolveEffects(s, p, [{ kind: 'opt', amount: p.turn.flags.lastArcane }], src); break;
+      case 'banishDefender': {
+        if (!l) break;
+        const t = s.players[defenderOf(l)];
+        const x = [...l.defenders].filter((d) => d.kind !== 'equipment').sort((a, b) => b.defense - a.defense)[0];
+        if (!x) break;
+        l.defenders = l.defenders.filter((d) => d !== x);
+        (s.players[x.inst.owner] ?? t).banished.push(x.inst);
+        log(s, p.id, `${srcName}: ${cardOf(x.inst).name} is banished.`);
+        banishedFromOpp(s, p, x.inst);
+        break;
+      }
+      case 'destroyIntimidated': {
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const x = t.intimidated.shift();
+        if (x) { toGraveyard(t, x); log(s, p.id, `${srcName}: ${cardOf(x).name} (intimidated) is destroyed.`); }
+        break;
+      }
+      case 'destroyAtChainClose': { const eq = p.equipment.find((x) => x.inst.uid === src.uid); if (eq) { p.turn.flags[`closeDestroy${src.uid}`] = 1; log(s, p.id, `${srcName} will be destroyed when the combat chain closes.`); } break; }
+      case 'payOrWeaken': {
+        if (!l || l.inst.uid !== src.uid) break;
+        if (!p.isBot) { ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: pay ${e.cost} or it gets -${e.amount}{p}?`, options: [], resume: { type: 'event', key: 'payOrWeaken', data: [s.chain.indexOf(l), e.amount, e.cost] } }); break; }
+        if (availableResources(p) >= e.cost && (p.resources >= e.cost || e.amount >= 2)) { pay(s, p, e.cost, autoPitch(p, Math.max(0, e.cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${e.cost} for ${srcName}.`); }
+        else { l.powerMod -= e.amount; log(s, p.id, `${srcName} gets -${e.amount}{p} (${linkPower(l)}).`); }
+        break;
+      }
       case 'runechantsPerNonAttack': {
         const n = p.turn.played.filter((id) => { const c = card(id); return has(c, 'Action') && !has(c, 'Attack'); }).length;
         if (n) createToken(s, p, 'Runechant', n);
@@ -2436,7 +2500,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
       case 'banishTopOpp':
-        for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); } }
+        for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
         break;
       case 'oppDiscardRandom':
         for (let i = 0; i < e.amount; i++) {
@@ -2452,6 +2516,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           const d = opp.hand.splice(Math.floor(rand(s) * opp.hand.length), 1)[0];
           opp.intimidated.push(d);
           log(s, opp.id, `Intimidate: a random card from ${opp.name}'s hand is banished until end of turn.`, RULES.intimidate);
+          banishedFromOpp(s, p, d);
         }
         break;
       case 'opt': {
