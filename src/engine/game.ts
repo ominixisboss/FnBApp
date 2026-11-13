@@ -515,7 +515,7 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
     case 'opt': {
       const uids = c.options.map((o) => o.uid);
       const top = p.deck.filter((d) => uids.includes(d.uid));
-      p.deck = p.deck.filter((d) => !uids.includes(d.uid));
+      p.deck.splice(0, p.deck.length, ...p.deck.filter((d) => !uids.includes(d.uid))); // in place: Yorick's heroes share one deck
       const keep = picks.map((u) => top.find((t) => t.uid === u)!).filter(Boolean);
       const bottom = top.filter((t) => !picks.includes(t.uid));
       p.deck.unshift(...keep);
@@ -653,10 +653,15 @@ function damageAlly(s: GameState, owner: PlayerState, uid: number, amount: numbe
   log(s, owner.id, `${source} deals ${amount} damage to ${c.name} (${Math.max(0, (c.health ?? 0) - pm.damage)} life left).`);
   if (pm.damage >= (c.health ?? 0)) {
     removePermanent(s, owner, uid);
-    const by = s.players[s.turnPlayer];
-    if (by.id !== owner.id) for (const pl of s.players) if (pl.id !== by.id && !pl.eliminated) ability(pl)?.onOtherDestroys?.(heroCtx(s, pl), by);
+    destroyedBy(s, s.turnPlayer, owner.id);
   }
   return amount;
+}
+
+/** A hero destroyed a card someone else controls: Theryon may punish it. */
+function destroyedBy(s: GameState, by: PlayerId, owner: PlayerId) {
+  if (by === owner) return;
+  for (const pl of s.players) if (pl.id !== by && !pl.eliminated) ability(pl)?.onOtherDestroys?.(heroCtx(s, pl), s.players[by]);
 }
 
 const evoCount = (p: PlayerState) => p.equipment.filter((e) => !e.destroyed && cardOf(e.inst).types.includes('Evo')).length;
@@ -1174,8 +1179,16 @@ export function checkDefense(s: GameState, uids: number[]): string | null {
 
 // ---------------------------------------------------------------- apply
 
+/** Yorick's shared deck and graveyard: make every player's arrays the same objects again (after JSON, e.g. a replay or an online save). */
+export function linkSharedZones(s: GameState) {
+  if (!s.sharedZones) return;
+  const [a] = s.players;
+  for (const p of s.players) { if (p.deck !== a.deck) p.deck = a.deck; if (p.graveyard !== a.graveyard) p.graveyard = a.graveyard; }
+}
+
 export function applyAction(prev: GameState, action: Action): GameState {
-  const s: GameState = structuredClone(prev);
+  const s: GameState = structuredClone(prev); // structuredClone keeps shared arrays shared
+  linkSharedZones(s);
   if (s.phase === 'gameOver' && action.type !== 'manual') return s;
   if (s.pendingTriggers && !['orderTriggers', 'concede', 'manual'].includes(action.type)) throw new Error('Choose the order of your start-of-turn triggers first.');
   if (s.pendingChoices?.length && !['choose', 'concede', 'manual'].includes(action.type)) throw new Error('Make your choice first.');
@@ -1677,6 +1690,22 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     log(s, l.attacker, `Piercing: ${cardOf(l.inst).name} gets +${l.piercing} power.`);
   }
   log(s, d.id, names.length ? `${d.name} defends with ${names.join(', ')} (${linkDefense(l)}).` : `${d.name} doesn’t defend.`);
+  // Bolfar: the attack also targets a second hero, who now declares their own defenders
+  if (l.also?.stage === 'pending' && !s.players[l.also.defender].eliminated) {
+    l.also.main = { defender: defenderOf(l), defenders: l.defenders };
+    l.defender = l.also.defender;
+    l.defenders = [];
+    l.also.stage = 'declaring';
+    s.priority = l.also.defender;
+    log(s, l.also.defender, `${s.players[l.also.defender].name} defends ${cardOf(l.inst).name} too.`);
+    return;
+  }
+  if (l.also?.stage === 'declaring' && l.also.main) {
+    l.also.defenders = l.defenders;
+    l.defenders = l.also.main.defenders;
+    l.defender = l.also.main.defender;
+    l.also.stage = 'done';
+  }
   s.phase = 'reaction';
   s.priority = l.attacker;
   s.passes = 0;
@@ -1729,6 +1758,21 @@ function resolveDamage(s: GameState) {
     if (db?.when === 'reactionThisLink' && (l.reactionCount ?? 0) > 0) { x.defense += db.amount; log(s, defender.id, `${cardOf(x.inst).name} gets +${db.amount} defense.`); }
   }
   const power = linkPower(l);
+  // Bolfar's second hero: they take the attack's damage minus their own defenders
+  if (l.also?.stage === 'done' && !s.players[l.also.defender].eliminated) {
+    const x = s.players[l.also.defender];
+    const xdef = l.also.defenders.reduce((a, d) => a + d.defense, 0);
+    const xdealt = Math.max(0, power - xdef) > 0 ? dealDamage(s, x.id, power - xdef, false, cardOf(l.inst).name, l.unpreventable) : 0;
+    if (xdealt > 0 && s.phase !== 'gameOver') {
+      const main = l.defender;
+      l.defender = x.id; // effects of the hit apply to this hero
+      const sc0 = getScript(cardOf(l.inst));
+      resolveEffects(s, attacker, [...sc0.onHit, ...l.extraOnHit], l.inst);
+      if (xdealt >= 4) for (const cnd of sc0.conditional) if (cnd.when === 'crush') { log(s, l.attacker, 'Crush!'); resolveEffects(s, attacker, cnd.effects, l.inst); }
+      l.defender = main;
+    }
+    if (s.phase === 'gameOver' || !s.chain.includes(l)) return;
+  }
   const def = linkDefense(l);
   const raw = Math.max(0, power - def);
   const allyTarget = l.target !== undefined && defender.permanents.some((pm) => pm.inst.uid === l.target);
@@ -1754,7 +1798,7 @@ function resolveDamage(s: GameState) {
   l.damage = dealt;
   settleWagers(s, l);
   // equipment wear
-  for (const d of l.defenders) {
+  for (const d of [...l.defenders, ...(l.also?.defenders ?? [])]) {
     const dp = s.players[d.inst.owner] ?? defender; // a protecting hero's cards go back to them
     if (d.kind === 'equipment') {
       const e = dp.equipment.find((e) => e.inst.uid === d.inst.uid);
@@ -2026,6 +2070,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         for (const x of cards) { if (e.kind === 'oppArsenalBottom') t.deck.push(x); else toGraveyard(t, x); }
         if (cards.length) log(s, p.id, `${srcName}: ${cards.length === 1 ? 'the card' : `${cards.length} cards`} in ${t.name}'s arsenal ${e.kind === 'oppArsenalBottom' ? 'goes to the bottom of their deck' : 'are destroyed'}.`);
         if (e.kind === 'oppArsenalDestroy' && e.goldEach && cards.length) createToken(s, p, 'Gold', cards.length);
+        if (e.kind === 'oppArsenalDestroy' && cards.length) destroyedBy(s, p.id, t.id);
         break;
       }
       case 'oppEquipCounter': {
@@ -2042,7 +2087,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         for (const x of top) { const k = cardOf(x).name; groups.set(k, [...(groups.get(k) ?? []), x]); }
         const best = [...groups.values()].sort((a, b) => b.length - a.length || powerOf(cardOf(b[0])) - powerOf(cardOf(a[0])))[0];
         if (!best) break;
-        t.deck = t.deck.filter((x) => !best.includes(x));
+        t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !best.includes(x)));
         t.banished.push(...best);
         log(s, p.id, `${srcName}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${best.length} ${cardOf(best[0]).name}.`);
         break;
@@ -2264,7 +2309,7 @@ function doManual(s: GameState, a: Extract<Action, { type: 'manual' }>) {
       log(s, a.player, `[manual] ${pname(s, a.player)} moves ${hidden && from === 'deck' ? 'a card' : cardOf(inst).name} from ${from} to ${where}.`);
       break;
     }
-    case 'shuffle': { const p = s.players[a.player]; p.deck = shuffle(s, p.deck); log(s, a.player, `[manual] ${pname(s, a.player)} shuffles their deck.`); break; }
+    case 'shuffle': { const p = s.players[a.player]; p.deck.splice(0, p.deck.length, ...shuffle(s, p.deck)); log(s, a.player, `[manual] ${pname(s, a.player)} shuffles their deck.`); break; }
     case 'counter': {
       const p = s.players[a.player];
       const pm = p.permanents.find((x) => x.inst.uid === a.uid);

@@ -159,6 +159,8 @@ export interface ChainLink {
   noDefenseReactions?: boolean;
   /** the defending hero (in a two-player game, the attacker's opponent) */
   defender?: PlayerId;
+  /** Bolfar: the attack also targets a second hero, who defends it separately */
+  also?: { defender: PlayerId; defenders: Defender[]; stage: 'pending' | 'declaring' | 'done'; main?: { defender: PlayerId; defenders: Defender[] } };
   /** attacking an ally (its permanent uid) instead of the hero */
   target?: number;
   unpreventable?: boolean;
@@ -208,6 +210,8 @@ export interface PendingChoice {
 }
 
 export interface GameState {
+  /** Yorick: every hero shares one deck and one graveyard (the players' arrays are the same objects) */
+  sharedZones?: boolean;
   seed: number;
   nextUid: number;
   turn: number;
