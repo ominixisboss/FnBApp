@@ -1633,3 +1633,28 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
   .deckbox-grid .deckbox-new span { font-size: 1.4rem; }
   .lobby-side .play-big:disabled { display: none; }
 }
+/* phones, second pass: a bigger board (no decorative chain titles, opponent and chain nearly full size), solid drawers */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena .chain-title, .arena .chain-start { display: none; }
+  .arena .mat-side.opp { --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .9), 66px); }
+  .arena .mat-chain { --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .9), 66px); }
+  .arena-board { top: calc(var(--ohw) * 1.1 + 8px + var(--sa-t)); bottom: calc(var(--ctl) + 76px); }
+  .drawer { left: 8px; right: 8px; width: auto; top: calc(56px + var(--sa-t)); bottom: calc(8px + var(--sa-b)); background: #15110d; z-index: 46; }
+}
+/* phones: three cards per row in the card database, deck editor and pickers (browse faster; tap a card for its details) */
+@media (max-width: 640px) and (orientation: portrait) {
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; }
+  .grid > * { min-width: 0; font-size: .78rem; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  .hero-pick { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+  .hero-pick .small { font-size: .66rem; line-height: 1.15; }
+}
+/* phones: lessons in one swipeable row of chips (the lesson starts on the first screen); achievements two per row */
+@media (max-width: 640px) and (orientation: portrait) {
+  .learn-layout .lesson-list { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: .45rem; -webkit-overflow-scrolling: touch; }
+  .learn-layout .lesson-list::-webkit-scrollbar { display: none; }
+  .learn-layout .lesson-list > * { flex: 0 0 auto !important; white-space: nowrap; }
+  .achievements { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+  .achievements > * { padding: .55rem; font-size: .8rem; }
+}
