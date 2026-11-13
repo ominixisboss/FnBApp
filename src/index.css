@@ -1335,3 +1335,5 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .avatar.frame-diamondf { border-color: #bdf0ff; box-shadow: 0 0 0 2px #3aa0c8, 0 0 16px #8fe3ffaa; }
 .season-tabs { display: flex; flex-wrap: wrap; gap: .3rem; }
 .season-tabs button.on { background: var(--accent, #b8322a); color: #fff; }
+.code-big { font-size: 1.3em; letter-spacing: .12em; color: var(--gold, #f6d58e); }
+.pack-reveal.dim { opacity: .45; pointer-events: none; }

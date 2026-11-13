@@ -42,6 +42,9 @@ interface Setup {
 
 interface Opponent { heroId: string; name: string; deck: DeckList }
 
+/** Games from a draft/sealed table use the deck the server holds for you; this placeholder is replaced there. */
+export const TABLE_DECK = { heroId: '', weaponIds: [], equipmentIds: [], cardIds: [] };
+
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
   const hashParts = location.hash.slice(1).split('/');
   const hashDeck = preselect ?? hashParts[1];
@@ -250,12 +253,14 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                 <>
                   {net.challenge && (
                     <div className="panel challenge-box">
-                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({formatName(net.challenge.format)})</span>
+                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({/table/.test(net.challenge.format) ? net.challenge.format : formatName(net.challenge.format)})</span>
                       <div className="row" style={{ marginTop: '.4rem' }}>
-                        <button className="primary" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.accept(d); }}>Accept with this deck</button>
+                        {/table/.test(net.challenge.format)
+                          ? <button className="primary" onClick={() => online.accept(TABLE_DECK)}>Accept with your table deck</button>
+                          : <button className="primary" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.accept(d); }}>Accept with this deck</button>}
                         <button onClick={() => online.decline()}>Decline</button>
                       </div>
-                      {!selectedHero && <div className="small muted">Pick a deck on the left first.</div>}
+                      {!selectedHero && !/table/.test(net.challenge.format) && <div className="small muted">Pick a deck on the left first.</div>}
                     </div>
                   )}
                   {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}

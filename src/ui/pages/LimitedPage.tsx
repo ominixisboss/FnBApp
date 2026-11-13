@@ -1,5 +1,5 @@
 // Sealed and Draft: open packs (or draft them against bots), build a 30+ card deck from your pool, then play it.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { eligibleForHero, getDb } from '../../data/cardDb';
 import type { Card } from '../../data/types';
 import { createGame } from '../../engine/game';
@@ -11,10 +11,13 @@ import { updateFeats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
 import GameBoard from '../components/GameBoard';
 import CardView from '../components/CardView';
+import { online, useOnline } from '../../online/client';
+import { useAuth } from '../auth';
+import { PodLive, PodOpponents, PodStart } from './PodTable';
 
 type Mode = 'sealed' | 'draft';
 interface Draft { round: number; packs: string[][]; heroes: string[]; picks: string[][] }
-interface Session { mode: Mode; set: string; seed: number; step: 'open' | 'hero' | 'draft' | 'build'; pool: string[]; opened: number; heroId?: string; deck: string[]; draft?: Draft }
+interface Session { mode: Mode; set: string; seed: number; step: 'open' | 'hero' | 'draft' | 'build'; pool: string[]; opened: number; heroId?: string; deck: string[]; draft?: Draft; pod?: string }
 const KEY = 'fab-trainer.limited.v1';
 const load = (): Session | null => { try { return JSON.parse(localStorage.getItem(KEY) ?? 'null'); } catch { return null; } };
 const save = (s: Session | null) => { try { if (s) localStorage.setItem(KEY, JSON.stringify(s)); else localStorage.removeItem(KEY); } catch { /* ignore */ } };
@@ -29,6 +32,16 @@ export default function LimitedPage() {
   const setSess = (s: Session | null) => { save(s); setSessState(s); };
   const [game, setGame] = useState<GameState | null>(null);
   const [mode, setMode] = useState<Mode>('sealed');
+  const net = useOnline();
+  const pod = net.pod;
+  // when your table finishes drafting (or opens its sealed packs), build from the pool the server dealt you
+  useEffect(() => {
+    if (pod?.phase === 'building' && sess?.pod !== pod.code) {
+      setSess({ mode: pod.mode === 'sealed' ? 'sealed' : 'draft', set: pod.set, seed: 0, step: 'hero', pool: pod.you.pool, opened: SEALED_PACKS, deck: [], pod: pod.code });
+    }
+  }, [pod?.phase, pod?.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  const auth = useAuth();
+  useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
   const [set, setSet] = useState(LIMITED_SETS[0][0]);
 
   const start = () => {
@@ -54,6 +67,7 @@ export default function LimitedPage() {
     );
   }
 
+  if (pod && pod.phase !== 'building') return <PodLive />;
   if (!sess) {
     return (
       <div className="col" style={{ gap: '1rem' }}>
@@ -66,6 +80,7 @@ export default function LimitedPage() {
           <label className="row">Set <select value={set} onChange={(e) => setSet(e.target.value)}>{LIMITED_SETS.map(([c, n]) => <option key={c} value={c}>{n}</option>)}</select></label>
           <button className="play-big" onClick={start}>{mode === 'sealed' ? 'Open packs' : 'Start draft'}</button>
         </div>
+        <PodStart />
       </div>
     );
   }
@@ -75,7 +90,7 @@ export default function LimitedPage() {
     <div className="col" style={{ gap: '1rem' }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1 style={{ margin: 0 }}>📦 {sess.mode === 'sealed' ? 'Sealed' : 'Draft'} · {setName}</h1>
-        <button className="small" onClick={() => { if (confirm('Throw away this pool and start over?')) setSess(null); }}>New {sess.mode}</button>
+        <button className="small" onClick={() => { if (confirm('Throw away this pool and start over?')) { if (sess.pod) online.podLeave(); setSess(null); } }}>New {sess.mode}</button>
       </div>
       {sess.step === 'open' && <OpenPacks sess={sess} setSess={setSess} />}
       {sess.step === 'hero' && <PickHero sess={sess} setSess={setSess} />}
@@ -225,7 +240,9 @@ function Build({ sess, setSess, onPlay }: { sess: Session; setSess: (s: Session)
               <b>{sess.deck.filter((x) => x === id).length}</b><button onClick={() => remove(sess.deck.indexOf(id))}>−</button></div>
           ))}
         </div>
-        <button className="play-big" disabled={main < LIMITED_MIN_DECK} onClick={play}>Play</button>
+        {sess.pod && <button className="primary" disabled={main < LIMITED_MIN_DECK} onClick={() => online.podDeck(limitedDeckList(hero, sess.deck))}>Submit deck to table {sess.pod}</button>}
+        {sess.pod && <PodOpponents heroId={hero.id} />}
+        <button className="play-big" disabled={main < LIMITED_MIN_DECK} onClick={play}>{sess.pod ? 'Play a bot' : 'Play'}</button>
         {main < LIMITED_MIN_DECK && <span className="small muted">Add {LIMITED_MIN_DECK - main} more cards (or use Auto-build).</span>}
       </div>
     </div>

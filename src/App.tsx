@@ -4,7 +4,7 @@ import type { CardDb } from './data/cardDb';
 import HomePage from './ui/pages/HomePage';
 import CardsPage from './ui/pages/CardsPage';
 import DecksPage from './ui/pages/DecksPage';
-import PlayPage from './ui/pages/PlayPage';
+import PlayPage, { TABLE_DECK } from './ui/pages/PlayPage';
 import LearnPage from './ui/pages/LearnPage';
 import { animationsEnabled, setAnimations } from './ui/components/Fx';
 import { canLeave } from './ui/navGuard';
@@ -135,7 +135,9 @@ export default function App() {
       {net.challenge && route !== 'play' && (
         <div className="challenge-toast" role="alert">
           <b>⚔ {net.challenge.from}</b> challenges you!
-          <a className="btn-link" href="#play/online">Open</a>
+          {/table/.test(net.challenge.format)
+            ? <a className="btn-link" href="#play/online" onClick={() => online.accept(TABLE_DECK)}>Accept</a>
+            : <a className="btn-link" href="#play/online">Open</a>}
           <button className="small" onClick={() => online.decline()}>Decline</button>
         </div>
       )}
