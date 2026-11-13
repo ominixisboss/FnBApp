@@ -4,6 +4,7 @@ type SfxName = 'draw' | 'play' | 'hit' | 'bigHit' | 'block' | 'pitch' | 'turn' |
 const KEY = 'fab-trainer.sound';
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
+let room: GainNode | null = null; // a short reverb send so effects sound like they happen in a room
 
 export function soundEnabled(): boolean {
   try { return localStorage.getItem(KEY) !== 'off'; } catch { return true; }
@@ -22,6 +23,14 @@ function ac(): AudioContext | null {
       master = ctx.createGain();
       master.gain.value = 0.35;
       master.connect(ctx.destination);
+      const len = Math.floor(ctx.sampleRate * 0.9);
+      const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3; }
+      const conv = ctx.createConvolver();
+      conv.buffer = ir;
+      room = ctx.createGain();
+      room.gain.value = 0.22;
+      room.connect(conv).connect(master);
     }
     if (ctx.state === 'suspended') void ctx.resume();
     return ctx;
@@ -44,6 +53,7 @@ function tone(freq: number, dur: number, opts: { type?: OscillatorType; gain?: n
   g.gain.exponentialRampToValueAtTime(peak, t0 + (opts.attack ?? 0.008));
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   o.connect(g).connect(master);
+  if (room) g.connect(room);
   o.start(t0);
   o.stop(t0 + dur + 0.05);
 }
@@ -67,6 +77,7 @@ function noise(dur: number, opts: { gain?: number; delay?: number; freq?: number
   g.gain.setValueAtTime(opts.gain ?? 0.3, t0);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   src.connect(f).connect(g).connect(master);
+  if (room) g.connect(room);
   src.start(t0);
 }
 

@@ -1337,3 +1337,60 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .season-tabs button.on { background: var(--accent, #b8322a); color: #fff; }
 .code-big { font-size: 1.3em; letter-spacing: .12em; color: var(--gold, #f6d58e); }
 .pack-reveal.dim { opacity: .45; pointer-events: none; }
+
+/* ---------------------------------------------------------------- living playmats
+   A slow ambient layer per mat (only transform/opacity animate, so phones stay smooth). */
+.mat-ambient { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+.mat-ambient i { position: absolute; display: block; border-radius: 50%; will-change: transform, opacity; }
+.mat-ember .mat-ambient i { width: 4px; height: 4px; background: #ff9a4a; box-shadow: 0 0 8px 2px #ff6a1a99; bottom: -10px; animation: amb-rise 9s linear infinite; }
+.mat-frost .mat-ambient i { width: 5px; height: 5px; background: #e8f6ff; box-shadow: 0 0 6px #bfe6ffaa; top: -10px; animation: amb-fall 12s linear infinite; }
+.mat-void .mat-ambient i { width: 3px; height: 3px; background: #c9a8ff; box-shadow: 0 0 10px 3px #8a5cff66; animation: amb-twinkle 6s ease-in-out infinite; }
+.mat-royal .mat-ambient i { width: 3px; height: 3px; background: #ffe7a0; box-shadow: 0 0 8px 2px #f6d58e77; animation: amb-twinkle 7s ease-in-out infinite; }
+.mat-arena .mat-ambient i { width: 2px; height: 2px; background: #bfe9ff; box-shadow: 0 0 6px 2px #8fd3ff66; animation: amb-twinkle 5s ease-in-out infinite; }
+.mat-tavern .mat-ambient i, .mat-storm .mat-ambient i { display: none; }
+.mat-ambient i:nth-child(1) { left: 6%; animation-delay: 0s; } .mat-ambient i:nth-child(2) { left: 17%; animation-delay: -2s; }
+.mat-ambient i:nth-child(3) { left: 29%; animation-delay: -5s; } .mat-ambient i:nth-child(4) { left: 41%; animation-delay: -1s; }
+.mat-ambient i:nth-child(5) { left: 53%; animation-delay: -7s; } .mat-ambient i:nth-child(6) { left: 64%; animation-delay: -3s; }
+.mat-ambient i:nth-child(7) { left: 76%; animation-delay: -6s; } .mat-ambient i:nth-child(8) { left: 88%; animation-delay: -4s; }
+.mat-ambient i:nth-child(odd) { top: 30%; } .mat-ambient i:nth-child(3n) { top: 62%; } .mat-ambient i:nth-child(4n) { top: 12%; }
+.mat-ember .mat-ambient i, .mat-frost .mat-ambient i { top: auto; }
+.mat-frost .mat-ambient i { top: -10px; }
+@keyframes amb-rise { 0% { transform: translate(0, 0); opacity: 0; } 10% { opacity: .9; } 100% { transform: translate(30px, -105vh); opacity: 0; } }
+@keyframes amb-fall { 0% { transform: translate(0, 0); opacity: 0; } 10% { opacity: .8; } 100% { transform: translate(-40px, 105vh); opacity: 0; } }
+@keyframes amb-twinkle { 0%, 100% { opacity: 0; transform: scale(.6); } 50% { opacity: .9; transform: scale(1.4); } }
+/* candle flicker for the tavern, lightning flashes for the storm */
+.mat-tavern .mat-ambient { background: radial-gradient(ellipse 60% 45% at 50% 50%, #ffb45a14, transparent 70%); animation: amb-flicker 3.2s ease-in-out infinite; }
+.mat-storm .mat-ambient { background: radial-gradient(ellipse 70% 50% at 30% 10%, #cfe3ff, transparent 60%); opacity: 0; animation: amb-flash 9s linear infinite; }
+@keyframes amb-flicker { 0%, 100% { opacity: .7; } 20% { opacity: 1; } 45% { opacity: .55; } 70% { opacity: .9; } }
+@keyframes amb-flash { 0%, 90%, 100% { opacity: 0; } 91% { opacity: .35; } 92% { opacity: .05; } 93.5% { opacity: .25; } 95% { opacity: 0; } }
+
+/* ---------------------------------------------------------------- hero auras: each hero's talent glows around its portrait */
+.hero-aura { position: relative; }
+.hero-aura::after { content: ''; position: absolute; inset: -6px; border-radius: 12px; pointer-events: none; z-index: -1; opacity: .75; animation: aura-breathe 3.6s ease-in-out infinite; }
+.aura-fire::after { box-shadow: 0 0 18px 4px #ff6a1a88, 0 0 40px 8px #ff3a0a33; }
+.aura-lightning::after { box-shadow: 0 0 16px 3px #ffe35a88, 0 0 32px 6px #8fc9ff44; animation: aura-crackle 2.4s steps(1) infinite; }
+.aura-ice::after { box-shadow: 0 0 18px 4px #9fe2ff88, 0 0 40px 10px #e8f6ff33; }
+.aura-shadow::after { box-shadow: 0 0 22px 6px #6a2fae88, 0 0 46px 12px #1a002a66; }
+.aura-earth::after { box-shadow: 0 0 16px 4px #7fc25a77, 0 0 34px 8px #3a6a2a44; }
+.aura-light::after { box-shadow: 0 0 20px 5px #fff1b088, 0 0 44px 10px #ffd34a44; }
+.aura-arcane::after { box-shadow: 0 0 18px 4px #5aa8ff88, 0 0 40px 10px #8a5cff44; }
+.aura-normal::after { box-shadow: 0 0 12px 2px #d9a44155; }
+.mat-side:not(.active) .hero-aura::after { opacity: .3; animation-play-state: paused; }
+@keyframes aura-breathe { 0%, 100% { transform: scale(1); opacity: .55; } 50% { transform: scale(1.03); opacity: .9; } }
+@keyframes aura-crackle { 0% { opacity: .5; } 12% { opacity: 1; } 14% { opacity: .4; } 40% { opacity: .8; } 41% { opacity: .5; } 70% { opacity: .9; } }
+.no-anim .mat-ambient, .no-anim .hero-aura::after { animation: none !important; }
+.no-anim .mat-ambient i { display: none; }
+@media (prefers-reduced-motion: reduce) { .mat-ambient, .hero-aura::after { animation: none !important; } .mat-ambient i { display: none; } }
+
+/* ---------------------------------------------------------------- accessibility */
+/* colour-blind mode: pitch also shown by shape (▲ red, ■ yellow, ● blue) and number */
+.cb-pip { display: none; }
+.cb .cb-pip { display: block; position: absolute; top: 3%; right: 4%; z-index: 2; padding: 0 .3em; border-radius: 6px; font: 700 clamp(9px, calc(var(--w, 120px) * .1), 15px)/1.3 Inter, system-ui, sans-serif; color: #fff; background: #000c; box-shadow: 0 0 0 1px #fff6; pointer-events: none; }
+.cb .pitch-1 .dot { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.cb .pitch-2 .dot { border-radius: 1px; }
+.cb .pitch-1 .dot, .cb .pitch-2 .dot, .cb .pitch-3 .dot { width: .85em; height: .85em; }
+/* larger text */
+html.big-text { font-size: 112.5%; }
+html.big-text .card .fallback { font-size: 1.1em; }
+html.big-text .log, html.big-text .small { font-size: .95em; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

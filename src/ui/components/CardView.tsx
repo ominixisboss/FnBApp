@@ -78,19 +78,28 @@ export default function CardView({ card, width = 150, className = '', badge, mar
       onMouseEnter={() => onHover?.(card)}
       onMouseLeave={() => onHover?.(null)}
       title={popout ? undefined : title ?? card.name}
-      aria-label={title ?? card.name}
+      aria-label={title ?? describeCard(card)}
+      role={onClick ? 'button' : undefined}
     >
       {!loaded && <TextCard card={card} />}
       {card.image && !failed && (
-        <img src={card.image} alt={card.name} loading="lazy" onLoad={() => setLoaded(true)} onError={() => setFailed(true)}
+        <img src={card.image} alt="" loading="lazy" onLoad={() => setLoaded(true)} onError={() => setFailed(true)}
           style={loaded ? undefined : { position: 'absolute', inset: 0, opacity: 0 }} />
       )}
       {tilt && <span className="shine" />}
+      {card.pitch ? <span className="cb-pip" aria-hidden="true">{['', '▲', '■', '●'][card.pitch]}{card.pitch}</span> : null}
       {count !== undefined && <span key={count} className="count anim-pop">{count}</span>}
       {badge !== undefined && badge !== null && <span className="badge">{badge}</span>}
       {marker !== undefined && marker !== null && <span key={String(marker)} className="hint-marker">{marker}</span>}
     </div>
   );
+}
+
+const PITCH_NAMES = ['', 'red', 'yellow', 'blue'];
+/** What a screen reader says for a card: name, colour and stats. */
+export function describeCard(c: Card): string {
+  return [c.name, c.pitch ? `${PITCH_NAMES[c.pitch]} (pitch ${c.pitch})` : '', c.cost !== null ? `cost ${c.cost}` : '',
+    c.power !== null ? `power ${c.power}` : '', c.defense !== null ? `defense ${c.defense}` : '', c.health !== null ? `${c.health} life` : ''].filter(Boolean).join(', ');
 }
 
 export function TextCard({ card }: { card: Card }) {

@@ -16,6 +16,7 @@ import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
+import { musicEnabled, setMusicEnabled, setMusicMood } from '../music';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
 import { computeProgress, progressDiff } from '../../stats/progress';
@@ -236,6 +237,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [, setTick] = useState(0);
   useEffect(() => { const t = setTimeout(() => setTick((n) => n + 1), 3600); return () => clearTimeout(t); }, [myEmote, online?.emote]);
   const [sound, setSound] = useState(soundEnabled);
+  const [music, setMusic] = useState(musicEnabled);
+  useEffect(() => { setMusicMood('battle'); return () => setMusicMood('menu'); }, []);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
@@ -713,6 +716,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   return (
     <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
+      <div className="mat-ambient" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</div>
+      {/* screen readers hear each new line of the game log */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{state.log[state.log.length - 1]?.text}</div>
       <div className="arena-bar">
         <span className="arena-title">{formatName(state.format)} · Turn {state.turn}</span>
         <div className="grow" />
@@ -739,6 +745,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className={`icon-btn ${music ? 'on' : ''}`} title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span>Music</span></button>
           {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
@@ -1126,7 +1133,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {equipSlot('legs', 'Legs', legs)}
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
-      <Slot area="hero" label="Hero" filled className="hero-box">
+      <Slot area="hero" label="Hero" filled className={`hero-box hero-aura aura-${themeOf(cardOf(p.hero))}`}>
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
           className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
