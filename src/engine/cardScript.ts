@@ -10,7 +10,8 @@ export type AttackFilter =
   | { kind: 'weapon' }
   | { kind: 'subtype'; value: string } // dagger, sword, arrow, ...
   | { kind: 'class'; value: string } // Warrior, Ninja, ...
-  | { kind: 'anyClass'; values: string[] }; // "Assassin or Mystic"
+  | { kind: 'anyClass'; values: string[] } // "Assassin or Mystic"
+  | { kind: 'boosted' }; // "the next attack you boost"
 
 export type Effect =
   | { kind: 'arcane'; amount: number }
@@ -38,7 +39,20 @@ export type Effect =
   | { kind: 'weakenAttack'; amount: number }
   | { kind: 'thisOverpower' }
   | { kind: 'tutor'; name: string }
-  | { kind: 'sharpen'; times: number };
+  | { kind: 'sharpen'; times: number }
+  /** discard random cards from your own hand; "If a card with N or more {p} is discarded this way, <then>" */
+  | { kind: 'discardRandom'; amount: number; ifPower?: number; then?: Effect[] }
+  /** Reload: if your arsenal is empty, put a card from your hand face down into it */
+  | { kind: 'reload' }
+  /** "Destroy an aura you control. If you do, <then>" */
+  | { kind: 'destroyOwnThen'; type?: string; name?: string; then: Effect[] }
+  | { kind: 'banishTopSelf'; amount: number }
+  /** create a card (e.g. Crouching Tiger) in your hand */
+  | { kind: 'createInHand'; name: string }
+  /** your next X attack this turn gets "When this hits, <effects>" */
+  | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: Effect[] }
+  /** Clash: each hero reveals the top card of their deck; the greater {p} wins */
+  | { kind: 'clash'; winnerToken?: string; ifWin?: Effect[]; guardianOnly?: boolean };
 
 /** A game-state condition from "If <condition>, ..." sentences. */
 export type Condition =
@@ -67,10 +81,17 @@ export type Condition =
   | { kind: 'weaponAttacked' }
   | { kind: 'intimidated' }
   | { kind: 'attackedTimes'; n: number }
-  | { kind: 'playedNonAttack' };
+  | { kind: 'playedNonAttack' }
+  | { kind: 'charged' }
+  | { kind: 'instantToGrave' }
+  | { kind: 'highTide'; n: number }
+  | { kind: 'reprise' }
+  | { kind: 'defendedByAttackAction' }
+  | { kind: 'chainLinkAtLeast'; n: number }
+  | { kind: 'arcaneTaken' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
-export const LINK_CONDITIONS = new Set<Condition['kind']>(['powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
+export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
 
 export type OptionalCostKind =
   | { kind: 'reveal'; talent: string } // Fusion: reveal an Ice / Earth / Lightning card from hand
@@ -82,7 +103,12 @@ export type OptionalCostKind =
   | { kind: 'handToBottom' }
   | { kind: 'banishHand' }
   | { kind: 'discardOrTop' }
-  | { kind: 'destroyOwn'; name?: string; type?: string };
+  | { kind: 'destroyOwn'; name?: string; type?: string }
+  | { kind: 'arsenalToBottom' }
+  /** banish a specific kind of card from your graveyard ("an aura", "a Nimblism") */
+  | { kind: 'banishGraveMatch'; name?: string; type?: string }
+  /** Decompose: banish N Earth cards and an action card from your graveyard */
+  | { kind: 'decompose'; earth: number };
 
 /** "When this attacks, you may <cost>. If you do, <effects>." */
 export interface OptionalCost {
@@ -96,7 +122,7 @@ export interface OptionalCost {
 }
 
 export interface Conditional {
-  when: 'fromArsenal' | 'fromBanished' | 'combo' | 'crush' | 'if' | 'ifLink' | 'surge';
+  when: 'fromArsenal' | 'fromBanished' | 'combo' | 'crush' | 'if' | 'ifLink' | 'surge' | 'instead' | 'additional';
   cond?: Condition;
   /** surge: "if this deals more than N damage" */
   threshold?: number;
@@ -144,6 +170,8 @@ export interface CardScript {
   costLessPer?: string; // token name ("Runechant") or 'draconicLink': "costs {r} less for each X you control"
   intimidateOnAttack: boolean;
   additionalCost: { discardRandom?: number; banishRandomHand?: number; banishGraveyard?: number };
+  /** "Play this only if <condition>" */
+  playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
   onAttack: Effect[];
   onHit: Effect[];
@@ -161,6 +189,12 @@ export interface CardScript {
   hitDestination?: 'soul' | 'deckBottom';
   costLessIf?: string; // "If you control a <X>, this costs {r} less"
   unity: number; // "Unity - ... this gets +N{d}"
+  /** "When this defends, <effects>" */
+  onDefend: Effect[];
+  /** Crank: when this enters the arena, you may remove a steam counter from it to gain an action point */
+  crank: boolean;
+  /** Ephemeral: ceases to exist instead of going to the graveyard */
+  ephemeral: boolean;
   unparsed: string[];
   coverage: 'full' | 'partial' | 'none';
 }
@@ -206,7 +240,7 @@ export function parseEffect(raw: string): Effect[] | null {
     }
     return out;
   }
-  if ((m = s.match(/^deal (\d+) arcane damage to (?:any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero)$/i)))
+  if ((m = s.match(/^deal (\d+) arcane damage(?: to (?:any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
     return [{ kind: 'arcane', amount: +m[1] }];
   if ((m = s.match(/^deal (\d+) damage to (?:target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
     return [{ kind: 'damage', amount: +m[1] }];
@@ -254,7 +288,7 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'tutor', name: m[1].trim() }];
   if ((m = s.match(/^amp (\d+)$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
   if (/^mark target opposing hero$/i.test(s)) return [{ kind: 'mark' }];
-  if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\}$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
+  if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\}(?: until end of turn)?$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage$/i)))
     return [{ kind: 'preventNext', amount: +m[1] }];
   if ((m = s.match(/^prevent the next (\d+) damage that would be dealt to you this turn$/i)))
@@ -277,6 +311,23 @@ export function parseEffect(raw: string): Effect[] | null {
     if (f) return [{ kind: 'nextAttackPower', amount: +m[2], filter: f }];
   }
   if ((m = s.match(/^target attack(?: action card)? gets -(\d+)\{p\}$/i))) return [{ kind: 'weakenAttack', amount: +m[1] }];
+  if ((m = s.match(/^the next attack you boost this turn gets \+(\d+)\{p\}$/i))) return [{ kind: 'nextAttackPower', amount: +m[1], filter: { kind: 'boosted' } }];
+  if ((m = s.match(/^draw (a|two|\d+) cards?,? then discard (a|two|\d+) random cards?$/i)))
+    return [{ kind: 'draw', amount: toNum(m[1].toLowerCase()) }, { kind: 'discardRandom', amount: toNum(m[2].toLowerCase()) }];
+  if ((m = s.match(/^discard (a|two|\d+) random cards?$/i))) return [{ kind: 'discardRandom', amount: toNum(m[1].toLowerCase()) }];
+  if (/^reload$/i.test(s)) return [{ kind: 'reload' }];
+  if ((m = s.match(/^banish the top (?:(\d+) )?cards? of your deck$/i))) return [{ kind: 'banishTopSelf', amount: m[1] ? +m[1] : 1 }];
+  if ((m = s.match(/^create (?:a|an) ([A-Z][\w' ]*?) in your hand$/))) return [{ kind: 'createInHand', name: m[1] }];
+  if ((m = s.match(/^your next (?:([\w ]+?) )?attack this turn gets (?:\+(\d+)\{p\} and )?"(?:when|if) this hits(?: a hero)?, (.+?)\.?"$/i))) {
+    const f = parseFilter(m[1] ?? '');
+    const e = parseEffect(m[3]);
+    if (!f || !e) return null;
+    const out: Effect[] = [];
+    if (m[2]) out.push({ kind: 'nextAttackPower', amount: +m[2], filter: f });
+    out.push({ kind: 'nextAttackOnHit', filter: f, effects: e });
+    return out;
+  }
+  if ((m = s.match(/^target hero gains (\d+)\{h\}$/i))) return [{ kind: 'gainLife', amount: +m[1] }];
   // "X and Y"
   const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw)\b)/i);
   if (and.length > 1) {
@@ -323,6 +374,15 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you've intimidated an opponent this turn$/.test(t)) return { kind: 'intimidated' };
   if ((m = t.match(/^you've been attacked (\d+) or more times this turn$/))) return { kind: 'attackedTimes', n: +m[1] };
   if (/^you've played a non-attack action card this turn$/.test(t)) return { kind: 'playedNonAttack' };
+  if (/^you've charged(?: your hero's soul)? this turn$/.test(t)) return { kind: 'charged' };
+  if (/^you've intimidated this turn$/.test(t)) return { kind: 'intimidated' };
+  if (/^an instant card has been put into your graveyard this turn$/.test(t)) return { kind: 'instantToGrave' };
+  if ((m = t.match(/^there are (\d+) or more blue cards in your pitch zone$/))) return { kind: 'highTide', n: +m[1] };
+  if (/^the defending hero has defended with a card from their hand this chain link$/.test(t)) return { kind: 'reprise' };
+  if (/^(?:it's|it is|this is) defended by an attack action card$/.test(t)) return { kind: 'defendedByAttackAction' };
+  if ((m = t.match(/^this is played (?:on|as|at) chain link (\d+) or higher$/))) return { kind: 'chainLinkAtLeast', n: +m[1] };
+  if (/^you've been dealt arcane damage this turn$/.test(t)) return { kind: 'arcaneTaken' };
+  if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
   return null;
 }
 
@@ -338,6 +398,12 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
   if (/^banish a card from your hand$/.test(t)) return { kind: 'banishHand' };
   if (/^discard a card or destroy the top card of your deck$/.test(t)) return { kind: 'discardOrTop' };
   if ((m = t.match(/^destroy (?:a|an) (item|aura) you control$/))) return { kind: 'destroyOwn', type: m[1] === 'item' ? 'Item' : 'Aura' };
+  if (/^put a card from your arsenal on the bottom of your deck$/.test(t)) return { kind: 'arsenalToBottom' };
+  if ((m = t.match(/^banish (\d+) earth cards and an action card from your graveyard$/))) return { kind: 'decompose', earth: +m[1] };
+  if ((m = t.match(/^banish (?:a|an) (aura|item|attack action card|action card|[a-z][a-z' ]+?) from your graveyard$/))) {
+    const types: Record<string, string> = { aura: 'Aura', item: 'Item', 'attack action card': 'Attack', 'action card': 'Action' };
+    return types[m[1]] ? { kind: 'banishGraveMatch', type: types[m[1]] } : { kind: 'banishGraveMatch', name: titleCase(m[1]) };
+  }
   if ((m = t.match(/^destroy (?:a|an) ([a-z' ]+) you control$/))) return { kind: 'destroyOwn', name: titleCase(m[1]) };
   return null;
 }
@@ -368,7 +434,7 @@ function emptyScript(): CardScript {
     spellvoid: 0, battleworn: false, bladeBreak: false, temper: false, boost: false, phantasm: false, bloodDebt: false, steam: 0, steamUpkeep: false,
     intimidateOnAttack: false, additionalCost: {}, onPlay: [], onAttack: [], onHit: [],
     conditional: [], activations: [], modes: [], unparsed: [], coverage: 'full',
-    onDestroy: [], noEquipDefense: false, unity: 0,
+    onDestroy: [], noEquipDefense: false, unity: 0, onDefend: [], crank: false, ephemeral: false,
   };
 }
 
@@ -397,6 +463,9 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^legendary$/i.test(s) || /^specialization$/i.test(s) || /specialization$/i.test(s)) return true;
   if (/^stealth$/i.test(s)) return true; // only referenced by other effects
   if (/^phantasm$/i.test(s)) return (sc.phantasm = true);
+  if (/^crank$/i.test(s)) return (sc.crank = true);
+  if (/^ephemeral$/i.test(s)) return (sc.ephemeral = true);
+  if (/^reload$/i.test(s)) { sc.onPlay.push({ kind: 'reload' }); return true; }
   if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
@@ -489,7 +558,7 @@ function compile(c: Card): CardScript {
     // Fusion keyword line ("Ice Fusion"): the payoff is the "If this was fused, ..." sentence
     const fus = line.match(/^(ice|earth|lightning) fusion$/i);
     if (fus) { fusion = fus[1][0].toUpperCase() + fus[1].slice(1).toLowerCase(); continue; }
-    const fused = line.match(/^if this (?:was|is) fused, (.+?)\.?$/i);
+    const fused = line.match(/^(?:when this attacks, )?if (?:this|it) (?:was|is) fused, (.+?)\.?$/i);
     if (fused && fusion && !sc.optional) {
       const effects = parseEffect(fused[1]);
       if (effects) {
@@ -510,6 +579,21 @@ function compile(c: Card): CardScript {
       }
     }
     for (let i = 0; i < sentences.length; i++) {
+      const dm = i + 1 < sentences.length ? sentences[i].match(/^destroy (?:a|an) (item|aura|[a-z' ]+?) you control\.?$/i) : null;
+      const dthen = dm && sentences[i + 1].match(/^if you do, (.+?)\.?$/i);
+      const deff = dthen && parseEffect(dthen[1]);
+      if (dm && deff && !isAttack) {
+        const w = dm[1].toLowerCase();
+        sc.onPlay.push({ kind: 'destroyOwnThen', type: w === 'item' ? 'Item' : w === 'aura' ? 'Aura' : undefined, name: w === 'item' || w === 'aura' ? undefined : titleCase(dm[1]), then: deff });
+        i++;
+        continue;
+      }
+      const cl = i + 1 < sentences.length ? parseClash(sentences[i], sentences[i + 1]) : null;
+      if (cl) {
+        (cl.timing === 'defend' ? sc.onDefend : sc.onAttack).push(cl.effect);
+        i++;
+        continue;
+      }
       const opt = i + 1 < sentences.length ? parseOptional(sentences[i], sentences[i + 1]) : null;
       if (opt && !sc.optional) {
         sc.optional = opt;
@@ -522,10 +606,65 @@ function compile(c: Card): CardScript {
   return finish(sc, c);
 }
 
+/** "When this defends, clash with the attacking hero." + "The winner creates a Vigor token." / "If you win, ..." */
+function parseClash(a: string, b: string): { timing: 'attack' | 'defend'; effect: Effect } | null {
+  const ma = a.match(/^when this (attacks|defends)( a guardian attack)?, clash with the (?:attacking|defending) hero\.?$/i);
+  if (!ma) return null;
+  const timing = ma[1].toLowerCase() === 'defends' ? 'defend' : 'attack';
+  const guardianOnly = !!ma[2] || undefined;
+  let m: RegExpMatchArray | null;
+  if ((m = b.match(/^[Tt]he winner creates (?:a|an) ([A-Z][\w' ]*?) token\.?$/))) return { timing, effect: { kind: 'clash', winnerToken: m[1], guardianOnly } };
+  if ((m = b.match(/^if you win, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return { timing, effect: { kind: 'clash', ifWin: e, guardianOnly } };
+  }
+  return null;
+}
+
 function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPermanentLike: boolean) {
   if (!sent) return;
   if (keywordSentence(sc, sent)) return;
   let m: RegExpMatchArray | null;
+  // keyword-labelled conditions ("Rupture - If ...", "Starfall - If ...", "High Tide - If ...", "Reprise - If ...")
+  sent = sent.replace(/^(?:rupture|starfall|high tide|reprise) - (?=if )/i, '');
+  if ((m = sent.match(/^when this defends, (.+)$/i)) && !/^when this defends, (?:you may|clash)/i.test(sent)) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.onDefend.push(...e);
+  }
+  if ((m = sent.match(/^play this only if (.+?)\.?$/i))) {
+    const t = m[1].toLowerCase();
+    const pm = t.match(/^you've pitched a card with (\d+) or more \{p\} this turn$/);
+    const cond = pm ? { kind: 'pitchPower' as const, n: +pm[1] } : parseCondition(m[1]);
+    if (cond) return void (sc.playIf = cond);
+  }
+  if ((m = sent.match(/^as an additional cost to play this, you may charge your hero's soul\.?$/i)) && !sc.optional) {
+    sc.optional = { timing: 'play', cost: { kind: 'charge' }, effects: [], costText: "charge your hero's soul", effectText: 'charged' };
+    return;
+  }
+  if (/^you may put your revealed card on the bottom of its owner's deck\.?$/i.test(sent)) return; // clash: the card stays on top
+  if ((m = sent.match(/^if (?:a card with (\d+) or more \{p\} is banished this way|the discarded card has (\d+) or more \{p\}), (.+)$/i)) && (sc.additionalCost.banishGraveyard || sc.additionalCost.discardRandom)) {
+    const e = parseEffect(m[3]);
+    if (e) return void sc.conditional.push({ when: 'additional', threshold: +(m[1] ?? m[2]), effects: e });
+  }
+  if ((m = sent.match(/^if (.+?), instead (.+)$/i))) {
+    const cond = parseCondition(m[1]);
+    const e = cond && parseEffect(m[2]);
+    if (cond && e && !isAttack) return void sc.conditional.push({ when: 'instead', cond, effects: e });
+  }
+  if ((m = sent.match(/^when this attacks, if (.+?), (.+)$/i))) {
+    const cond = parseCondition(m[1]);
+    const e = cond && parseEffect(m[2]);
+    if (cond && e) return void sc.conditional.push({ when: LINK_CONDITIONS.has(cond.kind) ? 'ifLink' : 'if', cond, effects: e });
+  }
+  if ((m = sent.match(/^if a card with (\d+) or more \{p\} is discarded this way, (.+)$/i))) {
+    const host = [...sc.onAttack, ...sc.onPlay].reverse().find((x) => x.kind === 'discardRandom');
+    const e = parseEffect(m[2]);
+    if (host && host.kind === 'discardRandom' && e) { host.ifPower = +m[1]; host.then = e; return; }
+  }
+  if ((m = sent.match(/^at the start of your turn, destroy this,? (?:and |then )(.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) { sc.destroyAt = 'startOfTurn'; return void sc.onDestroy.push(...e); }
+  }
   // keyword lists like "Go again, Dominate"
   if (/^[A-Z][a-z]+( [a-z0-9]+)?(, [A-Z][a-z]+( [a-z0-9]+)?)+\.?$/.test(sent)) {
     const parts = sent.replace(/\.$/, '').split(', ');
@@ -636,5 +775,6 @@ export function describeFilter(f: AttackFilter): string {
     case 'subtype': return `${f.value} attack`;
     case 'class': return `${f.value} attack`;
     case 'anyClass': return `${f.values.join(' or ')} attack`;
+    case 'boosted': return 'attack you boost';
   }
 }

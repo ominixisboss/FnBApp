@@ -34,6 +34,7 @@ export interface PermanentState {
 export type TurnEffect =
   | { kind: 'nextAttackPower'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
+  | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'preventNext'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string };
 
@@ -82,6 +83,10 @@ export interface TurnInfo {
   attackedTimes?: number; // attacks made against this player this turn
   /** order (uids) to put pitched cards on the bottom of the deck at end of turn, first = goes in first */
   pitchOrder?: number[];
+  charged?: boolean;
+  instantToGrave?: boolean;
+  arcaneTaken?: boolean;
+  clashesWon?: number;
 }
 
 export interface Defender {

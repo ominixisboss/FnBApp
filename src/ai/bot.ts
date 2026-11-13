@@ -165,6 +165,8 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+    case 'arsenalToBottom': choice = { accept: true }; cost = p.arsenal[0] ? cardPlayValue(cardOf(p.arsenal[0])) * 0.8 : 99; break;
+    case 'banishGraveMatch': case 'decompose': choice = { accept: true }; cost = 0.3; break;
     case 'reveal': {
       // fusing is free: the revealed card stays in hand
       const talent = oc.cost.talent;
