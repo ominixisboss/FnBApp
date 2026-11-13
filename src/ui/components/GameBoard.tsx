@@ -187,6 +187,9 @@ function EmoteBubble({ id, mine }: { id: string; mine?: boolean }) {
   return <div className={`emote-bubble ${mine ? 'mine' : 'theirs'}`}><span>{e[1]}</span> {e[2]}</div>;
 }
 
+/** how long to wait for a second tap before a single tap opens a card's details */
+const DOUBLE_TAP_MS = 260;
+
 export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel, sandbox, clock }: {
   initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats, replay?: { initial: GameState; actions: Action[] }) => void;
   /** the player's equipped card sleeve and playmat */
@@ -554,12 +557,22 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setDetail(cardOf(inst));
   };
 
-  /** a tap on one of your cards: selections (pitching, blocking) toggle at once; decisions open the focus view */
+  /** a tap on one of your cards: selections (pitching, blocking) toggle at once. A single tap opens the focus view
+   *  (details and a Play button) after a short wait; a double tap plays the card straight away, with no pop-up. */
+  const tapTimer = useRef<{ uid: number; t: ReturnType<typeof setTimeout> } | null>(null);
+  useEffect(() => () => { if (tapTimer.current) clearTimeout(tapTimer.current.t); }, []);
   const tapCard = (inst: CardInst) => {
     if (!touchUI() || pending || manual || (myTurn && state.phase === 'defend')) return clickHand(inst);
-    if (focus === inst.uid) { setFocus(null); return clickHand(inst); } // tapping the raised card again plays it
-    setFocus(inst.uid);
     hideHover();
+    if (tapTimer.current?.uid === inst.uid) { // second tap of a double tap: play it, nothing pops up
+      clearTimeout(tapTimer.current.t);
+      tapTimer.current = null;
+      setFocus(null);
+      return clickHand(inst);
+    }
+    if (tapTimer.current) clearTimeout(tapTimer.current.t);
+    if (focus === inst.uid) { setFocus(null); return clickHand(inst); } // tapping the raised card again plays it
+    tapTimer.current = { uid: inst.uid, t: setTimeout(() => { tapTimer.current = null; setFocus(inst.uid); }, DOUBLE_TAP_MS) };
   };
 
   const clickArena = (inst: CardInst) => {
