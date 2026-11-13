@@ -37,6 +37,7 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
   them.id = 1;
   s.turnPlayer = r(s.turnPlayer);
   s.priority = r(s.priority);
+  if (s.pendingTriggers) s.pendingTriggers = { ...s.pendingTriggers, player: r(s.pendingTriggers.player) };
   if (s.winner !== null) s.winner = r(s.winner);
   s.log = s.log.map((e) => ({ ...e, player: e.player === null ? null : r(e.player) }));
   return s;

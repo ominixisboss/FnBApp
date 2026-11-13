@@ -435,7 +435,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, []);
   // auto end turn when nothing can be played, and auto "no block" when nothing can block
   useEffect(() => {
-    if (!autoPass || !myTurn || pending) return;
+    if (!autoPass || !myTurn || pending || state.pendingTriggers) return;
     const nothingToPlay = state.phase === 'action' && options.length === 0;
     const nothingToBlock = state.phase === 'defend' && defOpts.length === 0;
     if (!nothingToPlay && !nothingToBlock) return;
@@ -940,6 +940,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           </div>
         );
       })()}
+      {state.pendingTriggers && state.pendingTriggers.player === HUMAN && (
+        <TriggerOrder uids={state.pendingTriggers.uids} me={me} onDone={(order) => act({ type: 'orderTriggers', order })} />
+      )}
       {ordering && (
         <div className="modal-bg">
           <div className="modal" style={{ maxWidth: 560 }}>
@@ -1488,6 +1491,34 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
               {r.why && <div className="small muted">{r.why}</div>}
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Choose the order your start-of-turn triggers resolve in. */
+function TriggerOrder({ uids, me, onDone }: { uids: number[]; me: GameState['players'][0]; onDone: (order: number[]) => void }) {
+  const [order, setOrder] = useState<number[]>([]);
+  const items = uids.map((u) => me.permanents.find((pm) => pm.inst.uid === u)).filter((x): x is NonNullable<typeof x> => !!x);
+  return (
+    <div className="modal-bg">
+      <div className="modal" style={{ maxWidth: 560 }}>
+        <h2 style={{ marginBottom: '.2rem' }}>Order your triggers</h2>
+        <p className="small muted" style={{ marginTop: 0 }}>Several of your effects trigger at the start of your turn. Tap them in the order you want them to resolve.</p>
+        <div className="row" style={{ gap: '.6rem' }}>
+          {items.map((pm) => {
+            const n = order.indexOf(pm.inst.uid);
+            return (
+              <div key={pm.inst.uid} style={{ cursor: 'pointer' }} onClick={() => setOrder(n >= 0 ? order.filter((u) => u !== pm.inst.uid) : [...order, pm.inst.uid])}>
+                <CardView card={cardOf(pm.inst)} width={96} tilt={false} noPopout marker={n >= 0 ? String(n + 1) : undefined} className={n >= 0 ? 'hint-play' : ''} />
+              </div>
+            );
+          })}
+        </div>
+        <div className="row" style={{ marginTop: '1rem' }}>
+          <button className="primary" disabled={order.length !== items.length} onClick={() => onDone(order)}>Resolve in this order</button>
+          <button onClick={() => onDone(items.map((pm) => pm.inst.uid))}>Any order</button>
         </div>
       </div>
     </div>

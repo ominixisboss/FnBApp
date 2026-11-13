@@ -492,7 +492,8 @@ function compile(c: Card): CardScript {
   const isPermanentLike = ['Equipment', 'Weapon', 'Hero', 'Token', 'Aura', 'Item', 'Ally'].some((t) =>
     c.types.includes(t),
   );
-  for (const k of c.keywords) keywordSentence(sc, k);
+  // the keyword list repeats effect keywords that are also in the text (intimidate, opt, amp, reload): only take static ones from it
+  for (const k of c.keywords) if (!/^(intimidate|amp \d+|opt \d+|reload)$/i.test(k)) keywordSentence(sc, k);
   let fusion: string | null = null;
 
   // strip reminder text

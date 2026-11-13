@@ -157,6 +157,8 @@ export interface GameState {
   /** layers waiting to resolve, last = top (only used in the action phase) */
   stack?: Layer[];
   format: string;
+  /** start-of-turn triggers waiting for their controller to choose an order */
+  pendingTriggers?: { player: PlayerId; uids: number[] };
 }
 
 export type Action =
@@ -166,6 +168,7 @@ export type Action =
   | { type: 'defend'; uids: number[]; boosts?: number[]; pitch?: number[] }
   | { type: 'arsenal'; uid: number | null; pitchOrder?: number[] }
   | { type: 'concede' }
+  | { type: 'orderTriggers'; order: number[] }
   | ManualAction;
 
 export type ManualAction =

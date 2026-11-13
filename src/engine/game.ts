@@ -53,6 +53,7 @@ function log(s: GameState, player: PlayerId | null, text: string, rule?: string)
 
 /** Short rule explanations attached to log lines, so players learn why things happen. */
 export const RULES = {
+  triggerOrder: 'When several of your effects trigger at the same time, you choose the order they resolve in.',
   stack: 'Cards and abilities go on the stack. Both players may respond with instants; when both pass in a row, the top one resolves (last in, first out).',
   goAgain: 'Go again: when this resolves, you gain an action point, so you can keep acting this turn.',
   dominate: 'Dominate: the attack can’t be defended by more than one card from hand.',
@@ -286,23 +287,53 @@ function startTurn(s: GameState) {
   s.phase = 'action';
   s.priority = s.turnPlayer;
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
-  // start of turn token triggers
-  for (const pm of [...p.permanents]) {
-    const name = cardOf(pm.inst).name;
-    const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (name === 'Agility') { destroy(); p.effects.push({ kind: 'nextAttackGoAgain', filter: { kind: 'any' }, source: name }); }
-    else if (name === 'Might') { destroy(); p.effects.push({ kind: 'nextAttackPower', amount: 1, filter: { kind: 'any' }, source: name }); }
-    else if (name === 'Vigor') { destroy(); p.resources += 1; }
-    else if (['Embodiment of Earth', 'Sigil of Fate', 'Seismic Surge'].includes(name)) destroy();
-    else {
-      const sc = getScript(cardOf(pm.inst));
-      if (sc.destroyAt) destroy();
-      else if (sc.steamUpkeep) {
-        if ((pm.steam ?? 0) > 0) { pm.steam = (pm.steam ?? 0) - 1; log(s, p.id, `${name}: a steam counter is removed (${pm.steam} left).`); }
-        else destroy();
-      }
+  // start of turn triggers: a human player with two or more different ones chooses their order
+  const triggers = p.permanents.filter((pm) => isStartTrigger(pm.inst));
+  if (!p.isBot && new Set(triggers.map((pm) => cardOf(pm.inst).name)).size >= 2) {
+    s.pendingTriggers = { player: p.id, uids: triggers.map((pm) => pm.inst.uid) };
+    log(s, p.id, `${p.name} chooses the order of the start-of-turn triggers.`, RULES.triggerOrder);
+    return;
+  }
+  for (const pm of triggers) runStartTrigger(s, p, pm.inst.uid);
+  ability(p)?.startOfTurn?.(heroCtx(s, p));
+}
+
+const START_TOKENS = ['Agility', 'Might', 'Vigor', 'Embodiment of Earth', 'Sigil of Fate', 'Seismic Surge'];
+function isStartTrigger(inst: CardInst): boolean {
+  const c = cardOf(inst);
+  if (START_TOKENS.includes(c.name)) return true;
+  const sc = getScript(c);
+  return !!sc.destroyAt || sc.steamUpkeep;
+}
+
+function runStartTrigger(s: GameState, p: PlayerState, uid: number) {
+  const pm = p.permanents.find((x) => x.inst.uid === uid);
+  if (!pm) return;
+  const name = cardOf(pm.inst).name;
+  const destroy = () => removePermanent(s, p, pm.inst.uid);
+  // tokens whose printed text says what they do (Might, Vigor, Agility, ...) resolve through that text when destroyed
+  if (getScript(cardOf(pm.inst)).onDestroy.length) { destroy(); return; }
+  if (name === 'Agility') { destroy(); p.effects.push({ kind: 'nextAttackGoAgain', filter: { kind: 'any' }, source: name }); }
+  else if (name === 'Might') { destroy(); p.effects.push({ kind: 'nextAttackPower', amount: 1, filter: { kind: 'any' }, source: name }); }
+  else if (name === 'Vigor') { destroy(); p.resources += 1; }
+  else if (['Embodiment of Earth', 'Sigil of Fate', 'Seismic Surge'].includes(name)) destroy();
+  else {
+    const sc = getScript(cardOf(pm.inst));
+    if (sc.destroyAt) destroy();
+    else if (sc.steamUpkeep) {
+      if ((pm.steam ?? 0) > 0) { pm.steam = (pm.steam ?? 0) - 1; log(s, p.id, `${name}: a steam counter is removed (${pm.steam} left).`); }
+      else destroy();
     }
   }
+}
+
+function doOrderTriggers(s: GameState, order: number[]) {
+  const pt = s.pendingTriggers;
+  if (!pt) throw new Error('There are no triggers to order.');
+  if (order.length !== pt.uids.length || !pt.uids.every((u) => order.includes(u))) throw new Error('Put every trigger in the order.');
+  const p = s.players[pt.player];
+  s.pendingTriggers = undefined;
+  for (const uid of order) runStartTrigger(s, p, uid);
   ability(p)?.startOfTurn?.(heroCtx(s, p));
 }
 
@@ -645,7 +676,7 @@ export const HAND_INDEX = 2000;
 export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const p = s.players[pid];
   const out: PlayOption[] = [];
-  if (s.priority !== pid || !['action', 'reaction'].includes(s.phase)) return out;
+  if (s.priority !== pid || !['action', 'reaction'].includes(s.phase) || s.pendingTriggers) return out;
   const fromBanished = p.banished.filter((b) => { const fb = getScript(cardOf(b)).fromBanished; return !!fb && (!fb.cond || evalCondition(s, p, fb.cond)); });
   for (const inst of [...p.hand, ...p.arsenal, ...fromBanished]) {
     const c = cardOf(inst);
@@ -747,10 +778,12 @@ export function checkDefense(s: GameState, uids: number[]): string | null {
 export function applyAction(prev: GameState, action: Action): GameState {
   const s: GameState = structuredClone(prev);
   if (s.phase === 'gameOver' && action.type !== 'manual') return s;
+  if (s.pendingTriggers && !['orderTriggers', 'concede', 'manual'].includes(action.type)) throw new Error('Choose the order of your start-of-turn triggers first.');
   switch (action.type) {
     case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0, action.optional); break;
     case 'activate': doActivate(s, action.uid, action.index, action.pitch); break;
     case 'pass': doPass(s, action.pitchOrder); break;
+    case 'orderTriggers': doOrderTriggers(s, action.order); break;
     case 'defend': doDefend(s, action.uids, action.boosts ?? [], action.pitch ?? []); break;
     case 'arsenal': if (action.pitchOrder) s.players[s.turnPlayer].turn.pitchOrder = action.pitchOrder; doArsenal(s, action.uid); break;
     case 'concede': {
