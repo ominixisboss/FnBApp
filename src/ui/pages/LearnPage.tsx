@@ -8,7 +8,7 @@ export default function LearnPage({ lesson }: { lesson?: string }) {
   const idx = Math.max(0, LESSONS.findIndex((l) => l.id === lesson));
   const cur = lesson === 'glossary' ? null : LESSONS[idx];
   return (
-    <div className="editor" style={{ gridTemplateColumns: '260px 1fr' }}>
+    <div className="learn-layout">
       <div className="panel lesson-list">
         <h3 style={{ marginTop: 0 }}>Lessons</h3>
         {LESSONS.map((l) => (

@@ -826,7 +826,9 @@ table.history tr.me-row td { background: #d9a4411a; }
   .lobby { align-items: stretch !important; }
   .lobby-main { min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
   .lobby-side { position: relative !important; top: 0; height: 100%; max-height: none; overflow-y: auto; padding: .5rem .6rem 0; gap: .4rem; }
-  .lobby-side .play-big { position: sticky; bottom: .5rem; margin-top: auto; margin-bottom: .5rem; flex-shrink: 0; z-index: 2; }
+  .lobby-side .play-big { position: sticky; bottom: .5rem; margin-top: auto; margin-bottom: .5rem; flex-shrink: 0; z-index: 2;
+    box-shadow: 0 0 0 4px #00000080, 0 -14px 16px 10px #15110d, inset 0 2px 0 #ffffff55; }
+  .lobby-side .play-big:disabled { opacity: 1; filter: none; background: linear-gradient(180deg, #5a4a3c, #3a2e24); border-color: #6b5a48; color: #c9b8a0; }
   .lobby-side::after { content: ""; position: sticky; bottom: 0; display: block; flex-shrink: 0; height: 0; box-shadow: 0 0 22px 34px #15110d; margin-top: -1px; z-index: 1; pointer-events: none; }
   .lobby-matchup { gap: .3rem; }
   .matchup-hero { font-size: .66rem; gap: .2rem; }
@@ -1293,7 +1295,8 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 @media (orientation: landscape) { .lc-side { padding-top: calc(3.2rem + var(--sa-t)); } }
 .lc-life { display: flex; align-items: center; gap: 1.2rem; }
 .lc-num { font: 800 clamp(4rem, 20vmin, 9rem)/1 Inter, system-ui, sans-serif; min-width: 2.2ch; text-align: center; text-shadow: 0 4px 20px #000; font-variant-numeric: tabular-nums; }
-.lc-btn { width: clamp(64px, 16vmin, 110px); height: clamp(64px, 16vmin, 110px); border-radius: 50%; font-size: 2.4rem; font-weight: 800; background: #0008; touch-action: manipulation; user-select: none; }
+.lc-btn { width: clamp(64px, 16vmin, 110px); height: clamp(64px, 16vmin, 110px); border-radius: 50%; font-size: 2.4rem; font-weight: 800; background: #0008; touch-action: manipulation; user-select: none;
+  display: grid; place-items: center; padding: 0; line-height: 1; }
 .lc-small { display: flex; gap: 1.5rem; font-size: 1.1rem; }
 .lc-small button { padding: .1em .6em; }
 .lc-bar { position: fixed; z-index: 61; left: 50%; top: calc(.4rem + var(--sa-t, 0px)); transform: translateX(-50%); display: flex; gap: .5rem; align-items: center; padding: .3rem .7rem; border-radius: 999px; background: #15110df2; border: 1px solid #a57c46; }
@@ -1394,3 +1397,77 @@ html.big-text { font-size: 112.5%; }
 html.big-text .card .fallback { font-size: 1.1em; }
 html.big-text .log, html.big-text .small { font-size: .95em; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ===================================================== one-handed portrait board (phones held upright)
+   Everything you touch sits in the bottom third: the hand, the big action button (right, under your thumb)
+   and hint / undo / menu (left). The playmat uses 6 columns so the cards on it are larger. */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena { --hw: clamp(84px, 23vw, 104px); --ohw: 30px; --ctl: calc(var(--hw) * 1.4 + 14px + var(--sa-b)); }
+  .arena-bar { top: auto; bottom: var(--ctl); left: 8px; right: auto; height: auto; padding: 0; background: none; gap: 6px; z-index: 12; }
+  .arena-bar .grow, .arena-bar .arena-title { display: none; }
+  .arena-bar .icon-btn { width: 44px; height: 44px; justify-content: center; padding: 0; font-size: 1.1rem; background: #000b; border-color: #ffffff2a; }
+  .bar-more.open { top: auto !important; bottom: 52px; left: 0; right: auto !important; }
+  .chess-clock, .online-badge { position: fixed; top: calc(6px + var(--sa-t)); left: 50%; transform: translateX(-50%); }
+
+  .hand-fan { bottom: calc(6px + var(--sa-b)); padding: 0 6px; }
+  .fan-card { margin-left: calc(var(--hw) * -0.42); transform-origin: 50% 220%; }
+  .fan-card:hover { translate: 0 calc(var(--hw) * -0.35) !important; scale: 1.1; }
+  .dock { right: 8px; bottom: var(--ctl); width: min(190px, 48vw); }
+  .arena .prompt { padding: 6px; gap: 5px; }
+  .arena .prompt .msg { font-size: .7rem; max-height: 3.2em; overflow: hidden; }
+  .arena .prompt button.primary { min-height: 52px; font-size: .95rem; }
+  .phase-ladder { display: none; }
+  .arena-hint { top: calc(36px + var(--sa-t)); bottom: auto; left: 8px; right: 8px; width: auto; }
+
+  .arena-board { top: calc(var(--ohw) * 1.1 + var(--sa-t)); bottom: calc(var(--ctl) + 54px); padding: 0 4px; }
+  .arena .mat { width: 100%; padding: 4px; gap: 3px; }
+  .arena .mat-side, .arena .mat-chain { --gap: 3px; --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6), 74px); }
+  .arena .mat-side {
+    grid-template-columns: repeat(6, var(--slot));
+    grid-template-rows: auto repeat(2, calc(var(--slot) * 1.3956));
+    justify-content: center; padding: 2px;
+  }
+  .arena .mat-side.me {
+    grid-template-areas:
+      "info info fx fx perm perm"
+      "head weapL hero weapR pitch grave"
+      "chest arms arsenal legs deck banish";
+  }
+  .arena .mat-side.opp {
+    --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .78), 58px);
+    grid-template-areas:
+      "banish deck legs arsenal arms chest"
+      "grave pitch weapR hero weapL head"
+      "perm perm fx fx info info";
+  }
+  .arena .mat-chain { --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .8), 60px); }
+  .arena .mat-info { flex-direction: row; gap: 6px; align-items: center; justify-self: start; }
+  .arena .mat-perms { justify-self: end; }
+  .arena .slot-label { font-size: max(7px, calc(var(--slot) * .13)); }
+  .arena .life-orb { font-size: max(13px, calc(var(--slot) * .28)) !important; }
+  .puzzle-banner { top: calc(4px + var(--sa-t)); font-size: .72rem; }
+  html.in-game .preview { display: none; }
+}
+
+/* ---------------------------------------------------------------- layout fixes from the screen-size audit */
+.learn-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 760px) {
+  /* lessons become a row of chips above the lesson, so the text gets the full width */
+  .learn-layout { grid-template-columns: minmax(0, 1fr); }
+  .learn-layout .lesson-list { display: flex; flex-wrap: wrap; gap: .35rem; padding: .6rem; }
+  .learn-layout .lesson-list h3, .learn-layout .lesson-list hr { display: none; }
+  .learn-layout .lesson-list a:not(.learn-extra) { padding: .3rem .6rem; border: 1px solid var(--line); border-radius: 999px; font-size: .8rem; }
+  .learn-layout .lesson-list .learn-extra, .learn-layout .lesson-list button { margin-top: 0; flex: 1 1 45%; font-size: .85rem; }
+}
+.profile-head > :not(:first-child) { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.deckbox-new { font-size: .85rem; text-align: center; padding: .4rem; line-height: 1.2; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .lc-bar { gap: .3rem; padding: .25rem .5rem; }
+  .lc-bar .muted { display: none; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  /* PLAY stays under your thumb, just above the tab bar */
+  .lobby-side .play-big { position: fixed; left: 14px; right: 14px; bottom: calc(68px + var(--sa-b)); z-index: 24; font-size: 1.3rem; padding: .6em; box-shadow: 0 0 0 4px #00000080, 0 -6px 24px 10px #0e0c0acc; }
+  .page:has(.lobby) { padding-bottom: calc(150px + var(--sa-b)); }
+  .lobby-side .play-big:disabled { opacity: 1; filter: none; background: linear-gradient(180deg, #5a4a3c, #3a2e24); border-color: #6b5a48; color: #c9b8a0; }
+}

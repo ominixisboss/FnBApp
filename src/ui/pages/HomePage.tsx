@@ -19,7 +19,7 @@ export default function HomePage({ db }: { db: CardDb }) {
       <InstallPrompt />
       <div className="tiles">
         <a className="panel tile" href="#learn"><h3>📖 Learn</h3><p className="muted">Short lessons on pitching, combat, defending and strategy, plus a keyword glossary.</p></a>
-        <a className="panel tile" href="#play"><h3>⚔ Play</h3><p className="muted">Easy, normal and hard bots. Hints, undo and manual controls.</p></a>
+        <a className="panel tile" href="#play"><h3>⚔ Play</h3><p className="muted">Bots from Easy to Mythic, real match rules, hints and undo. Play sideways or upright with one hand.</p></a>
         <a className="panel tile" href="#decks"><h3>🃏 Decks</h3><p className="muted">{decks.length ? `${decks.length} saved deck${decks.length > 1 ? 's' : ''}. ` : ''}Build with live legality checks, import from Fabrary/FaB DB text, export, or auto-build.</p></a>
         <a className="panel tile" href="#cards"><h3>🔎 Card database</h3><p className="muted">Search every card by name, text, class, type, pitch and format.</p></a>
         <a className="panel tile" href="#puzzles"><h3>🧩 Lethal puzzles</h3><p className="muted">Win this turn: positions even the bots can’t solve.</p></a>
