@@ -1,0 +1,56 @@
+# Keeps the card database current: every Monday, rebuild public/data/cards.json (new sets, errata, legality,
+# bans and suspensions) and the keyword rules from the-fab-cube dataset. If anything changed and the tests still
+# pass, open a pull request with the update.
+# One-time setup: Settings -> Actions -> General -> "Allow GitHub Actions to create and approve pull requests".
+name: Update card data
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run update-cards
+      - name: Summarise the changes
+        id: diff
+        run: |
+          if git diff --quiet -- public/data; then echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          node -e "
+            const { execSync } = require('child_process');
+            const before = JSON.parse(execSync('git show HEAD:public/data/cards.json', { maxBuffer: 1e9 })).cards;
+            const after = require('./public/data/cards.json').cards;
+            const A = new Map(before.map((c) => [c.id, c]));
+            const added = after.filter((c) => !A.has(c.id));
+            const legal = after.filter((c) => A.has(c.id) && A.get(c.id).legal.join() !== c.legal.join());
+            const lines = ['Automatic card data update.', '', '- ' + added.length + ' new cards' + (added.length ? ': ' + added.slice(0, 30).map((c) => c.name).join(', ') + (added.length > 30 ? ', ...' : '') : ''),
+              '- ' + legal.length + ' legality changes (bans, suspensions, rotations)' + (legal.length ? ':' : '')];
+            for (const c of legal.slice(0, 40)) lines.push('  - ' + c.name + ': ' + (A.get(c.id).legal.join('/') || 'none') + ' -> ' + (c.legal.join('/') || 'none'));
+            require('fs').writeFileSync('update-summary.md', lines.join('\n'));
+          "
+      - name: Test with the new data
+        if: steps.diff.outputs.changed == 'true'
+        run: npm test
+      - name: Open a pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/card-data
+          commit-message: 'Update card data from the-fab-cube'
+          title: 'Card data update (new cards, errata, legality)'
+          body-path: update-summary.md
+          add-paths: public/data
+          delete-branch: true

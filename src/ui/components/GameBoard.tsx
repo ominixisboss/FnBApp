@@ -5,11 +5,12 @@ import {
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
-import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState } from '../../engine/types';
+import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState, Zone } from '../../engine/types';
 import { decideOptional, describeAction } from '../../ai/bot';
 import type { BotDecision } from '../../ai/bot';
 import { askBot } from '../../ai/botClient';
 import { getScript } from '../../engine/cardScript';
+import { formatName } from '../../deck/deck';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
@@ -169,6 +170,8 @@ export interface OnlineLink {
   send(a: Action): void;
   opponent: { name: string; connected: boolean } | null;
   error: string | null;
+  /** private room where manual moves are allowed (like a tabletop) */
+  sandbox?: boolean;
   /** the opponent's latest emote, and sending your own */
   emote?: { id: string; at: number } | null;
   sendEmote?: (id: string) => void;
@@ -181,7 +184,7 @@ function EmoteBubble({ id, mine }: { id: string; mine?: boolean }) {
   return <div className={`emote-bubble ${mine ? 'mine' : 'theirs'}`}><span>{e[1]}</span> {e[2]}</div>;
 }
 
-export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel }: {
+export default function GameBoard({ initial, tutorial, onExit, onRematch, onGameOver, online, cosmetics, extraResult, watch, rematchLabel, sandbox, clock }: {
   initial: GameState; tutorial: boolean; onExit: () => void; onRematch?: () => void; onGameOver?: (s: GameState, stats: MatchStats, replay?: { initial: GameState; actions: Action[] }) => void;
   /** the player's equipped card sleeve and playmat */
   cosmetics?: { sleeve?: string; mat?: string };
@@ -191,6 +194,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   watch?: (s: GameState) => void;
   /** what to call the opponent screen's rematch button */
   rematchLabel?: string;
+  /** sandbox: start with manual moves on */
+  sandbox?: boolean;
+  /** chess clock: minutes per player; your time runs while you have priority, and running out loses */
+  clock?: number;
   /** when set, the game is played on the server: state comes from it and actions are sent to it */
   online?: OnlineLink;
 }) {
@@ -215,6 +222,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const logRef = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
+  const [pitchOrderOn, setPitchOrderOn] = useState(() => readSetting('pitchorder', false));
+  // manual moves (sandbox): tap any card to move it anywhere
+  const manualAllowed = !online || !!online.sandbox;
+  const [manual, setManual] = useState(!!sandbox);
+  const [moveMenu, setMoveMenu] = useState<{ inst: CardInst; player: PlayerId } | null>(null);
+  const [ordering, setOrdering] = useState<{ action: Action; order: number[] } | null>(null);
   const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [emoteOpen, setEmoteOpen] = useState(false);
   const [myEmote, setMyEmote] = useState<{ id: string; at: number } | null>(null);
@@ -254,6 +267,29 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     if (i >= 0) log.length = i + 1;
   }, [state, online, initial]);
   const fx = useFx(state, skipFx);
+  // chess clock (local games)
+  const [times, setTimes] = useState<[number, number]>(() => [(clock ?? 0) * 60000, (clock ?? 0) * 60000]);
+  useEffect(() => {
+    if (!clock || online || state.phase === 'gameOver') return;
+    const who = state.priority;
+    let last = performance.now();
+    const t = setInterval(() => {
+      const now = performance.now();
+      const dt = now - last;
+      last = now;
+      setTimes((ts) => { const n: [number, number] = [...ts]; n[who] = Math.max(0, n[who] - dt); return n; });
+    }, 250);
+    return () => clearInterval(t);
+  }, [clock, online, state.priority, state.phase]);
+  useEffect(() => {
+    if (!clock || online || state.phase === 'gameOver') return;
+    const out = times.findIndex((t) => t <= 0) as PlayerId | -1;
+    if (out === -1 || state.priority !== out) return;
+    // flag fall: that player loses on time
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setState((s) => (s.phase !== 'gameOver' && s.priority === out ? logApply(s, { type: 'concede' }) : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [times, clock, online, state.priority, state.phase]);
   // your decisions this game, for the post-game review
   const decisions = useRef<{ before: GameState; action: Action }[]>([]);
   const [reviewing, setReviewing] = useState(false);
@@ -383,7 +419,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           }
         });
       });
-    }, BOT_DELAY);
+    }, state.stack?.length ? 350 : BOT_DELAY); // quick when it is only deciding whether to respond
     return () => { cancelled = true; clearTimeout(t); };
   }, [state]);
 
@@ -484,6 +520,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   };
   const clickHand = (inst: CardInst, rect?: DOMRect) => {
     setError(null);
+    if (manual && !pending) return setMoveMenu({ inst, player: HUMAN });
     if (rect) lastClick.current = rect;
     else rememberRect(inst.uid);
     if (pending) {
@@ -499,7 +536,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       if (!defOpts.some((d) => d.uid === inst.uid)) return;
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
-    if (state.phase === 'arsenal') return act({ type: 'arsenal', uid: inst.uid });
+    if (state.phase === 'arsenal') return endTurnAct({ type: 'arsenal', uid: inst.uid });
     const opts = options.filter((o) => o.uid === inst.uid);
     if (opts.length > 1 || (opts.length === 1 && opts[0].index === HAND_INDEX)) return setChoosePlay(opts); // play it, or discard it for its effect?
     if (opts.length === 1) return startPlay(opts[0]);
@@ -508,6 +545,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   const clickArena = (inst: CardInst) => {
     rememberRect(inst.uid);
+    if (manual) return setMoveMenu({ inst, player: HUMAN });
     if (myTurn && state.phase === 'defend' && defOpts.some((d) => d.uid === inst.uid)) {
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
@@ -577,6 +615,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const boostBonus = boostable.filter((b) => activeBoosts.includes(b.inst.uid)).reduce((a, b) => a + b.oc.effects.reduce((x, e) => x + (e.kind === 'thisDefense' ? e.amount : 0), 0), 0);
   const boostPitch = boostPay > 0 ? autoPitch(me, boostPay, defendSel) : [];
   const boostErr = boostPay > 0 && !boostPitch ? 'Not enough cards left to pitch for that.' : null;
+  // ending the turn: optionally choose the order your pitched cards go to the bottom of your deck
+  const endTurnAct = (a: Action) => {
+    if (pitchOrderOn && me.pitch.length >= 2 && !(a.type === 'pass' && state.stack?.length)) { setOrdering({ action: a, order: [] }); return; }
+    act(a);
+  };
+  const top = state.stack?.[state.stack.length - 1];
   let prompt: React.ReactNode;
   if (state.phase === 'gameOver') {
     prompt = (
@@ -589,7 +633,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (!myTurn) {
     prompt = (
       <>
-        <span className="msg muted">{state.players[state.priority].name} is thinking…</span>
+        <span className="msg muted">{top ? `${state.players[state.priority].name} may respond to ${top.label}…` : `${state.players[state.priority].name} is thinking…`}</span>
         <button className="primary waiting" disabled>Opponent’s Move</button>
       </>
     );
@@ -631,11 +675,18 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         <button className="primary" onClick={() => act({ type: 'pass' })}>Pass</button>
       </>
     );
+  } else if (state.phase === 'action' && top) {
+    prompt = (
+      <>
+        <span className="msg"><b>{top.label}</b> is on the stack{top.controller === HUMAN ? '' : ` (${state.players[top.controller].name})`}. Respond with an instant, or let it resolve.</span>
+        <button className="primary" onClick={() => act({ type: 'pass' })}>Let it resolve</button>
+      </>
+    );
   } else if (state.phase === 'arsenal') {
     prompt = (
       <>
         <span className="msg">End phase: choose a card for your arsenal.</span>
-        <button className="primary" onClick={() => act({ type: 'arsenal', uid: null })}>No Arsenal</button>
+        <button className="primary" onClick={() => endTurnAct({ type: 'arsenal', uid: null })}>No Arsenal</button>
       </>
     );
   } else {
@@ -644,7 +695,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         <span className="msg">
           {me.actionPoints > 0 ? `${me.actionPoints} action point${me.actionPoints > 1 ? 's' : ''}. Drag or click a glowing card.` : 'No action points left.'}
         </span>
-        <button className="primary" onClick={() => act({ type: 'pass' })}>{state.chainOpen ? 'Close Chain · End Turn' : 'End Turn'}</button>
+        <button className="primary" onClick={() => endTurnAct({ type: 'pass' })}>{state.chainOpen ? 'Close Chain · End Turn' : 'End Turn'}</button>
       </>
     );
   }
@@ -662,8 +713,16 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   return (
     <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
       <div className="arena-bar">
-        <span className="arena-title">{state.format === 'cc' ? 'Classic Constructed' : state.format === 'blitz' ? 'Blitz' : 'Casual'} · Turn {state.turn}</span>
+        <span className="arena-title">{formatName(state.format)} · Turn {state.turn}</span>
         <div className="grow" />
+        {!!clock && !online && (
+          <span className="chess-clock" title="Chess clock: your time runs while it's your decision">
+            {(['You', state.players[1].name.replace(' (bot)', '')] as string[]).map((_n, i) => {
+              const t = times[i];
+              return <span key={i} className={`clk ${state.priority === i && state.phase !== 'gameOver' ? 'run' : ''} ${t < 60000 ? 'low' : ''}`}>{i === 0 ? '⏱' : ''} {Math.floor(t / 60000)}:{String(Math.floor(t / 1000) % 60).padStart(2, '0')}</span>;
+            })}
+          </span>
+        )}
         {online && (
           <span className={`online-badge ${online.opponent?.connected === false ? 'warn' : ''}`}>
             ● Online{online.opponent?.connected === false ? ' · opponent disconnected (they forfeit in 2 min)' : ''}
@@ -679,6 +738,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
+          <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         </div>
@@ -695,9 +756,20 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       <div className="arena-board" ref={colRef}>
         <div className="mat">
           <div ref={oppRef}>
-            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => setDetail(cardOf(i))} onZone={setZone} fx={fx} />
+            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => (manual && !online ? setMoveMenu({ inst: i, player: 1 }) : setDetail(cardOf(i)))} onZone={setZone} fx={fx} onDeck={manual && !online ? () => setMoveMenu({ inst: opp.hero, player: 1 }) : undefined} />
           </div>
           <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
+          {!!state.stack?.length && (
+            <div className="stack-zone" aria-label="The stack">
+              <span className="stack-title">Stack</span>
+              {[...state.stack].reverse().map((l, i) => (
+                <div key={l.inst.uid + '-' + i} className={`stack-layer ${l.controller === HUMAN ? 'mine' : 'theirs'} ${i === 0 ? 'top' : ''}`}>
+                  <CardView card={cardOf(l.inst)} width="calc(var(--slot, 60px) * .8)" onClick={() => setDetail(cardOf(l.inst))} />
+                  {i === 0 && <span className="small">resolves next</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <PlayerArea
             p={me}
             state={state}
@@ -710,6 +782,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             }}
             marker={(inst) => hintMarker(inst.uid)}
             arsenalClick={(i) => clickHand(i)}
+            onDeck={manual ? () => setMoveMenu({ inst: me.hero, player: HUMAN }) : undefined}
             arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
           />
@@ -777,7 +850,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {drawer === 'log' && (
             <div className="log" ref={logRef}>
               {state.log.slice(-250).map((l, i) => (
-                <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>{l.text}</div>
+                <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>
+                  {l.text}
+                  {l.rule && <details className="rule-tip"><summary>ℹ why?</summary>{l.rule}</details>}
+                </div>
               ))}
             </div>
           )}
@@ -805,7 +881,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             {' '}· you finished on {Math.max(0, me.life)} life.
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
-            {onRematch && <button className="primary" onClick={onRematch}>Rematch</button>}
+            {onRematch && <button className="primary" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
             <button className="gold" onClick={onExit}>New game</button>
             <button onClick={() => setOverlay(false)}>View board</button>
             {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
@@ -814,14 +890,86 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {onGameOver && <ProgressGains before={progressBefore} />}
         </GameOverOverlay>
       )}
+      {manual && <div className="manual-banner">✋ Manual moves on: tap a card to move it · <button className="small" onClick={() => setManual(false)}>Done</button></div>}
+      {moveMenu && (() => {
+        const pl = state.players[moveMenu.player];
+        const isHero = moveMenu.inst.uid === pl.hero.uid;
+        const eq = pl.equipment.find((e) => e.inst.uid === moveMenu.inst.uid);
+        const wp = pl.weapons.find((w) => w.inst.uid === moveMenu.inst.uid);
+        const pm = pl.permanents.find((x) => x.inst.uid === moveMenu.inst.uid);
+        const go = (a: Action) => { act(a); setMoveMenu(null); };
+        const move = (to: Zone, bottom?: boolean) => go({ type: 'manual', op: 'move', player: moveMenu.player, uid: moveMenu.inst.uid, to, bottom });
+        return (
+          <div className="modal-bg" onClick={() => setMoveMenu(null)}>
+            <div className="modal move-menu" onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ margin: 0 }}>{isHero ? `${pl.name}: deck & hero` : cardOf(moveMenu.inst).name}</h3>
+              {isHero ? (
+                <div className="row">
+                  <button onClick={() => go({ type: 'manual', op: 'draw', player: moveMenu.player })}>Draw a card</button>
+                  <button onClick={() => go({ type: 'manual', op: 'shuffle', player: moveMenu.player })}>Shuffle deck</button>
+                  <button onClick={() => { setMoveMenu(null); setZone({ title: `${pl.name}'s deck (top first)`, cards: pl.deck }); }}>Search deck</button>
+                  <button onClick={() => go({ type: 'manual', op: 'life', player: moveMenu.player, amount: -1 })}>−1 ♥</button>
+                  <button onClick={() => go({ type: 'manual', op: 'life', player: moveMenu.player, amount: 1 })}>+1 ♥</button>
+                </div>
+              ) : eq || wp ? (
+                <div className="row">
+                  {eq && <button onClick={() => go({ type: 'manual', op: 'equipment', player: moveMenu.player, uid: eq.inst.uid, destroyed: !eq.destroyed })}>{eq.destroyed ? 'Restore' : 'Destroy'}</button>}
+                  <button onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: moveMenu.inst.uid, amount: 1 })}>+1 counter</button>
+                  <button onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: moveMenu.inst.uid, amount: -1 })}>−1 counter</button>
+                </div>
+              ) : (
+                <>
+                  <div className="small muted">Move to</div>
+                  <div className="move-grid">
+                    {([['hand', '✋ Hand'], ['arsenal', '🎯 Arsenal'], ['pitch', '⛀ Pitch'], ['graveyard', '🪦 Graveyard'], ['banished', '🚫 Banished'], ['arena', '✨ Arena (aura / item / ally)'], ['soul', '☀ Soul']] as [Zone, string][]).map(([z, label]) => (
+                      <button key={z} onClick={() => move(z)}>{label}</button>
+                    ))}
+                    <button onClick={() => move('deck')}>⬆ Top of deck</button>
+                    <button onClick={() => move('deck', true)}>⬇ Bottom of deck</button>
+                  </div>
+                  {pm && (
+                    <div className="row"><span className="small">Counters: {pm.counters ?? 0}</span>
+                      <button className="small" onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: pm.inst.uid, amount: 1 })}>+1</button>
+                      <button className="small" onClick={() => go({ type: 'manual', op: 'counter', player: moveMenu.player, uid: pm.inst.uid, amount: -1 })}>−1</button>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="row"><button className="small" onClick={() => { setDetail(cardOf(moveMenu.inst)); setMoveMenu(null); }}>Card details</button><button className="small" onClick={() => setMoveMenu(null)}>Cancel</button></div>
+            </div>
+          </div>
+        );
+      })()}
+      {ordering && (
+        <div className="modal-bg">
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <h2 style={{ marginBottom: '.2rem' }}>Pitch order</h2>
+            <p className="small muted" style={{ marginTop: 0 }}>Tap your pitched cards in the order they go to the bottom of your deck. The first one you tap goes in first, so it is drawn first when the deck cycles round.</p>
+            <div className="row" style={{ gap: '.6rem' }}>
+              {me.pitch.map((p) => {
+                const n = ordering.order.indexOf(p.uid);
+                return (
+                  <div key={p.uid} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setOrdering({ ...ordering, order: n >= 0 ? ordering.order.filter((u) => u !== p.uid) : [...ordering.order, p.uid] })}>
+                    <CardView card={cardOf(p)} width={96} tilt={false} noPopout marker={n >= 0 ? String(n + 1) : undefined} className={n >= 0 ? 'hint-play' : ''} />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="row" style={{ marginTop: '1rem' }}>
+              <button className="primary" disabled={ordering.order.length !== me.pitch.length} onClick={() => { const a = ordering.action; const order = ordering.order; setOrdering(null); act({ ...a, pitchOrder: order } as Action); }}>Done</button>
+              <button onClick={() => { const a = ordering.action; setOrdering(null); act(a); }}>Keep the order I pitched them</button>
+            </div>
+          </div>
+        </div>
+      )}
       {reviewing && <GameReview decisions={decisions.current} onClose={() => setReviewing(false)} />}
       {detail && <CardDetail card={detail} onClose={() => setDetail(null)} />}
       {optPick && (() => {
         const inst = [...me.hand, ...me.arsenal].find((i) => i.uid === optPick.opt.uid);
         const oc = inst && getScript(cardOf(inst)).optional;
         if (!inst || !oc) return null;
-        const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop'].includes(oc.cost.kind);
-        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind !== 'discard' || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+        const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop', 'reveal', 'charge'].includes(oc.cost.kind);
+        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
         const advice = decideOptional(state, me, inst.uid, []);
         const yes = (choice: OptionalChoice) => startPlay(optPick.opt, optPick.mode, choice);
         return (
@@ -887,7 +1035,12 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <button className="close small" onClick={() => setZone(null)}>✕</button>
             <h2>{zone.title} ({zone.cards.length})</h2>
-            <div className="grid">{zone.cards.map((c) => <CardView key={c.uid} card={cardOf(c)} onClick={() => setDetail(cardOf(c))} />)}</div>
+            <div className="grid">{zone.cards.map((c) => (
+              <div key={c.uid}>
+                <CardView card={cardOf(c)} onClick={() => setDetail(cardOf(c))} />
+                {manual && (c.owner === HUMAN || !online) && <button className="small" style={{ width: '100%', marginTop: 4 }} onClick={() => { setZone(null); setMoveMenu({ inst: c, player: c.owner }); }}>Move…</button>}
+              </div>
+            ))}</div>
           </div>
         </div>
       )}
@@ -910,10 +1063,10 @@ function Slot({ area, label, filled, onClick, className = '', children, uid, cou
   );
 }
 
-function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx }: {
+function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass, marker, arsenalClick, arsenalClass, fx, onDeck }: {
   p: PlayerState; state: GameState; isOpp?: boolean; onHover: (c: Card | null) => void; onClickArena: (i: CardInst) => void;
   onZone: (z: { title: string; cards: CardInst[] }) => void; arenaClass?: (i: CardInst) => string; marker?: (i: CardInst) => string | undefined;
-  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx;
+  arsenalClick?: (i: CardInst) => void; arsenalClass?: (i: CardInst) => string; fx: Fx; onDeck?: () => void;
 }) {
   const active = state.turnPlayer === p.id;
   const effects = pendingEffectsText(p);
@@ -984,7 +1137,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           ? <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid} data-from="opphand"><CardBack width={SLOT} label="A" /></div>
           : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} marker={marker?.(p.arsenal[0])} /></div>)}
       </Slot>
-      <Slot area="deck" label="Deck" filled={p.deck.length > 0}>
+      <Slot area="deck" label="Deck" filled={p.deck.length > 0} onClick={onDeck} className={onDeck ? 'clickable' : ''}>
         {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
       </Slot>
       {pile('pitch', 'Pitch', p.pitch, 'anim-pitch', `${p.name}'s pitch zone`)}

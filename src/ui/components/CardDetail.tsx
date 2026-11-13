@@ -3,11 +3,30 @@ import { PITCH_COLOR } from '../../data/types';
 import { getScript } from '../../engine/cardScript';
 import { heroAutomation } from '../../engine/heroes';
 import CardView from './CardView';
+import { useEffect, useState } from 'react';
+
+// official keyword definitions (public/data/keywords.json, from the card data source), loaded once
+let kwDefs: Record<string, string> | null = null;
+let kwLoading: Promise<Record<string, string>> | null = null;
+function useKeywordDefs() {
+  const [defs, setDefs] = useState(kwDefs);
+  useEffect(() => {
+    if (kwDefs) return;
+    kwLoading ??= fetch(`${import.meta.env.BASE_URL}data/keywords.json`).then((r) => r.json()).catch(() => ({}));
+    let on = true;
+    void kwLoading.then((d) => { kwDefs = d; if (on) setDefs(d); });
+    return () => { on = false; };
+  }, []);
+  return defs;
+}
+const baseKw = (k: string) => k.replace(/\s+(\d+|X)$/, '');
 
 const FORMAT_LABEL: Record<string, string> = { blitz: 'Blitz', cc: 'Classic Constructed', sage: 'Silver Age', commoner: 'Commoner', ll: 'Living Legend' };
 
 export default function CardDetail({ card, onClose, actions }: { card: Card; onClose: () => void; actions?: React.ReactNode }) {
   const sc = getScript(card);
+  const defs = useKeywordDefs();
+  const official = (card.keywords ?? []).map((k) => [k, defs?.[k] ?? defs?.[baseKw(k)]] as const).filter(([, d]) => !!d);
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -31,6 +50,17 @@ export default function CardDetail({ card, onClose, actions }: { card: Card; onC
             {card.text && <div className="rules-text">{card.text}</div>}
             <div className="row">
               {card.keywords.map((k) => <span key={k} className="tag">{k}</span>)}
+            </div>
+            {official.length > 0 && (
+              <div className="official-rules">
+                <b className="small">Official rules</b>
+                {official.map(([k, d]) => <div key={k} className="small"><b>{k}</b>: {d}</div>)}
+              </div>
+            )}
+            <div className="small">
+              <a href={`https://rules.fabtcg.com/`} target="_blank" rel="noreferrer">Comprehensive rules ↗</a>
+              {' · '}
+              <a href={`https://www.google.com/search?q=${encodeURIComponent(`site:fabtcg.com "${card.name}" ruling OR errata`)}`} target="_blank" rel="noreferrer">Search official rulings &amp; errata ↗</a>
             </div>
             <div className="small">
               <b>Legal in:</b> {card.legal.length ? card.legal.map((f) => FORMAT_LABEL[f]).join(', ') : 'none (banned / rotated / living legend)'}

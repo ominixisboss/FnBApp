@@ -38,6 +38,10 @@ export interface Store {
   /** online game replays: the starting position and every action */
   putReplay(matchId: string, json: string): Promise<void>;
   getReplay(matchId: string): Promise<string | undefined>;
+  /** friend tournaments: the JSON document, plus its members for lookups */
+  putTournament(id: string, members: number[], json: string): Promise<void>;
+  getTournament(id: string): Promise<string | undefined>;
+  tournamentsFor(userId: number): Promise<string[]>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
 }
@@ -55,7 +59,10 @@ const EXTRA_TABLES = (big: string) => `
     CREATE TABLE IF NOT EXISTS ratings (user_id INTEGER PRIMARY KEY, rating INTEGER NOT NULL, games INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS friends (user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL, created_at ${big} NOT NULL, PRIMARY KEY (user_id, friend_id));
     CREATE TABLE IF NOT EXISTS replays (match_id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at ${big} NOT NULL);
+    CREATE TABLE IF NOT EXISTS tournaments (id TEXT PRIMARY KEY, members TEXT NOT NULL, json TEXT NOT NULL, updated_at ${big} NOT NULL);
 `;
+// members are stored as ",1,5,9," so a member lookup is a simple LIKE in both databases
+const membersText = (ids: number[]) => `,${ids.join(',')},`;
 
 const LEADERBOARD_SQL = `
   SELECT u.username AS username, p.json AS profile, SUM(m.won) AS wins, COUNT(*) AS games
@@ -116,6 +123,9 @@ async function sqliteStore(): Promise<Store> {
     putReplay: db.prepare('INSERT OR REPLACE INTO replays (match_id, json, created_at) VALUES (?, ?, ?)'),
     getReplay: db.prepare('SELECT json FROM replays WHERE match_id = ?'),
     trimReplays: db.prepare('DELETE FROM replays WHERE created_at < ?'),
+    putTournament: db.prepare('INSERT INTO tournaments (id, members, json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET members = excluded.members, json = excluded.json, updated_at = excluded.updated_at'),
+    getTournament: db.prepare('SELECT json FROM tournaments WHERE id = ?'),
+    tournamentsFor: db.prepare("SELECT json FROM tournaments WHERE members LIKE '%,' || ? || ',%' ORDER BY updated_at DESC LIMIT 50"),
   };
   const user = (r: unknown) => (r ? (r as UserRow) : undefined);
   return {
@@ -142,6 +152,9 @@ async function sqliteStore(): Promise<Store> {
     removeFriend: async (a, b) => { st.delFriend.run(a, b); st.delFriend.run(b, a); },
     putReplay: async (m, json) => { st.putReplay.run(m, json, Date.now()); st.trimReplays.run(Date.now() - REPLAY_DAYS * 864e5); },
     getReplay: async (m) => (st.getReplay.get(m) as { json: string } | undefined)?.json,
+    putTournament: async (id, members, json) => { st.putTournament.run(id, membersText(members), json, Date.now()); },
+    getTournament: async (id) => (st.getTournament.get(id) as { json: string } | undefined)?.json,
+    tournamentsFor: async (uid) => (st.tournamentsFor.all(String(uid)) as { json: string }[]).map((r) => r.json),
   };
 }
 
@@ -204,6 +217,9 @@ async function postgresStore(url: string): Promise<Store> {
       await run('DELETE FROM replays WHERE created_at < $1', [Date.now() - REPLAY_DAYS * 864e5]);
     },
     getReplay: async (m) => (await one<{ json: string }>('SELECT json FROM replays WHERE match_id = $1', [m]))?.json,
+    putTournament: async (id, members, json) => { await run('INSERT INTO tournaments (id, members, json, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET members = excluded.members, json = excluded.json, updated_at = excluded.updated_at', [id, membersText(members), json, Date.now()]); },
+    getTournament: async (id) => (await one<{ json: string }>('SELECT json FROM tournaments WHERE id = $1', [id]))?.json,
+    tournamentsFor: async (uid) => (await run("SELECT json FROM tournaments WHERE members LIKE '%,' || $1 || ',%' ORDER BY updated_at DESC LIMIT 50", [String(uid)])).rows.map((r) => r.json),
   };
 }
 

@@ -37,7 +37,8 @@ export type Effect =
   | { kind: 'ampArcane'; amount: number }
   | { kind: 'weakenAttack'; amount: number }
   | { kind: 'thisOverpower' }
-  | { kind: 'tutor'; name: string };
+  | { kind: 'tutor'; name: string }
+  | { kind: 'sharpen'; times: number };
 
 /** A game-state condition from "If <condition>, ..." sentences. */
 export type Condition =
@@ -65,12 +66,15 @@ export type Condition =
   | { kind: 'attackingMarked' }
   | { kind: 'weaponAttacked' }
   | { kind: 'intimidated' }
-  | { kind: 'attackedTimes'; n: number };
+  | { kind: 'attackedTimes'; n: number }
+  | { kind: 'playedNonAttack' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
 
 export type OptionalCostKind =
+  | { kind: 'reveal'; talent: string } // Fusion: reveal an Ice / Earth / Lightning card from hand
+  | { kind: 'charge'; pitch?: number } // put a card from hand into your hero's soul
   | { kind: 'discard'; pitch?: number }
   | { kind: 'pay'; amount: number }
   | { kind: 'banishGrave'; n: number }
@@ -92,7 +96,7 @@ export interface OptionalCost {
 }
 
 export interface Conditional {
-  when: 'fromArsenal' | 'combo' | 'crush' | 'if' | 'ifLink' | 'surge';
+  when: 'fromArsenal' | 'fromBanished' | 'combo' | 'crush' | 'if' | 'ifLink' | 'surge';
   cond?: Condition;
   /** surge: "if this deals more than N damage" */
   threshold?: number;
@@ -149,6 +153,8 @@ export interface CardScript {
   optional?: OptionalCost;
   /** "Instant - Discard this: <effect>" usable from hand */
   handActivation?: { cost: number; effects: Effect[]; text: string };
+  /** "(If <condition>, ) you may play this from your banished zone" */
+  fromBanished?: { cond?: Condition };
   onDestroy: Effect[];
   noEquipDefense: boolean;
   /** where the attack card goes when it hits ("put it into your soul" / "on the bottom of its owner's deck") */
@@ -211,7 +217,7 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'draw', amount: toNum(m[1].toLowerCase()) }];
   if ((m = s.match(/^gain ((?:\{r\})+)$/i)))
     return [{ kind: 'gainResource', amount: m[1].length / 3 }];
-  if ((m = s.match(/^your next (?:(\w+) )?attack this turn gets \+(\d+)\{p\}(?: and go again)?$/i))) {
+  if ((m = s.match(/^your next (?:([\w ]+?) )?attack this turn gets \+(\d+)\{p\}(?: and go again)?$/i))) {
     const f = parseFilter(m[1] ?? '');
     if (!f) return null;
     const out: Effect[] = [{ kind: 'nextAttackPower', amount: +m[2], filter: f }];
@@ -220,7 +226,7 @@ export function parseEffect(raw: string): Effect[] | null {
   }
   if ((m = s.match(/^the next attack action card you play this turn gets \+(\d+)\{p\}$/i)))
     return [{ kind: 'nextAttackPower', amount: +m[1], filter: { kind: 'attackAction' } }];
-  if ((m = s.match(/^your next (?:(\w+) )?attack this turn gets go again$/i))) {
+  if ((m = s.match(/^your next (?:([\w ]+?) )?attack this turn gets go again$/i))) {
     const f = parseFilter(m[1] ?? '');
     return f ? [{ kind: 'nextAttackGoAgain', filter: f }] : null;
   }
@@ -265,6 +271,11 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^the next card you play this turn with an arcane damage effect,? (?:instead )?deals that much arcane damage plus (\d+)$/i)))
     return [{ kind: 'ampArcane', amount: +m[1] }];
   if ((m = s.match(/^your next arcane damage effect this turn deals \+?(\d+) more$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
+  if ((m = s.match(/^sharpen target sword you control( twice)?$/i))) return [{ kind: 'sharpen', times: m[1] ? 2 : 1 }];
+  if ((m = s.match(/^the next (?:([\w ]+?) )?attack action card you play this turn gets \+(\d+)\{p\}$/i))) {
+    const f = m[1] ? parseFilter(m[1]) : { kind: 'attackAction' as const };
+    if (f) return [{ kind: 'nextAttackPower', amount: +m[2], filter: f }];
+  }
   if ((m = s.match(/^target attack(?: action card)? gets -(\d+)\{p\}$/i))) return [{ kind: 'weakenAttack', amount: +m[1] }];
   // "X and Y"
   const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw)\b)/i);
@@ -311,6 +322,7 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you've attacked with a weapon this turn$/.test(t)) return { kind: 'weaponAttacked' };
   if (/^you've intimidated an opponent this turn$/.test(t)) return { kind: 'intimidated' };
   if ((m = t.match(/^you've been attacked (\d+) or more times this turn$/))) return { kind: 'attackedTimes', n: +m[1] };
+  if (/^you've played a non-attack action card this turn$/.test(t)) return { kind: 'playedNonAttack' };
   return null;
 }
 
@@ -321,6 +333,7 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
   if ((m = t.match(/^pay ((?:\{r\})+)$/))) return { kind: 'pay', amount: m[1].length / 3 };
   if ((m = t.match(/^banish (a|an|two|three|\d+) cards? from your graveyard$/))) return { kind: 'banishGrave', n: toNum(m[1]) };
   if (/^destroy the top card of your deck$/.test(t)) return { kind: 'destroyTop' };
+  if (/^charge your (?:hero's )?soul$/.test(t)) return { kind: 'charge' };
   if (/^put a card from your hand on the bottom of your deck$/.test(t)) return { kind: 'handToBottom' };
   if (/^banish a card from your hand$/.test(t)) return { kind: 'banishHand' };
   if (/^discard a card or destroy the top card of your deck$/.test(t)) return { kind: 'discardOrTop' };
@@ -335,14 +348,17 @@ export function parseOptional(a: string, b: string): OptionalCost | null {
   if (!ma) return null;
   const cost = parseOptionalCost(ma[2]);
   if (!cost) return null;
-  const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}),? (.+?)\.?$/i);
+  const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}|an? (red|yellow|blue) card is charged this way|you charged your (?:hero's )?soul this way),? (.+?)\.?$/i);
   if (!mb) return null;
-  const effects = parseEffect(mb[4]);
+  const effectText = mb[5];
+  const effects = parseEffect(effectText);
   if (!effects) return null;
   const minPower = mb[2] ? +mb[2] : mb[3] ? +mb[3] : undefined;
+  // "If a yellow card is charged this way": the charged card must be that colour
+  const finalCost: OptionalCostKind = mb[4] && cost.kind === 'charge' ? { kind: 'charge', pitch: { red: 1, yellow: 2, blue: 3 }[mb[4].toLowerCase() as 'red'] } : cost;
   return {
-    timing: /defends/i.test(ma[1]) ? 'defend' : /attacks/i.test(ma[1]) ? 'attack' : 'play', cost, minPower, effects,
-    costText: ma[2].replace(/\.$/, ''), effectText: mb[4].replace(/\.$/, ''),
+    timing: /defends/i.test(ma[1]) ? 'defend' : /attacks/i.test(ma[1]) ? 'attack' : 'play', cost: finalCost, minPower, effects,
+    costText: ma[2].replace(/\.$/, ''), effectText: effectText.replace(/\.$/, ''),
   };
 }
 
@@ -408,6 +424,7 @@ function compile(c: Card): CardScript {
     c.types.includes(t),
   );
   for (const k of c.keywords) keywordSentence(sc, k);
+  let fusion: string | null = null;
 
   // strip reminder text
   const text = c.text.replace(/\([^)]*\)/g, '').trim();
@@ -442,7 +459,8 @@ function compile(c: Card): CardScript {
         }
       }
       const extraOk = ['', 'destroy this', '{t}', '{t} your hero', '{t} your hero destroy this', '{t} destroy this', '0'].includes(extra);
-      let body = act[4].trim();
+      // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
+      let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
       if (/\.?\s*go again\.?$/i.test(body) && !/^attack/i.test(body)) {
         goAgain = true;
@@ -468,7 +486,29 @@ function compile(c: Card): CardScript {
       sc.unparsed.push(line);
       continue;
     }
+    // Fusion keyword line ("Ice Fusion"): the payoff is the "If this was fused, ..." sentence
+    const fus = line.match(/^(ice|earth|lightning) fusion$/i);
+    if (fus) { fusion = fus[1][0].toUpperCase() + fus[1].slice(1).toLowerCase(); continue; }
+    const fused = line.match(/^if this (?:was|is) fused, (.+?)\.?$/i);
+    if (fused && fusion && !sc.optional) {
+      const effects = parseEffect(fused[1]);
+      if (effects) {
+        sc.optional = { timing: 'play', cost: { kind: 'reveal', talent: fusion }, effects, costText: `reveal ${/^[aeiou]/i.test(fusion) ? 'an' : 'a'} ${fusion} card from your hand (fuse)`, effectText: fused[1] };
+        continue;
+      }
+    }
     const sentences = line.split(/(?<=\.)\s+(?=[A-Z])/).map((x) => x.trim());
+    // an optional cost on one line and its "If you do, ..." on the next
+    if (li + 1 < lines.length && !sc.optional) {
+      const nextFirst = lines[li + 1].split(/(?<=\.)\s+(?=[A-Z])/)[0];
+      const crossed = parseOptional(sentences[sentences.length - 1], nextFirst);
+      if (crossed) {
+        sc.optional = crossed;
+        sentences.pop();
+        lines[li + 1] = lines[li + 1].slice(nextFirst.length).trim();
+        if (!lines[li + 1]) lines.splice(li + 1, 1);
+      }
+    }
     for (let i = 0; i < sentences.length; i++) {
       const opt = i + 1 < sentences.length ? parseOptional(sentences[i], sentences[i + 1]) : null;
       if (opt && !sc.optional) {
@@ -521,6 +561,14 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if ((m = sent.match(/^as an additional cost to play this, banish (a|two|three|\d+) random cards? from your graveyard\.?$/i))) {
     sc.additionalCost.banishGraveyard = toNum(m[1].toLowerCase());
     return;
+  }
+  if ((m = sent.match(/^(?:if (.+?), )?you may play this from your banished zone\.?$/i))) {
+    const cond = m[1] ? parseCondition(m[1]) : undefined;
+    if (!m[1] || cond) return void (sc.fromBanished = { cond: cond ?? undefined });
+  }
+  if ((m = sent.match(/^when this is played from your banished zone, (.+)$/i))) {
+    const e = parseEffect(m[1].replace(/^it gets/i, 'this gets'));
+    if (e) return void sc.conditional.push({ when: 'fromBanished', effects: e });
   }
   if ((m = sent.match(/^if this (?:was|is) played from (?:your )?arsenal, (.+)$/i))) {
     const e = parseEffect(m[1]);

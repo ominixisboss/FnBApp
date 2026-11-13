@@ -186,6 +186,12 @@ export const friends = {
   remove: (username: string) => call(`/api/friends?username=${encodeURIComponent(username)}`, { method: 'DELETE' }),
 };
 export interface ServerReplay { matchId: string; date: number; format: string; ranked: boolean; users: number[]; names: string[]; initial: import('../engine/types').GameState; actions: { a: import('../engine/types').Action; by?: 0 | 1 }[] }
+export interface FriendCup { id: string; name: string; format: string; owner: number; created: number; players: { id: number; username: string; name: string }[]; games: { a: number; b: number; winner?: number; matchId?: string }[] }
+export const cups = {
+  list: () => call<FriendCup[]>('/api/tournaments'),
+  create: (name: string, format: string, usernames: string[]) => call<FriendCup>('/api/tournaments', { method: 'POST', body: JSON.stringify({ name, format, usernames }) }),
+  result: (id: string, a: number, b: number, winner: number | null) => call<FriendCup>('/api/tournaments/result', { method: 'POST', body: JSON.stringify({ id, a, b, winner }) }),
+};
 export const fetchReplay = (matchId: string) => call<ServerReplay>(`/api/replay?match=${encodeURIComponent(matchId)}`);
 
 export function useAuth() {

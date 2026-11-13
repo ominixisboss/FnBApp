@@ -5,8 +5,8 @@
 //   node scripts/build-cards.mjs ./card.json  (use a local copy)
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 
-const SOURCE =
-  'https://raw.githubusercontent.com/the-fab-cube/flesh-and-blood-cards/develop/json/english/card.json';
+const BASE = 'https://raw.githubusercontent.com/the-fab-cube/flesh-and-blood-cards/develop/json/english/';
+const SOURCE = `${BASE}card.json`;
 
 const num = (v) => (v === '' || v == null ? null : Number.isNaN(Number(v)) ? v : Number(v));
 
@@ -22,10 +22,11 @@ const raw = await load();
 const cards = raw.map((c) => {
   const printing = c.printings.find((p) => p.image_url) ?? c.printings[0];
   const legal = [];
-  if (c.blitz_legal && !c.blitz_banned && !c.blitz_living_legend) legal.push('blitz');
-  if (c.cc_legal && !c.cc_banned && !c.cc_living_legend) legal.push('cc');
+  // banned, suspended and living-legend cards aren't legal
+  if (c.blitz_legal && !c.blitz_banned && !c.blitz_suspended && !c.blitz_living_legend) legal.push('blitz');
+  if (c.cc_legal && !c.cc_banned && !c.cc_suspended && !c.cc_living_legend) legal.push('cc');
   if (c.silver_age_legal && !c.silver_age_banned) legal.push('sage');
-  if (c.commoner_legal && !c.commoner_banned) legal.push('commoner');
+  if (c.commoner_legal && !c.commoner_banned && !c.commoner_suspended) legal.push('commoner');
   if (c.ll_legal && !c.ll_banned) legal.push('ll');
   return {
     id: c.unique_id,
@@ -56,3 +57,16 @@ await writeFile(
   JSON.stringify({ source: SOURCE, builtAt: new Date().toISOString(), cards }),
 );
 console.log(`Wrote ${cards.length} cards to public/data/cards.json`);
+
+// official keyword definitions (shown as "Rules" on each card)
+try {
+  const local = process.argv[2];
+  const kw = local ? [] : await (await fetch(`${BASE}keyword.json`)).json();
+  const out = Object.fromEntries(kw.filter((k) => k.description_plain).map((k) => [k.name, k.description_plain]));
+  if (Object.keys(out).length) {
+    await writeFile('public/data/keywords.json', JSON.stringify(out));
+    console.log(`Wrote ${Object.keys(out).length} keyword definitions to public/data/keywords.json`);
+  }
+} catch (e) {
+  console.warn('Keyword definitions not updated:', e.message);
+}

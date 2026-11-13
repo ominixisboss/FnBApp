@@ -26,6 +26,7 @@ export default function CardFilters({ f, set, hideFormat, classOptions }: { f: C
           <option value="cc">Classic Constructed legal</option>
           <option value="sage">Silver Age legal</option>
           <option value="commoner">Commoner legal</option>
+          <option value="ll">Living Legend legal</option>
         </select>
       )}
     </div>

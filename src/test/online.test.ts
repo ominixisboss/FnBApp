@@ -37,16 +37,17 @@ async function account(name: string) {
   return (await r.json()) as { token: string };
 }
 
-interface Client { ws: WebSocket; states: GameState[]; errors: string[]; waiting: { code?: string } | null }
+interface Client { ws: WebSocket; states: GameState[]; errors: string[]; waiting: { code?: string } | null; spectated: GameState[] }
 
 function connect(token: string): Promise<Client> {
   return new Promise((resolve) => {
-    const c: Client = { ws: new WebSocket(`ws://localhost:${PORT}/ws?token=${token}`), states: [], errors: [], waiting: null };
+    const c: Client = { ws: new WebSocket(`ws://localhost:${PORT}/ws?token=${token}`), states: [], errors: [], waiting: null, spectated: [] };
     c.ws.on('message', (d) => {
       const m = JSON.parse(String(d));
       if (m.t === 'state') c.states.push(m.state);
       if (m.t === 'error') c.errors.push(m.message);
       if (m.t === 'waiting') c.waiting = m;
+      if (m.t === 'spectate') c.spectated.push(m.state);
     });
     c.ws.on('open', () => resolve(c));
   });
@@ -118,6 +119,64 @@ describe('online play', () => {
     ca.ws.close();
     cb.ws.close();
   }, 60_000);
+
+  it('sandbox rooms allow manual moves of your own cards only; normal rooms refuse them', async () => {
+    const a = await account('frank');
+    const b = await account('gina');
+    const ca = await connect(a.token);
+    const cb = await connect(b.token);
+    const deck = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
+    ca.ws.send(JSON.stringify({ t: 'host', deck, format: 'blitz', sandbox: true }));
+    await wait(300);
+    cb.ws.send(JSON.stringify({ t: 'join', code: ca.waiting!.code, deck }));
+    await wait(400);
+    // gina (seat 1) moves a card from her hand to her graveyard, speaking as "player 0" from her own view
+    const mine = cb.states.at(-1)!.players[0].hand[0];
+    cb.ws.send(JSON.stringify({ t: 'act', action: { type: 'manual', op: 'move', player: 0, uid: mine.uid, to: 'graveyard' } }));
+    await wait(300);
+    expect(cb.states.at(-1)!.players[0].graveyard.some((g) => g.uid === mine.uid)).toBe(true);
+    expect(ca.states.at(-1)!.players[1].graveyard.some((g) => g.uid === mine.uid)).toBe(true); // frank sees it too
+    // she can't touch frank's cards
+    const his = ca.states.at(-1)!.players[0].hand[0];
+    const errs = cb.errors.length;
+    cb.ws.send(JSON.stringify({ t: 'act', action: { type: 'manual', op: 'move', player: 1, uid: his.uid, to: 'graveyard' } }));
+    await wait(300);
+    expect(cb.errors.length).toBe(errs + 1);
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
+
+  it('friends can spectate, and a friend-cup game fills in its result automatically', async () => {
+    const h = await account('hana');
+    const i = await account('ivan');
+    const j = await account('jade');
+    const auth = (t: string) => ({ 'content-type': 'application/json', authorization: `Bearer ${t}` });
+    await fetch(`${BASE}/api/friends`, { method: 'POST', headers: auth(h.token), body: JSON.stringify({ username: 'ivan' }) });
+    await fetch(`${BASE}/api/friends`, { method: 'POST', headers: auth(j.token), body: JSON.stringify({ username: 'hana' }) });
+    const cup = await (await fetch(`${BASE}/api/tournaments`, { method: 'POST', headers: auth(h.token), body: JSON.stringify({ name: 'Test cup', format: 'blitz', usernames: ['ivan'] }) })).json();
+    expect(cup.games.length).toBe(1);
+    const ch = await connect(h.token);
+    const ci = await connect(i.token);
+    const cj = await connect(j.token);
+    const deck = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
+    ch.ws.send(JSON.stringify({ t: 'host', deck, format: 'blitz' }));
+    await wait(300);
+    ci.ws.send(JSON.stringify({ t: 'join', code: ch.waiting!.code, deck }));
+    await wait(400);
+    // jade watches hana's game and sees it from hana's side
+    cj.ws.send(JSON.stringify({ t: 'spectate', username: 'hana' }));
+    await wait(300);
+    expect(cj.spectated.length).toBeGreaterThan(0);
+    expect(cj.spectated.at(-1)!.players[0].hand.every((c) => c.cardId !== '__hidden__')).toBe(true);
+    expect(cj.spectated.at(-1)!.players[1].hand.every((c) => c.cardId === '__hidden__')).toBe(true);
+    // ivan concedes: hana's win goes into the cup
+    ci.ws.send(JSON.stringify({ t: 'act', action: { type: 'concede' } }));
+    await wait(700);
+    const after = (await (await fetch(`${BASE}/api/tournaments`, { headers: auth(i.token) })).json())[0];
+    expect(after.games[0].winner).toBe(after.players.find((p: { username: string }) => p.username === 'hana').id);
+    expect(cj.spectated.at(-1)!.phase).toBe('gameOver');
+    for (const c of [ch, ci, cj]) c.ws.close();
+  }, 30_000);
 
   it('ranked quick match moves ratings; friends and presence', async () => {
     const a = await account('dana');

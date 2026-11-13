@@ -1237,3 +1237,77 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 @media (orientation: landscape) and (max-height: 560px) { .replay-bar { bottom: auto; top: calc(4px + var(--sa-t)); width: min(460px, 60vw); padding: .3rem .6rem; } }
 .install-banner { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .8rem 0; border-color: var(--accent); }
 .install-banner > span { flex: 1; min-width: 220px; }
+
+/* ===================================================== the stack, rule tips */
+.arena .mat { position: relative; }
+.stack-zone { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 6px; border-radius: 12px; background: #120e0aee; border: 1px solid #a57c46; box-shadow: 0 10px 30px #000c; animation: fadeUp .2s ease-out; }
+.stack-title { font: 700 .7rem Cinzel, Georgia, serif; letter-spacing: .08em; color: #f6d58e; text-transform: uppercase; }
+.stack-layer { display: flex; flex-direction: column; align-items: center; gap: 2px; opacity: .75; }
+.stack-layer.top { opacity: 1; }
+.stack-layer.top .card { box-shadow: 0 0 0 2px #f6d58e, 0 0 18px #f0b542aa; }
+.stack-layer.theirs.top .card { box-shadow: 0 0 0 2px #8fc1ff, 0 0 18px #4a8bffaa; }
+.stack-layer .small { font-size: .6rem; color: #f6d58e; }
+.rule-tip { margin: .1rem 0 .3rem .6rem; font-size: .78em; color: #c9b896; }
+.rule-tip summary { cursor: pointer; color: var(--accent); list-style: none; display: inline; }
+.rule-tip[open] { background: #0005; border-left: 2px solid #a57c46; padding: .2rem .5rem; border-radius: 4px; }
+
+/* ===================================================== sandbox / manual moves */
+.manual-banner { position: absolute; z-index: 35; left: 50%; top: calc(46px + var(--sa-t)); transform: translateX(-50%); padding: .3rem .8rem; border-radius: 999px;
+  background: #2a1e0aee; border: 1px solid var(--accent); font-size: .8rem; display: flex; gap: .5rem; align-items: center; }
+.move-menu { max-width: 460px; display: flex; flex-direction: column; gap: .6rem; }
+.move-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.move-grid button { text-align: left; }
+
+/* ===================================================== match flow: loadout, dice, score, clock */
+.loadout-row { display: flex; flex-wrap: wrap; gap: .5rem; margin: .4rem 0 .8rem; }
+.lo-card { display: flex; flex-direction: column; align-items: center; gap: .2rem; padding: .3rem; opacity: .45; }
+.lo-card.on { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.loadout-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px .8rem; max-height: 45vh; overflow: auto; }
+.dl-row.sideboard .nm { opacity: .45; text-decoration: line-through; }
+.dice-row { display: flex; justify-content: center; gap: 3rem; margin: .6rem 0 1rem; }
+.die { font-size: 4.5rem; line-height: 1; color: #f6ecd8; text-shadow: 0 4px 14px #000; }
+.die.spin { animation: dieSpin .14s linear infinite; }
+@keyframes dieSpin { 50% { transform: rotate(14deg) scale(1.08); } }
+.match-score { margin-top: .6rem; font-size: 1rem; padding: .3rem .8rem; border-radius: 999px; background: #0006; border: 1px solid #a57c46; display: inline-block; }
+.chess-clock { display: inline-flex; gap: 4px; font-variant-numeric: tabular-nums; }
+.clk { padding: .15em .55em; border-radius: 999px; background: #0008; border: 1px solid #ffffff1c; font-size: .8rem; opacity: .6; }
+.clk.run { opacity: 1; border-color: var(--accent); }
+.clk.low { color: #ff8a7a; }
+.tour-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .tour-grid { grid-template-columns: 1fr; } }
+.pairing { display: grid; grid-template-columns: auto 1fr auto 1fr auto; gap: .5rem; align-items: center; padding: .4rem .5rem; border-radius: 8px; }
+.pairing.mine { background: #2a1e0a99; border: 1px solid #a57c46; }
+.tour-hero { display: inline-block; }
+.official-rules { display: flex; flex-direction: column; gap: .3rem; padding: .5rem .7rem; border-radius: 8px; background: #0005; border-left: 3px solid #a57c46; }
+
+/* ===================================================== table tools */
+.life-counter { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: 1fr 1fr; background: #0a0806; }
+@media (orientation: landscape) { .life-counter { grid-template-rows: none; grid-template-columns: 1fr 1fr; } }
+.lc-side { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; padding: 1rem calc(1rem + var(--sa-r)) 1rem calc(1rem + var(--sa-l));
+  background: #1a130d center / cover no-repeat; border: 1px solid #4a3520; transition: box-shadow .3s; }
+.lc-side.flip { transform: rotate(180deg); }
+@media (orientation: landscape) { .lc-side.flip { transform: none; } }
+.lc-side.low { box-shadow: inset 0 0 80px #b8000099; }
+.lc-side select { max-width: 90%; }
+@media (orientation: landscape) { .lc-side { padding-top: calc(3.2rem + var(--sa-t)); } }
+.lc-life { display: flex; align-items: center; gap: 1.2rem; }
+.lc-num { font: 800 clamp(4rem, 20vmin, 9rem)/1 Inter, system-ui, sans-serif; min-width: 2.2ch; text-align: center; text-shadow: 0 4px 20px #000; font-variant-numeric: tabular-nums; }
+.lc-btn { width: clamp(64px, 16vmin, 110px); height: clamp(64px, 16vmin, 110px); border-radius: 50%; font-size: 2.4rem; font-weight: 800; background: #0008; touch-action: manipulation; user-select: none; }
+.lc-small { display: flex; gap: 1.5rem; font-size: 1.1rem; }
+.lc-small button { padding: .1em .6em; }
+.lc-bar { position: fixed; z-index: 61; left: 50%; top: calc(.4rem + var(--sa-t, 0px)); transform: translateX(-50%); display: flex; gap: .5rem; align-items: center; padding: .3rem .7rem; border-radius: 999px; background: #15110df2; border: 1px solid #a57c46; }
+.sample-hand { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .6rem; }
+.deck-sheet { background: #fff; color: #111; padding: 1.5rem; border-radius: 6px; font-family: Georgia, serif; }
+.deck-sheet h2 { margin-top: 0; color: #111; }
+.sheet-head { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem; margin-bottom: 1rem; }
+.sheet-cols { columns: 2; column-gap: 2rem; }
+.sheet-group { break-inside: avoid; margin-bottom: .8rem; line-height: 1.5; }
+.sheet-foot { margin-top: 1rem; border-top: 1px solid #999; padding-top: .5rem; }
+@media print {
+  .topbar, .no-print, .nav, .install-banner { display: none !important; }
+  body, .page { background: #fff !important; padding: 0 !important; }
+  .deck-sheet { border-radius: 0; padding: 0; }
+}
+.tag.persona { display: block; margin: .2rem auto 0; width: max-content; }
+.cup-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1rem; margin-top: .6rem; } @media (max-width: 900px) { .cup-grid { grid-template-columns: 1fr; } } .cup .pairing { grid-template-columns: 1fr auto 1fr auto auto; }

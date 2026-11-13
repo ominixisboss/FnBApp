@@ -4,7 +4,7 @@ import type { Card } from '../../data/types';
 import { PITCH_COLOR } from '../../data/types';
 import type { Deck, DeckFormat } from '../../deck/deck';
 import {
-  FORMAT_RULES, autoBuildDeck, chanceToSee, deckCounts, deckSiteLink, exportDecklist, heroesFor, importDecklist, isArenaCard,
+  FORMATS, FORMAT_RULES, autoBuildDeck, formatName, chanceToSee, deckCounts, deckSiteLink, exportDecklist, heroesFor, importDecklist, isArenaCard,
   loadDecks, newDeck, saveDecks, validateDeck,
 } from '../../deck/deck';
 import CardView from '../components/CardView';
@@ -115,7 +115,7 @@ function DeckList({ decks, setDecks }: { decks: Deck[]; setDecks: (d: Deck[]) =>
               {hero && <CardView card={hero} width={70} />}
               <div className="grow">
                 <h3 style={{ margin: 0 }}>{d.name}</h3>
-                <div className="muted small">{hero?.name} · {d.format === 'cc' ? 'Classic Constructed' : d.format === 'blitz' ? 'Blitz' : 'Casual'} · {main} cards + {arena} equipment/weapons</div>
+                <div className="muted small">{hero?.name} · {formatName(d.format)} · {main} cards + {arena} equipment/weapons</div>
                 <div className={`small ${errs.length ? 'err' : 'ok'}`}>{errs.length ? `${errs.length} issue${errs.length > 1 ? 's' : ''}` : '✓ Legal'} <span className="muted">· saved {new Date(d.updatedAt).toLocaleString()}</span></div>
               </div>
               <div className="row" onClick={(e) => e.preventDefault()}>
@@ -166,9 +166,7 @@ function NewDeckDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (
         <div className="row" style={{ marginBottom: '.8rem' }}>
           <label>Format </label>
           <select value={format} onChange={(e) => { setFormat(e.target.value as DeckFormat); setHero(null); }}>
-            <option value="blitz">Blitz (young hero, 40 cards, max 2 copies)</option>
-            <option value="cc">Classic Constructed (adult hero, 60+ cards, max 3 copies)</option>
-            <option value="casual">Casual (no restrictions)</option>
+            {FORMATS.map(([f, name, rule]) => <option key={f} value={f}>{name} ({rule})</option>)}
           </select>
         </div>
         <HeroPicker format={format} value={hero?.id} onPick={setHero} />
@@ -287,9 +285,7 @@ function DeckEditor({ deck: saved, onChange: onSave, onSaveAs, onDelete }: { dec
         <a href="#decks">← Decks</a>
         <input value={deck.name} onChange={(e) => onChange({ ...deck, name: e.target.value })} style={{ fontSize: '1.2rem', flex: 1, minWidth: 200 }} />
         <select value={deck.format} onChange={(e) => onChange({ ...deck, format: e.target.value as DeckFormat })}>
-          <option value="blitz">Blitz</option>
-          <option value="cc">Classic Constructed</option>
-          <option value="casual">Casual</option>
+          {FORMATS.map(([f, name]) => <option key={f} value={f}>{name}</option>)}
         </select>
         {dirty ? <span className="dirty">● Unsaved changes</span> : <span className="small ok">✓ Saved</span>}
         <button className="gold" disabled={!dirty} onClick={save} title="Save (Ctrl+S)">💾 Save</button>
@@ -346,7 +342,7 @@ function DeckEditor({ deck: saved, onChange: onSave, onSaveAs, onDelete }: { dec
             </div>
           ))}
           <div style={{ marginTop: '1rem' }}>
-            {errs.length === 0 ? <div className="ok small">✓ Deck is legal for {deck.format === 'cc' ? 'Classic Constructed' : deck.format}.</div> : errs.map((e, i) => <div key={i} className="small err">• {e}</div>)}
+            {errs.length === 0 ? <div className="ok small">✓ Deck is legal for {formatName(deck.format)}.</div> : errs.map((e, i) => <div key={i} className="small err">• {e}</div>)}
           </div>
           <div className="row" style={{ marginTop: '1rem' }}>
             <button onClick={() => setShowExport(!showExport)}>Export</button>

@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { card } from '../../data/cardDb';
 import type { DeckFormat } from '../../deck/deck';
-import { autoBuildDeck, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
+import { FORMATS, FORMAT_RULES, autoBuildDeck, formatName, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import type { MatchStats } from '../../stats/progress';
 import { loadProfile } from '../../stats/profile';
+import { personalityOf } from '../../ai/bot';
+import { DiceRoll, Loadout, poolHasChoices } from '../components/MatchFlow';
+import type { DeckList } from '../../engine/game';
+import type { PlayerId } from '../../engine/types';
 import { friends as friendsApi, myRating } from '../auth';
 import type { FriendRow, MyRating } from '../auth';
 import { saveLocalReplay } from '../../stats/replays';
@@ -27,15 +31,23 @@ interface Setup {
   oppHeroId: string; // hero id or 'random'
   difficulty: Difficulty;
   tutorial: boolean;
+  /** sandbox: manual moves on, results not recorded */
+  sandbox?: boolean;
+  /** best of 1 or best of 3 (with sideboarding between games) */
+  bestOf?: 1 | 3;
+  /** chess clock: minutes per player (0 = off) */
+  clock?: number;
 }
+
+interface Opponent { heroId: string; name: string; deck: DeckList }
 
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
   const hashDeck = preselect ?? location.hash.split('/')[1];
   const decks = loadDecks();
-  const pre = decks.find((d) => d.id === hashDeck);
+  const preDeck = decks.find((d) => d.id === hashDeck);
   const [setup, setSetup] = useState<Setup>({
-    format: pre?.format ?? 'blitz',
-    myDeckId: pre?.id ?? '',
+    format: preDeck?.format ?? 'blitz',
+    myDeckId: preDeck?.id ?? '',
     oppHeroId: 'random',
     difficulty: tutorial ? 'easy' : 'normal',
     tutorial: !!tutorial,
@@ -48,6 +60,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const net = useOnline();
   const auth = useAuth();
   const [rating, setRating] = useState<MyRating | null>(null);
+  const [roomSandbox, setRoomSandbox] = useState(false);
   useEffect(() => { if (auth.user && auth.available && mode === 'online') myRating().then(setRating, () => setRating(null)); }, [auth.user, auth.available, mode, net.status]);
   // (re)connect when signed in, so an online game in progress resumes after a reload
   useEffect(() => { if (auth.user && auth.available) online.connect(); }, [auth.user, auth.available]);
@@ -56,16 +69,34 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const myDeck = decks.find((d) => d.id === setup.myDeckId);
   const myAutoHero = setup.myDeckId.startsWith('auto:') ? setup.myDeckId.slice(5) : null;
 
+  // a match: your card pool and the opponent stay the same across games; between games you sideboard
+  const [ctx, setCtx] = useState<{ pool: DeckList; opp: Opponent } | null>(null);
+  const [match, setMatch] = useState<{ wins: [number, number]; lastLoser?: PlayerId } | null>(null);
+  const [pre, setPre] = useState<{ step: 'loadout' | 'dice'; chosen?: DeckList; chooser?: PlayerId } | null>(null);
+  const rules = FORMAT_RULES[setup.format === 'casual' ? 'blitz' : setup.format];
   const start = () => {
     const fmt = setup.format;
-    const mine = myDeck ? toDeckList(myDeck) : myAutoHero ? toDeckList(autoBuildDeck(myAutoHero, fmt, Date.now() & 0xffff)) : null;
-    if (!mine) return;
+    const pool = myDeck ? toDeckList(myDeck) : myAutoHero ? toDeckList(autoBuildDeck(myAutoHero, fmt, Date.now() & 0xffff)) : null;
+    if (!pool) return;
     const oppHero = setup.oppHeroId === 'random' ? heroes[Math.floor(Math.random() * heroes.length)].id : setup.oppHeroId;
-    const oppDeck = toDeckList(autoBuildDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff));
+    const opp = { heroId: oppHero, name: `${card(oppHero).name.split(',')[0]} (bot)`, deck: toDeckList(autoBuildDeck(oppHero, fmt === 'casual' ? 'blitz' : fmt, Date.now() & 0xffff)) };
+    setCtx({ pool, opp });
+    setMatch(setup.bestOf === 3 ? { wins: [0, 0] } : null);
+    setPre({ step: poolHasChoices(pool, rules.minDeck) && !setup.tutorial ? 'loadout' : 'dice' });
+  };
+  const begin = (first: PlayerId) => {
+    if (!ctx || !pre) return;
     setGame(createGame([
-      { name: 'You', isBot: false, deck: mine },
-      { name: `${card(oppHero).name.split(',')[0]} (bot)`, isBot: true, difficulty: setup.difficulty, deck: oppDeck },
-    ], Date.now() & 0x7fffffff, fmt));
+      { name: 'You', isBot: false, deck: pre.chosen ?? ctx.pool },
+      { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
+    ], Date.now() & 0x7fffffff, setup.format, first));
+    setPre(null);
+  };
+  const matchOver = match && (match.wins[0] >= 2 || match.wins[1] >= 2);
+  const nextGame = () => {
+    setGame(null);
+    if (match && !matchOver) setPre({ step: 'loadout', chooser: match.lastLoser }); // sideboard, then the loser chooses
+    else start();
   };
 
   const onGameOver = (s: GameState, stats: MatchStats, replay?: LocalReplay) => {
@@ -78,6 +109,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       deckName: myDeck?.name ?? `${card(me.hero.cardId).name} (auto)`, difficulty: setup.difficulty,
       won: s.winner === 0, turns: s.turn, lifeLeft: me.life, oppLifeLeft: them.life, stats,
     });
+    if (match) setMatch((m) => m && { wins: [m.wins[0] + (s.winner === 0 ? 1 : 0), m.wins[1] + (s.winner === 1 ? 1 : 0)], lastLoser: s.winner === 0 ? 1 : 0 });
   };
 
   const deckForOnline = () => {
@@ -87,6 +119,17 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     return null;
   };
 
+  if (net.spectating && net.status !== 'playing') {
+    const sp = net.spectating;
+    return (
+      <>
+        <GameBoard key={`spec-${sp.names.join('-')}`} initial={sp.state} tutorial={false} onExit={() => online.unspectate()}
+          online={{ state: sp.state, send: () => {}, opponent: null, error: null }} />
+        <div className="replay-shield" />
+        <div className="replay-bar"><span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span><button className="small" onClick={() => online.unspectate()}>Stop watching</button></div>
+      </>
+    );
+  }
   if (net.status === 'playing' && net.game) {
     const g = net.game;
     return (
@@ -95,7 +138,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         initial={g}
         tutorial={false}
         cosmetics={loadProfile().cosmetics}
-        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error, emote: net.emote, sendEmote: online.emote }}
+        online={{ state: g, send: online.act, opponent: net.opponent, error: net.error, emote: net.emote, sendEmote: online.emote, sandbox: net.sandbox }}
         extraResult={net.rated ? <div className="rated-result">{net.matchId?.startsWith('online-') ? 'Ranked' : ''} rating {net.rated.before} → <b className={net.rated.after >= net.rated.before ? 'ok' : 'err'}>{net.rated.after}</b> ({net.rated.after >= net.rated.before ? '+' : ''}{net.rated.after - net.rated.before})</div> : undefined}
         onExit={() => { if (g.phase === 'gameOver') online.done(); else online.leave(); }}
         onGameOver={(s, stats) => {
@@ -110,7 +153,18 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
     );
   }
 
-  if (game) return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} onExit={() => setGame(null)} onRematch={start} onGameOver={onGameOver} cosmetics={loadProfile().cosmetics} />;
+  if (pre && ctx) {
+    return pre.step === 'loadout'
+      ? <Loadout pool={ctx.pool} minDeck={rules.minDeck} maxDeck={rules.maxDeck} title={match && (match.wins[0] + match.wins[1] > 0) ? `Sideboarding · game ${match.wins[0] + match.wins[1] + 1}` : 'Your loadout'} onDone={(d) => setPre({ ...pre, chosen: d, step: 'dice' })} />
+      : <DiceRoll names={['You', ctx.opp.name]} chooser={pre.chooser} onDone={begin} />;
+  }
+  if (game) {
+    const practice = setup.sandbox || setup.difficulty === 'goldfish';
+    const score = match && <div className="match-score">Best of 3 · You <b>{match.wins[0]}</b> – <b>{match.wins[1]}</b> {ctx?.opp.name}{matchOver ? (match.wins[0] >= 2 ? ' · 🏆 You win the match!' : ' · Match lost') : ''}</div>;
+    return <GameBoard key={game.seed} initial={game} tutorial={setup.tutorial} sandbox={setup.sandbox} onExit={() => { setGame(null); setMatch(null); }}
+      onRematch={nextGame} rematchLabel={match && !matchOver ? 'Next game' : match ? 'New match' : 'Rematch'} extraResult={score}
+      onGameOver={practice ? undefined : onGameOver} cosmetics={loadProfile().cosmetics} clock={setup.clock || undefined} />;
+  }
 
   const deckErrs = myDeck ? validateDeck(myDeck).filter((e) => !e.startsWith('No weapon')) : [];
   const formatDecks = decks.filter((d) => d.format === setup.format || setup.format === 'casual');
@@ -124,13 +178,15 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         <div className="lobby-head">
           <h1>{tutorial ? 'Guided practice' : 'Play'}</h1>
           <div className="seg">
-            {([['blitz', 'Blitz'], ['cc', 'Classic Constructed'], ['casual', 'Casual']] as [DeckFormat, string][]).map(([f, label]) => (
+            {FORMATS.map(([f, label]) => (
               <button key={f} className={setup.format === f ? 'on' : ''} onClick={() => setSetup({ ...setup, format: f, myDeckId: '', oppHeroId: 'random' })}>{label}</button>
             ))}
           </div>
         </div>
         {!tutorial && (
           <div className="more-modes">
+            <a href="#tournament">🏅 Armory night</a>
+            <a href="#cups">🏆 Friend cups</a>
             <a href="#gauntlet">🏟 Gauntlet</a>
             <a href="#limited">📦 Sealed &amp; Draft</a>
             <a href="#puzzles">🧩 Lethal puzzles</a>
@@ -189,7 +245,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                 <>
                   {net.challenge && (
                     <div className="panel challenge-box">
-                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({net.challenge.format === 'cc' ? 'Classic Constructed' : net.challenge.format})</span>
+                      <b>⚔ {net.challenge.from} challenges you</b> <span className="small muted">({formatName(net.challenge.format)})</span>
                       <div className="row" style={{ marginTop: '.4rem' }}>
                         <button className="primary" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.accept(d); }}>Accept with this deck</button>
                         <button onClick={() => online.decline()}>Decline</button>
@@ -199,12 +255,13 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                   )}
                   {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}
                   <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
-                  <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format); }}>Create private room</button>
+                  <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                  <label className="row small" title="Both players can move cards by hand, like a tabletop (for cards the simulator doesn't automate). Every move shows in the log."><input type="checkbox" checked={roomSandbox} onChange={(e) => setRoomSandbox(e.target.checked)} /> Allow manual moves in my room</label>
                   <div className="row">
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />
                     <button disabled={!selectedHero || joinCode.length < 5} onClick={() => { const d = deckForOnline(); if (d) online.join(joinCode, d); }}>Join</button>
                   </div>
-                  <div className="small muted">Format: {setup.format === 'cc' ? 'Classic Constructed' : setup.format === 'blitz' ? 'Blitz' : 'Casual'}. Blitz and CC need a legal deck. Ranked matches move your rating; private rooms and friend challenges don’t.</div>
+                  <div className="small muted">Format: {formatName(setup.format)}. Every format except Casual needs a legal deck. Ranked matches move your rating; private rooms and friend challenges don’t.</div>
                   <FriendsPanel canChallenge={!!selectedHero} onChallenge={(u) => { const d = deckForOnline(); if (d) online.challenge(u, d, setup.format); }} />
                 </>
               )
@@ -221,16 +278,27 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
           <div className="vs">VS</div>
           <div className="matchup-hero" onClick={() => setPicking('opp')} style={{ cursor: 'pointer' }} title="Choose opponent">
             {setup.oppHeroId !== 'random' ? <CardView card={card(setup.oppHeroId)} width="100%" /> : <div className="matchup-empty">?<small>Random hero</small></div>}
-            <span>{setup.oppHeroId !== 'random' ? card(setup.oppHeroId).name : 'Random opponent'} <button className="small" onClick={(e) => { e.stopPropagation(); setPicking('opp'); }}>change</button></span>
+            <span>{setup.oppHeroId !== 'random' ? card(setup.oppHeroId).name : 'Random opponent'}{setup.oppHeroId !== 'random' && <span className={`tag persona ${personalityOf(card(setup.oppHeroId))}`} title="How this bot plays">{({ aggressive: '🔥 Aggressive', balanced: '⚖ Balanced', patient: '🛡 Patient' } as const)[personalityOf(card(setup.oppHeroId))]}</span>} <button className="small" onClick={(e) => { e.stopPropagation(); setPicking('opp'); }}>change</button></span>
           </div>
         </div>
         {setup.oppHeroId !== 'random' && <button className="small" onClick={() => setSetup({ ...setup, oppHeroId: 'random' })}>🎲 Random opponent</button>}
         <div className="lobby-label">Difficulty</div>
         <div className="seg">
-          {(['easy', 'normal', 'hard'] as Difficulty[]).map((d) => (
-            <button key={d} className={setup.difficulty === d ? 'on' : ''} onClick={() => setSetup({ ...setup, difficulty: d })}>{d[0].toUpperCase() + d.slice(1)}</button>
+          {(['easy', 'normal', 'hard', 'goldfish'] as Difficulty[]).map((d) => (
+            <button key={d} className={setup.difficulty === d ? 'on' : ''} title={d === 'goldfish' ? 'A practice dummy that never plays or blocks' : undefined} onClick={() => setSetup({ ...setup, difficulty: d })}>{d === 'goldfish' ? '🐟 Goldfish' : d[0].toUpperCase() + d.slice(1)}</button>
           ))}
         </div>
+        <div className="row small">
+          <span className="lobby-label">Match</span>
+          <div className="seg">{([1, 3] as const).map((b) => <button key={b} className={(setup.bestOf ?? 1) === b ? 'on' : ''} onClick={() => setSetup({ ...setup, bestOf: b })}>{b === 1 ? 'Single game' : 'Best of 3'}</button>)}</div>
+        </div>
+        <div className="row small">
+          <span className="lobby-label">Clock</span>
+          <div className="seg">{[0, 10, 20].map((m) => <button key={m} className={(setup.clock ?? 0) === m ? 'on' : ''} onClick={() => setSetup({ ...setup, clock: m })}>{m ? `${m} min` : 'Off'}</button>)}</div>
+        </div>
+        <label className="row small" title="Tap any card to move it anywhere: play cards the simulator doesn't automate, test lines, set up positions. Sandbox games aren't recorded.">
+          <input type="checkbox" checked={!!setup.sandbox} onChange={(e) => setSetup({ ...setup, sandbox: e.target.checked })} /> 🛠 Sandbox (manual moves, not recorded)
+        </label>
         <label className="row small">
           <input type="checkbox" checked={setup.tutorial} onChange={(e) => setSetup({ ...setup, tutorial: e.target.checked })} /> Show move suggestions
         </label>
@@ -287,7 +355,9 @@ function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; on
         <div key={f.username} className="friend-row">
           <span className={`presence ${f.status}`} title={f.status} />
           <span className="grow">{f.name}</span>
-          <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : f.status === 'in-game' ? 'In a game' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>
+          {f.status === 'in-game'
+            ? <button className="small" title="Watch their game" onClick={() => online.spectate(f.username)}>👁 Watch</button>
+            : <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>}
         </div>
       ))}
     </div>

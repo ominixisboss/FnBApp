@@ -22,10 +22,14 @@ export interface OnlineState {
   rated: { before: number; after: number } | null;
   /** info line (e.g. a friend declined) */
   notice: string | null;
+  /** this room allows manual moves */
+  sandbox: boolean;
+  /** watching a friend's game */
+  spectating: { state: GameState; names: [string, string]; watching: string } | null;
 }
 
 let ws: WebSocket | null = null;
-let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null };
+let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null, sandbox: false, spectating: null };
 const subs = new Set<() => void>();
 const set = (p: Partial<OnlineState>) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
 let pending: object | null = null;
@@ -50,7 +54,9 @@ function connect() {
       case 'challenged': set({ challenge: { from: msg.from, username: msg.username, code: msg.code, format: msg.format } }); break;
       case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
       case 'rated': set({ rated: { before: msg.before, after: msg.after } }); break;
-      case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
+      case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching }, error: null }); break;
+      case 'spectateEnd': set({ spectating: null }); break;
+      case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
       case 'opponent': if (state.opponent) set({ opponent: { ...state.opponent, connected: msg.connected } }); break;
       case 'cancelled': set({ status: 'idle', code: null, queue: false, game: null, opponent: null }); break;
       case 'error': set({ error: msg.message, status: state.status === 'connecting' ? 'idle' : state.status }); break;
@@ -80,7 +86,7 @@ export const online = {
     ws?.close();
     set({ status: 'offline', game: null, code: null, opponent: null });
   },
-  host: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'host', deck, format }),
+  host: (deck: DeckList, format: DeckFormat, sandbox = false) => sendMsg({ t: 'host', deck, format, sandbox }),
   queue: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'queue', deck, format }),
   join: (code: string, deck: DeckList) => sendMsg({ t: 'join', code, deck }),
   cancel: () => sendMsg({ t: 'cancel' }),
@@ -90,6 +96,8 @@ export const online = {
   emote: (id: string) => sendMsg({ t: 'emote', id }),
   challenge: (to: string, deck: DeckList, format: DeckFormat) => sendMsg({ t: 'challenge', to, deck, format }),
   accept: (deck: DeckList) => { const c = state.challenge; if (c) { sendMsg({ t: 'join', code: c.code, deck }); set({ challenge: null }); } },
+  spectate: (username: string) => sendMsg({ t: 'spectate', username }),
+  unspectate: () => { sendMsg({ t: 'unspectate' }); set({ spectating: null }); },
   decline: () => { const c = state.challenge; if (c) { sendMsg({ t: 'decline', code: c.code }); set({ challenge: null }); } },
   /** after a finished game, go back to the lobby */
   done: () => set({ status: 'idle', game: null, opponent: null, code: null, matchId: null }),

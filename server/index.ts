@@ -10,6 +10,8 @@ import { ephemeral, initStore, store } from './db';
 import type { UserRow } from './db';
 import { checkPassword, hashPassword, makeToken, userFromToken, validateCredentials } from './auth';
 import { onConnect, onDisconnect, onMessage, presence, roomCount, tierOf } from './rooms';
+import type { FriendTournament } from './rooms';
+import { randomBytes } from 'node:crypto';
 import type { ClientMsg } from './rooms';
 
 const ROOT = process.cwd();
@@ -178,6 +180,39 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
       const other = await store.userByName(String(url.searchParams.get('username') ?? ''));
       if (other) await store.removeFriend(user.id, other.id);
       return json(res, 200, { ok: true });
+    }
+    // friend tournaments: round robin among friends; online games between members fill in results automatically
+    if (path === '/api/tournaments' && req.method === 'GET') {
+      return json(res, 200, (await store.tournamentsFor(user.id)).map((r) => JSON.parse(r)));
+    }
+    if (path === '/api/tournaments' && req.method === 'POST') {
+      const { name, format, usernames } = (await readBody(req)) as { name?: string; format?: string; usernames?: string[] };
+      const fmt = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(String(format)) ? String(format) : 'blitz';
+      const friendIds = new Set((await store.friends(user.id)).map((f) => f.id));
+      const players = [{ id: user.id, username: user.username, name: user.username }];
+      for (const u of (Array.isArray(usernames) ? usernames : []).slice(0, 7)) {
+        const row = await store.userByName(String(u));
+        if (!row || !friendIds.has(row.id) || players.some((p) => p.id === row.id)) continue;
+        players.push({ id: row.id, username: row.username, name: row.username });
+      }
+      if (players.length < 2) return json(res, 400, { error: 'Add at least one friend.' });
+      const games: FriendTournament['games'] = [];
+      for (let i = 0; i < players.length; i++) for (let j = i + 1; j < players.length; j++) games.push({ a: players[i].id, b: players[j].id });
+      const t: FriendTournament = { id: randomBytes(6).toString('hex'), name: String(name ?? 'Friend cup').slice(0, 40) || 'Friend cup', format: fmt, owner: user.id, created: Date.now(), players, games };
+      await store.putTournament(t.id, players.map((p) => p.id), JSON.stringify(t));
+      return json(res, 200, t);
+    }
+    if (path === '/api/tournaments/result' && req.method === 'POST') {
+      const { id, a, b, winner } = (await readBody(req)) as { id?: string; a?: number; b?: number; winner?: number | null };
+      const raw = await store.getTournament(String(id));
+      if (!raw) return json(res, 404, { error: 'No such tournament.' });
+      const t = JSON.parse(raw) as FriendTournament;
+      if (t.owner !== user.id) return json(res, 403, { error: 'Only the organiser can enter results by hand.' });
+      const g = t.games.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+      if (!g) return json(res, 400, { error: 'No such game.' });
+      g.winner = winner === null ? undefined : winner === g.a || winner === g.b ? winner : g.winner;
+      await store.putTournament(t.id, t.players.map((p) => p.id), JSON.stringify(t));
+      return json(res, 200, t);
     }
     if (path === '/api/replay' && req.method === 'GET') {
       const raw = await store.getReplay(String(url.searchParams.get('match') ?? ''));

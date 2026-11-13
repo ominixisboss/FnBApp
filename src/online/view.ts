@@ -31,6 +31,7 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
     swap(l.inst);
     l.defenders.forEach((d) => swap(d.inst));
   }
+  for (const layer of s.stack ?? []) { layer.controller = r(layer.controller); swap(layer.inst); }
   s.players = [me, them];
   me.id = 0;
   them.id = 1;

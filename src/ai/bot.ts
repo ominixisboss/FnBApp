@@ -165,6 +165,21 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+    case 'reveal': {
+      // fusing is free: the revealed card stays in hand
+      const talent = oc.cost.talent;
+      const h = cheapest((c) => c.types.includes(talent));
+      if (!h) return { accept: false };
+      return { accept: true, uid: h.uid };
+    }
+    case 'charge': {
+      const want = oc.cost.pitch;
+      const h = cheapest((c) => !want || pitchOf(c) === want);
+      if (!h) return { accept: false };
+      choice = { accept: true, uid: h.uid };
+      cost = cardPlayValue(cardOf(h)) * 0.8 + 0.3; // a card in the soul still has value for Light heroes
+      break;
+    }
   }
   return gain > cost ? choice : { accept: false };
 }
@@ -197,6 +212,20 @@ function findSourceInst(p: PlayerState, uid: number) {
 }
 
 /** Value of holding a card in hand for defense / next turn. */
+// ---------------------------------------------------------------- personalities
+
+export type Personality = 'aggressive' | 'balanced' | 'patient';
+const AGGRESSIVE = ['Brute', 'Ninja', 'Assassin', 'Pirate', 'Ranger'];
+const PATIENT = ['Guardian', 'Wizard', 'Illusionist', 'Mechanologist'];
+/** How a bot plays its hero: aggressive heroes race and keep fewer blockers, patient ones block and build up. */
+export function personalityOf(hero: Card): Personality {
+  if (hero.types.some((t) => AGGRESSIVE.includes(t))) return 'aggressive';
+  if (hero.types.some((t) => PATIENT.includes(t))) return 'patient';
+  return 'balanced';
+}
+const KEEP_W: Record<Personality, number> = { aggressive: 0.75, balanced: 1, patient: 1.2 };
+const BLOCK_W: Record<Personality, number> = { aggressive: 0.85, balanced: 1, patient: 1.15 };
+
 function keepValue(c: Card, threat: number, life: number): number {
   const d = defenseOf(c) ?? 0;
   const w = threat >= life ? 1.3 : life <= 8 ? 1.0 : 0.65;
@@ -256,8 +285,9 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     }
     if (!bestPitch) return;
     const kept = rest.filter((r) => !bestPitch!.uids.includes(r.uid));
+    const keepW = KEEP_W[personalityOf(cardOf(p.hero))];
     // holding cards to block has diminishing returns: you rarely need 3-4 blockers, so don't sit on a full hand
-    const keptValue = kept.map((k) => keepValue(k.c, threat, p.life)).sort((x, y) => y - x).reduce((a, v, i) => a + v * ([1, 0.75, 0.45, 0.25][i] ?? 0.15), 0);
+    const keptValue = keepW * kept.map((k) => keepValue(k.c, threat, p.life)).sort((x, y) => y - x).reduce((a, v, i) => a + v * ([1, 0.75, 0.45, 0.25][i] ?? 0.15), 0);
     const arsenalBonus = p.arsenal.length === 0 && kept.some((k) => pitchOf(k.c) !== 3 && cardPlayValue(k.c) > 1) ? 1 : 0;
     let value = plan.reduce((a, i) => a + i.value, 0);
     // attacks into a hand that can block: big attacks tend to be blocked
@@ -377,7 +407,7 @@ function planDefense(s: GameState, pid: PlayerId, difficulty: Difficulty): BotDe
     const taken = Math.max(0, power - def);
     const overkill = Math.max(0, def - power);
     const lifeAfter = p.life - taken;
-    let lifeW = p.life <= 10 ? 1.3 : 1;
+    let lifeW = (p.life <= 10 ? 1.3 : 1) * BLOCK_W[personalityOf(cardOf(p.hero))];
     if (difficulty === 'hard') lifeW *= lifeAfter <= opponentThreat(s, p) * 0.5 ? 1.3 : 1;
     const score = taken * lifeW + cost + overkill * 0.4 + (lifeAfter <= 0 ? 1000 : 0);
     if (score < best.score) best = { uids, score };
@@ -470,6 +500,23 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
   return { action: playAction(s, p, best.opt.uid, best.opt.cost, p.hand.filter((h) => h.uid !== best!.opt.uid).map((h) => h.uid)) ?? { type: 'play', uid: best.opt.uid, pitch, mode: modeFor(p, best.opt.uid) }, reason: `Play ${best.opt.label}: it changes the damage on this chain link.` };
 }
 
+/** Something is on the stack: respond with a damage-prevention instant when an opposing attack is coming, else let it resolve. */
+function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty): BotDecision {
+  const pass: BotDecision = { action: { type: 'pass' }, reason: 'Let it resolve.' };
+  const top = s.stack![s.stack!.length - 1];
+  if (difficulty === 'easy' || top.controller === pid || !has(cardOf(top.inst), 'Attack')) return pass;
+  const p = s.players[pid];
+  for (const o of playOptions(s, pid).filter((x) => x.kind === 'card')) {
+    const c = cardOf([...p.hand, ...p.arsenal].find((i) => i.uid === o.uid)!);
+    const prevent = getScript(c).onPlay.reduce((a, e) => a + (e.kind === 'preventNext' ? e.amount : 0), 0);
+    if (prevent >= 2 && o.cost <= 1) {
+      const a = playAction(s, p, o.uid, o.cost, p.hand.filter((h) => h.uid !== o.uid).map((h) => h.uid));
+      if (a) return { action: a, reason: `Respond with ${c.name} to prevent damage from ${top.label}.` };
+    }
+  }
+  return pass;
+}
+
 // ---------------------------------------------------------------- arsenal
 
 function planArsenal(s: GameState, pid: PlayerId): BotDecision {
@@ -485,6 +532,12 @@ function planArsenal(s: GameState, pid: PlayerId): BotDecision {
 
 export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficulty): BotDecision {
   const diff = difficulty ?? s.players[pid].difficulty;
+  if (diff === 'goldfish') {
+    // a practice dummy: never plays, never blocks
+    const a: Action = s.phase === 'defend' ? { type: 'defend', uids: [] } : s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' };
+    return { action: a, reason: 'Goldfish: does nothing.' };
+  }
+  if (s.phase === 'action' && s.stack?.length) return planStackResponse(s, pid, diff);
   switch (s.phase) {
     case 'defend': return planDefense(s, pid, diff);
     case 'reaction': return planReaction(s, pid, diff);
