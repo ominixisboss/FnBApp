@@ -259,6 +259,7 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
     case 'boosted': return !l.fromWeapon && getScript(c).boost;
     case 'runeGated': return !l.fromWeapon && !!(l as { runeGated?: boolean }).runeGated;
     case 'classAttackAction': return !l.fromWeapon && c.types.includes(f.value) && has(c, 'Attack') && has(c, 'Action');
+    case 'keyword': return c.keywords.includes(f.value);
   }
 }
 
@@ -319,6 +320,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
 }
 
 function draw(s: GameState, p: PlayerState, count = 1, triggers = true) {
+  if (p.turn.flags.noDraw && s.turnPlayer === p.id && s.phase !== 'arsenal') { log(s, p.id, `${p.name} can't draw cards this action phase.`); return; }
   let n = 0;
   for (let i = 0; i < count; i++) {
     const c = p.deck.shift();
@@ -349,6 +351,15 @@ function startTurn(s: GameState) {
   s.phase = 'action';
   s.priority = s.turnPlayer;
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
+  if (p.nextTurn) {
+    const n = p.nextTurn;
+    if (n.attackPower) p.effects.push({ kind: 'nextAttackPower', amount: -n.attackPower, filter: { kind: 'any' }, source: 'crush' });
+    if (n.costMore) p.turn.flags.costMore = n.costMore;
+    if (n.noDraw) p.turn.flags.noDraw = 1;
+    if (n.noGoAgain) p.turn.flags.noGoAgain = 1;
+    if (n.noSmallAttacks) p.turn.flags.noSmall = 1;
+    p.nextTurn = undefined;
+  }
   // Shiyana becomes a copy of the opposing hero until the start of her next turn
   if (cardOf(p.hero).name.startsWith('Shiyana')) {
     const target = s.players[oppOf(s, p.id)].hero;
@@ -472,6 +483,7 @@ function removePermanent(s: GameState, p: PlayerState, uid: number) {
   if (i < 0) return;
   const [pm] = p.permanents.splice(i, 1);
   const c = cardOf(pm.inst);
+  if (has(c, 'Token')) p.turn.flags[`destroyed:${c.name}`] = 1; // "if the attack's controller has destroyed a Might token this turn"
   if (!has(c, 'Token')) graveFromArena(s.players[pm.inst.owner] ?? p, pm.inst);
   if (has(c, 'Item')) p.turn.itemDestroyed = true;
   log(s, p.id, `${c.name} leaves the arena.`);
@@ -723,6 +735,13 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'wageredThisLink': { const l = link ?? currentLink(s); return !!l && (l.wagers?.length ?? 0) > 0; }
     case 'cheered': return (p.turn.cheers ?? 0) > 0;
     case 'booed': return (p.turn.boos ?? 0) > 0;
+    case 'anotherRed': return p.turn.played.filter((id) => card(id).pitch === 1).length >= 2;
+    case 'emptyHand': return p.hand.length === 0;
+    case 'emptyDeck': return p.deck.length === 0;
+    case 'boostedTimes': return (p.turn.flags.boosts ?? 0) >= cond.n;
+    case 'oppSoul': return (opp.soul ?? []).length > 0;
+    case 'phantasmDestroyed': return !!p.turn.flags.phantasm;
+    case 'createdToken': return !!p.turn.flags[`created:${cond.name}`];
     case 'hasAim': return !!(link ?? currentLink(s))?.inst.aim;
     case 'scrapped': { const l = link ?? currentLink(s); return !!l && !!p.turn.flags[`scrap${l.inst.uid}`]; }
     case 'beatChest': return !!p.turn.beatChest;
@@ -763,6 +782,7 @@ export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: nu
     case 'destroyTop': return p.deck.length > 0;
     case 'handToBottom': case 'banishHand': return others.length > 0;
     case 'discardOrTop': return others.length > 0 || p.deck.length > 0;
+    case 'discardOrItem': return others.length > 0 || p.permanents.some((pm) => has(cardOf(pm.inst), 'Item'));
     case 'destroyOwn': return p.permanents.some((pm) => ownMatches(cardOf(pm.inst), oc.cost));
     case 'arsenalToBottom': return p.arsenal.length > 0;
     case 'banishGraveMatch': return p.graveyard.some((g) => graveMatches(cardOf(g), oc.cost));
@@ -797,7 +817,9 @@ function ownMatches(c: Card, cost: OptionalCost['cost']): boolean {
 /** Pay an optional cost. Returns the card used (for "if a card with N+ power is discarded this way"). */
 function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: OptionalChoice, playingUid: number): Card | null {
   const pick = (filter: (c: Card) => boolean) => {
-    const inst = choice.uid !== undefined ? p.hand.find((h) => h.uid === choice.uid && h.uid !== playingUid) : undefined;
+    // no card named (e.g. an equipment's "when this defends, you may ..."): use the least useful one
+    const inst = choice.uid !== undefined ? p.hand.find((h) => h.uid === choice.uid && h.uid !== playingUid)
+      : [...p.hand].filter((h) => h.uid !== playingUid && filter(cardOf(h))).sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
     if (!inst || !filter(cardOf(inst))) throw new Error('Choose a card from your hand to pay for that.');
     return removeFrom(p.hand, inst.uid)!;
   };
@@ -820,6 +842,19 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
     case 'discard': {
       const inst = pick((c) => (!cost.pitch || pitchOf(c) === cost.pitch) && (!cost.power || powerOf(c) >= cost.power));
       if (cost.power) { p.turn.beatChest = true; log(s, p.id, `${p.name} beats their chest!`, 'Beat Chest: as an additional cost to play this, you may discard a card with 6 or more power.'); }
+      p.graveyard.push(inst);
+      noteDiscard(s, p, inst);
+      log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
+      return cardOf(inst);
+    }
+    case 'discardOrItem': {
+      const item = p.permanents.find((pm) => has(cardOf(pm.inst), 'Item'));
+      if (choice.top || (choice.uid === undefined && !p.hand.some((h) => h.uid !== playingUid) && item)) {
+        if (!item) throw new Error('You control no item.');
+        removePermanent(s, p, item.inst.uid);
+        return cardOf(item.inst);
+      }
+      const inst = pick(() => true);
       p.graveyard.push(inst);
       noteDiscard(s, p, inst);
       log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
@@ -925,6 +960,7 @@ function createToken(s: GameState, p: PlayerState, name: string, amount: number)
     p.permanents.push({ inst, ward: getScript(t).ward });
   }
   if (has(t, 'Aura')) p.turn.auraPlayed = true;
+  p.turn.flags[`created:${t.name}`] = 1;
   log(s, p.id, `${p.name} creates ${amount > 1 ? amount + ' ' : 'a '}${t.name} token${amount > 1 ? 's' : ''}.`);
   ab?.onCreateToken?.(heroCtx(s, p), t, amount);
 }
@@ -943,6 +979,9 @@ function frostbite(p: PlayerState) {
   return p.permanents.filter((pm) => cardOf(pm.inst).name === 'Frostbite').length;
 }
 
+/** how much a card is worth keeping in hand (low = first to put away) */
+const cardPlayValueLite = (c: Card) => powerOf(c) + (defenseOf(c) ?? 0) + (c.pitch === 1 ? 2 : 0) + (has(c, 'Defense Reaction') ? 2 : 0);
+
 export function effectiveCost(s: GameState, p: PlayerState, c: Card): number {
   void s;
   const sc = getScript(c);
@@ -952,7 +991,8 @@ export function effectiveCost(s: GameState, p: PlayerState, c: Card): number {
   if (sc.costLessIf && p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === sc.costLessIf!.toLowerCase())) less += 1;
   less -= ability(p)?.cardCostMod?.(heroCtx(s, p), c) ?? 0;
   for (const e of p.effects) if (e.kind === 'costLess' && matchesFilter(e.filter, { inst: { uid: -1, cardId: c.id, owner: p.id }, fromWeapon: false })) less += e.amount;
-  return Math.max(0, costOf(c) - less) + frostbite(p);
+  const more = has(c, 'Action') && s.turnPlayer === p.id ? p.turn.flags.costMore ?? 0 : 0;
+  return Math.max(0, costOf(c) - less) + frostbite(p) + more;
 }
 
 /** Resources available: floating pool plus pitch value of hand cards (excluding `exclude`). */
@@ -972,6 +1012,7 @@ function reactionTargetsOk(s: GameState, c: Card): boolean {
 /** Can player `pid` play card `c` right now (timing-wise), ignoring cost? */
 function timingOk(s: GameState, pid: PlayerId, c: Card): boolean {
   if (has(c, 'Defense Reaction') && currentLink(s)?.noDefenseReactions) return false;
+  if (s.players[pid].turn.flags.noSmall && s.phase === 'action' && has(c, 'Attack') && has(c, 'Action') && powerOf(c) <= 3) return false;
   if (s.phase === 'gameOver' || s.priority !== pid) return false;
   const p = s.players[pid];
   const isInstant = has(c, 'Instant') || !!ability(p)?.asInstant?.(heroCtx(s, p), c, p.arsenal.some((a) => a.cardId === c.id))
@@ -1037,7 +1078,8 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     if (!timingOk(s, pid, c)) continue;
     const cost = effectiveCost(s, p, c);
     const sc = getScript(c);
-    const extra = (sc.additionalCost.discardRandom ?? 0) + (sc.additionalCost.banishRandomHand ?? 0);
+    const extra = (sc.additionalCost.discardRandom ?? 0) + (sc.additionalCost.banishRandomHand ?? 0) + (sc.additionalCost.handToBottom ?? 0);
+    if ((sc.additionalCost.banishSoul ?? 0) > (p.soul ?? []).length) continue;
     if (extra > 0 && p.hand.filter((h) => h.uid !== inst.uid).length < extra) continue;
     if ((sc.additionalCost.banishGraveyard ?? 0) > p.graveyard.length) continue;
     if (sc.playIf && !evalCondition(s, p, sc.playIf)) continue;
@@ -1108,6 +1150,8 @@ export function defendOptions(s: GameState, pid: PlayerId): DefendOption[] {
   for (const e of p.equipment) {
     if (l?.noEquipDefense) break;
     if (e.destroyed || defenseOf(cardOf(e.inst)) === null) continue;
+    const di = getScript(cardOf(e.inst)).defendIf;
+    if (di && l) { const atk = s.players[l.attacker]; if (di.token ? !atk.turn.flags[`destroyed:${di.token}`] : !atk.turn.drew) continue; }
     out.push({ uid: e.inst.uid, kind: 'equipment', defense: defenseFor(p, cardOf(e.inst), equipDefense(e)) });
   }
   return out;
@@ -1216,6 +1260,16 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
     const d = p.graveyard.splice(Math.floor(rand(s) * p.graveyard.length), 1)[0];
     if (d) { p.banished.push(d); log(s, pid, `${p.name} banishes ${cardOf(d).name} from the graveyard.`); p.turn.flags[`addlPow${uid}`] = Math.max(p.turn.flags[`addlPow${uid}`] ?? -1, powerOf(cardOf(d))); }
   }
+  if (sc.additionalCost.banishSoul) {
+    const gone = (p.soul ?? []).splice(0, sc.additionalCost.banishSoul);
+    p.banished.push(...gone);
+    log(s, pid, `${p.name} banishes ${gone.length} cards from their hero's soul.`);
+  }
+  for (let i = 0; i < (sc.additionalCost.handToBottom ?? 0); i++) {
+    // the player picks the card (optional.uid); otherwise the least useful one: the lowest pitch-and-power card
+    const pick = p.hand.find((h) => h.uid === optional?.uid) ?? [...p.hand].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
+    if (pick) { removeFrom(p.hand, pick.uid); p.deck.push(pick); log(s, pid, `${p.name} puts a card from their hand on the bottom of their deck.`); }
+  }
   for (let i = 0; i < (sc.additionalCost.banishRandomHand ?? 0); i++) {
     const d = p.hand.splice(Math.floor(rand(s) * p.hand.length), 1)[0];
     if (d) { p.banished.push(d); log(s, pid, `${p.name} banishes ${cardOf(d).name} at random.`); }
@@ -1226,6 +1280,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   if (cl >= 0) p.effects.splice(cl, 1);
   const isAction = has(c, 'Action') && !has(c, 'Instant');
   if (s.phase === 'action' && isAction) p.actionPoints -= 1;
+  if (has(c, 'Action')) p.turn.flags.costMore = 0; // "their first action during their next turn costs an additional {r}"
   log(s, pid, `${p.name} plays ${c.name}${fromArsenal ? ' from arsenal' : fromBanished ? ' from the banished zone' : ''}.`);
   p.turn.played.push(c.id);
   if (has(c, 'Aura')) p.turn.auraPlayed = true;
@@ -1315,7 +1370,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
     toGraveyard(p, inst);
     if (has(c, 'Instant')) p.turn.instantToGrave = true;
   }
-  if (isAction && goAgain && s.phase === 'action') { p.actionPoints += 1; log(s, pid, `${c.name} has go again: ${p.name} gains an action point.`, RULES.goAgain); }
+  if (isAction && goAgain && s.phase === 'action' && !p.turn.flags.noGoAgain) { p.actionPoints += 1; log(s, pid, `${c.name} has go again: ${p.name} gains an action point.`, RULES.goAgain); }
   if (s.phase === 'reaction') afterReactionPlay(s);
 }
 
@@ -1442,7 +1497,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   const c = cardOf(inst);
   const sc = getScript(c);
   const link: ChainLink = {
-    attacker: p.id, inst, fromWeapon, fromArsenal, basePower: basePowerFor(p, c) + (fromWeapon ? p.weapons.find((w) => w.inst.uid === inst.uid)?.counters ?? 0 : 0), powerMod: 0,
+    attacker: p.id, inst, fromWeapon, fromArsenal, basePower: basePowerFor(p, c) + (fromWeapon ? p.weapons.find((w) => w.inst.uid === inst.uid)?.counters ?? 0 : 0), powerMod: fromWeapon ? p.turn.flags.weaponBonus ?? 0 : 0,
     goAgain: sc.goAgain, dominate: sc.dominate, overpower: sc.overpower, piercing: sc.piercing,
     defenders: [], reactions: [], damage: null, hit: false, extraOnHit: mode?.onHit ?? [],
     noEquipDefense: sc.noEquipDefense || undefined,
@@ -1493,7 +1548,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     if (mode) resolveEffects(s, p, mode.onPlay, inst);
     const prev = s.chain[s.chain.length - 2];
     for (const cnd of sc.conditional) {
-      if (cnd.when === 'combo' && prev && prev.attacker === p.id && cardOf(prev.inst).name.toLowerCase() === cnd.comboWith?.toLowerCase()) {
+      if (cnd.when === 'combo' && prev && prev.attacker === p.id && (cnd.comboWith ?? '').toLowerCase().split(' or ').includes(cardOf(prev.inst).name.toLowerCase())) {
         log(s, p.id, `Combo! (${cardOf(prev.inst).name} → ${c.name})`);
         resolveEffects(s, p, cnd.effects, inst);
       }
@@ -1505,6 +1560,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     if (sc.boost && p.deck.length > 0) {
       const top = p.deck.shift()!;
       p.turn.boosted = true;
+      p.turn.flags.boosts = (p.turn.flags.boosts ?? 0) + 1;
       if (!ability(p)?.onBoostBanish?.(heroCtx(s, p), top)) p.banished.push(top);
       const mech = has(cardOf(top), 'Mechanologist');
       log(s, p.id, `${p.name} boosts, banishing ${cardOf(top).name}${mech ? ' — go again!' : '.'}`);
@@ -1520,6 +1576,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   if (optional && optional.oc.timing === 'attack') optionalPayoff(s, p, optional.oc, optional.used, inst);
   ability(p)?.onAttack?.(heroCtx(s, p), link);
   if (s.phase === 'gameOver') return;
+  // its target was knocked out by the attack's own triggers (Pit Fight): the attack is over
+  if (!s.chain.includes(link)) { log(s, p.id, `${c.name} has no hero left to attack.`); return; }
   log(s, p.id, `Attack: ${c.name} — ${linkPower(link)} power${link.goAgain ? ', go again' : ''}${link.dominate ? ', dominate' : ''}${link.overpower ? ', overpower' : ''}.`, link.dominate ? RULES.dominate : link.overpower ? RULES.overpower : link.goAgain ? RULES.goAgain : undefined);
   s.phase = 'defend';
   s.priority = link.defender!;
@@ -1598,7 +1656,7 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     if (!oc || oc.timing !== 'defend') throw new Error(`${cardOf(x.inst).name} has no defend option.`);
     let used: Card | null = null;
     if (oc.cost.kind !== 'pay') {
-      if (!optionalPayable(d, oc, x.inst.uid)) throw new Error(`You can’t pay for ${cardOf(x.inst).name}’s ability.`);
+      if (!optionalPayable(d, oc, x.inst.uid)) { log(s, d.id, `${cardOf(x.inst).name}: nothing left to pay with, so its ability isn't used.`); continue; }
       used = payOptional(s, d, oc, { accept: true }, x.inst.uid);
     }
     log(s, d.id, `${cardOf(x.inst).name}: ${oc.effectText}.`);
@@ -1612,6 +1670,7 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     l.powerMod = 0;
     l.goAgain = false;
     log(s, l.attacker, `Phantasm: ${cardOf(l.inst).name} is destroyed.`);
+    s.players[l.attacker].turn.flags.phantasm = 1;
   }
   if (l.piercing > 0 && l.defenders.some((x) => x.kind === 'equipment')) {
     l.powerMod += l.piercing;
@@ -1677,7 +1736,12 @@ function resolveDamage(s: GameState) {
   l.hit = dealt > 0;
   if (raw === 0) log(s, null, `${cardOf(l.inst).name} is fully blocked.`);
   if (l.hit && s.phase !== 'gameOver' && !allyTarget) { // hitting an ally isn't hitting a hero
-    if (l.fromWeapon) attacker.turn.weaponHits += 1;
+    if (l.fromWeapon) {
+      attacker.turn.weaponHits += 1;
+      const hits = (attacker.turn.flags[`hits${l.inst.uid}`] = (attacker.turn.flags[`hits${l.inst.uid}`] ?? 0) + 1);
+      const w = attacker.weapons.find((x) => x.inst.uid === l.inst.uid);
+      if (w && hits === 2 && getScript(cardOf(w.inst)).secondHitCounter) { w.counters = (w.counters ?? 0) + 1; log(s, attacker.id, `${cardOf(w.inst).name} hits a second time this turn: +1{p} counter (${w.counters}).`); }
+    }
     else attacker.turn.attackActionHits += 1;
     const sc = getScript(cardOf(l.inst));
     resolveEffects(s, attacker, [...sc.onHit, ...l.extraOnHit], l.inst); // link is still "current" here
@@ -1712,7 +1776,7 @@ function resolveDamage(s: GameState) {
   for (const pl of s.players) ability(pl)?.onLinkResolve?.(heroCtx(s, pl), l);
   // resolution step
   if (s.phase === 'gameOver') return;
-  if (l.goAgain) attacker.actionPoints += 1;
+  if (l.goAgain && !attacker.turn.flags.noGoAgain) attacker.actionPoints += 1;
   s.phase = 'action';
   s.priority = s.turnPlayer;
   s.passes = 0;
@@ -1724,6 +1788,7 @@ function closeChain(s: GameState) {
     const owner = s.players[l.attacker];
     if (l.destination === 'soul') { (owner.soul ??= []).push(l.inst); log(s, owner.id, `${cardOf(l.inst).name} is put into ${owner.name}'s soul.`); }
     else if (l.destination === 'deckBottom') owner.deck.push(l.inst);
+    else if (l.destination === 'hand') { owner.hand.push(l.inst); log(s, owner.id, `${cardOf(l.inst).name} returns to ${owner.name}'s hand.`); }
     else graveFromArena(owner, l.inst);
   }
   // Guardwell: equipment that defended loses all its defense when the combat chain closes
@@ -1771,6 +1836,8 @@ function doArsenal(s: GameState, uid: number | null) {
 function endTurn(s: GameState) {
   const p = s.players[s.turnPlayer];
   // quelled equipment is destroyed at the beginning of the end phase; stolen cards go home
+  for (const w of s.players[s.turnPlayer].weapons) if (getScript(cardOf(w.inst)).secondHitCounter && w.counters && !s.players[s.turnPlayer].turn.flags[`hits${w.inst.uid}`]) { w.counters = 0; log(s, s.turnPlayer, `${cardOf(w.inst).name} didn't hit this turn: its +1{p} counters are removed.`); }
+  for (const e of s.players[s.turnPlayer].equipment) if (!e.destroyed && getScript(cardOf(e.inst)).endPhaseWear) { e.defenseMod -= 1; log(s, s.turnPlayer, `${cardOf(e.inst).name} gets a -1{d} counter (${equipDefense(e)}).`); }
   for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
   const debt = ability(p)?.skipBloodDebt?.(heroCtx(s, p)) ? 0 : p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
@@ -1822,6 +1889,7 @@ function endTurn(s: GameState) {
 /** Deal damage to a hero, applying prevention. Returns damage actually dealt. */
 export function dealDamage(s: GameState, target: PlayerId, amount: number, arcane: boolean, source: string, unpreventable = false): number {
   const p = s.players[target];
+  if (p.eliminated) return 0;
   let dmg = amount;
   // Yoji: the next damage to the protected hero is dealt to Yoji instead, and 1 of it is prevented
   if (p.redirectTo !== undefined && p.redirectTo !== target && !s.players[p.redirectTo].eliminated && amount > 0) {
@@ -1913,7 +1981,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount + amp} arcane damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount + amp, arcane: true, source: srcName } });
           break;
         }
-        if (dealDamage(s, opp.id, e.amount + amp, true, srcName) > 0) p.turn.arcaneDealt = true;
+        { const dealt = dealDamage(s, opp.id, e.amount + amp, true, srcName); p.turn.flags.lastArcane = dealt; if (dealt > 0) p.turn.arcaneDealt = true; }
         break;
       }
       case 'ampArcane': p.effects.push({ kind: 'ampArcane', amount: e.amount, source: srcName }); log(s, p.id, `Next arcane damage effect deals +${e.amount}.`); break;
@@ -1940,6 +2008,67 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'targetAttackGoAgain': if (l && matchesFilter(e.filter, l)) l.goAgain = true; break;
       case 'thisPower': if (l && l.inst.uid === src.uid) l.powerMod += e.amount; break;
       case 'thisGoAgain': if (l && l.inst.uid === src.uid) l.goAgain = true; break;
+      case 'thisGrantOnHit': if (l && l.inst.uid === src.uid) l.extraOnHit = [...l.extraOnHit, ...e.effects]; break;
+      case 'setDestination': if (l && l.inst.uid === src.uid && !l.fromWeapon) l.destination = e.dest; break;
+      case 'oppNextTurn': {
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const n = (t.nextTurn ??= {});
+        if (e.mod === 'attackPower') n.attackPower = (n.attackPower ?? 0) + (e.amount ?? 0);
+        else if (e.mod === 'costMore') n.costMore = (n.costMore ?? 0) + (e.amount ?? 1);
+        else n[e.mod] = true;
+        const text = { attackPower: `their first attack next turn gets -${e.amount}{p}`, costMore: 'their first action next turn costs {r} more', noDraw: "they can't draw cards during their next action phase", noGoAgain: 'their cards lose go again next action phase', noSmallAttacks: "they can't play attack action cards with 3 or less {p} next action phase" }[e.mod];
+        log(s, p.id, `${srcName}: ${t.name} — ${text}.`);
+        break;
+      }
+      case 'oppArsenalBottom': case 'oppArsenalDestroy': {
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const cards = e.kind === 'oppArsenalBottom' ? t.arsenal.splice(0, 1) : t.arsenal.splice(0);
+        for (const x of cards) { if (e.kind === 'oppArsenalBottom') t.deck.push(x); else toGraveyard(t, x); }
+        if (cards.length) log(s, p.id, `${srcName}: ${cards.length === 1 ? 'the card' : `${cards.length} cards`} in ${t.name}'s arsenal ${e.kind === 'oppArsenalBottom' ? 'goes to the bottom of their deck' : 'are destroyed'}.`);
+        if (e.kind === 'oppArsenalDestroy' && e.goldEach && cards.length) createToken(s, p, 'Gold', cards.length);
+        break;
+      }
+      case 'oppEquipCounter': {
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const eq = t.equipment.filter((x) => !x.destroyed && (defenseOf(cardOf(x.inst)) ?? 0) > 0).sort((a, b) => equipDefense(b) - equipDefense(a))[0];
+        if (eq) { eq.defenseMod -= 1; log(s, p.id, `${srcName}: ${cardOf(eq.inst).name} gets a -1{d} counter (${equipDefense(eq)}).`); }
+        break;
+      }
+      case 'cleanseTop': {
+        // look at their top cards and banish the name they have most copies of (ties: the stronger card)
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const top = t.deck.slice(0, e.n);
+        const groups = new Map<string, CardInst[]>();
+        for (const x of top) { const k = cardOf(x).name; groups.set(k, [...(groups.get(k) ?? []), x]); }
+        const best = [...groups.values()].sort((a, b) => b.length - a.length || powerOf(cardOf(b[0])) - powerOf(cardOf(a[0])))[0];
+        if (!best) break;
+        t.deck = t.deck.filter((x) => !best.includes(x));
+        t.banished.push(...best);
+        log(s, p.id, `${srcName}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${best.length} ${cardOf(best[0]).name}.`);
+        break;
+      }
+      case 'oppDraw': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); break; }
+      case 'oppCreateToken': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; createToken(s, t, e.name, 1); break; }
+      case 'weaponsPowerTurn': {
+        p.turn.flags.weaponBonus = (p.turn.flags.weaponBonus ?? 0) + e.amount;
+        if (l && l.fromWeapon && l.attacker === p.id) l.powerMod += e.amount;
+        log(s, p.id, `${p.name}'s weapons get +${e.amount}{p} until end of turn.`);
+        break;
+      }
+      case 'optDealt': if (p.turn.flags.lastArcane) resolveEffects(s, p, [{ kind: 'opt', amount: p.turn.flags.lastArcane }], src); break;
+      case 'runechantsPerNonAttack': {
+        const n = p.turn.played.filter((id) => { const c = card(id); return has(c, 'Action') && !has(c, 'Attack'); }).length;
+        if (n) createToken(s, p, 'Runechant', n);
+        if (e.goAgainAt && n >= e.goAgainAt && l && l.inst.uid === src.uid) { l.goAgain = true; log(s, p.id, `${srcName} gets go again.`); }
+        break;
+      }
+      case 'revealTop': {
+        const top = p.deck[0];
+        if (!top) break;
+        log(s, p.id, `${srcName}: ${p.name} reveals ${cardOf(top).name}.`);
+        if (e.minusPitch && l && l.inst.uid === src.uid && pitchOf(cardOf(top))) { l.powerMod -= pitchOf(cardOf(top)); log(s, p.id, `${srcName} gets -${pitchOf(cardOf(top))}{p} (${linkPower(l)}).`); }
+        break;
+      }
       case 'thisDominate': if (l && l.inst.uid === src.uid) l.dominate = true; break;
       case 'thisDefense': {
         const def = l?.defenders.find((d) => d.inst.uid === src.uid);
@@ -2173,7 +2302,7 @@ function eliminate(s: GameState, p: PlayerState) {
   const left = alivePlayers(s);
   if (left.length === 1) { endGame(s, left[0].id); return; }
   // an attack involving them ends; if it was their turn, play moves on
-  if (s.chain.some((l) => l.attacker === p.id || defenderOf(l) === p.id)) { s.chain = []; s.chainOpen = false; s.phase = 'action'; s.priority = s.turnPlayer; }
+  if (s.chain.some((l) => l.attacker === p.id || defenderOf(l) === p.id)) { closeChain(s); s.phase = 'action'; s.priority = s.turnPlayer; }
   if (s.turnPlayer === p.id) { s.chain = []; s.chainOpen = false; delete s.stack; s.pendingChoices = undefined; s.turnPlayer = nextAlive(s, p.id); startTurn(s); }
   else if (s.players[s.priority].eliminated) s.priority = s.turnPlayer;
 }

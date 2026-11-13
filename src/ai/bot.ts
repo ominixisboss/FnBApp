@@ -151,6 +151,12 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
       cost = cardPlayValue(cardOf(h)) * (oc.cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4;
       break;
     }
+    case 'discardOrItem': {
+      const h = cheapest(() => true);
+      if (h) { choice = { accept: true, uid: h.uid }; cost = cardPlayValue(cardOf(h)) + 0.4; }
+      else { choice = { accept: true, top: true }; cost = 1.5; }
+      break;
+    }
     case 'discardOrTop': {
       const h = oc.minPower !== undefined ? cheapest(needPower) : undefined;
       if (h) { choice = { accept: true, uid: h.uid }; cost = cardPlayValue(cardOf(h)) + 0.4; }

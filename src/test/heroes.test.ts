@@ -81,7 +81,7 @@ describe('new card mechanics', () => {
   it('ninja combo triggers after the named attack', () => {
     const combo = getDb().cards.find((c) => getScript(c).conditional.some((x) => x.when === 'combo'))!;
     const cnd = getScript(combo).conditional.find((x) => x.when === 'combo')!;
-    const first = findCard(cnd.comboWith!)!;
+    const first = findCard(cnd.comboWith!.split(' or ')[0])!;
     let s = game('Katsu', [first.id, combo.id]);
     s.players[0].actionPoints = 2;
     s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
