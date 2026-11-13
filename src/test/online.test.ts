@@ -23,7 +23,7 @@ let server: ChildProcess;
 
 beforeAll(async () => {
   server = spawn('npx', ['tsx', 'server/index.ts'], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR: mkdtempSync(join(tmpdir(), 'fab-')), BOT_DELAY_MS: '0', PIT_FILL_MS: '300' },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR: mkdtempSync(join(tmpdir(), 'fab-')), BOT_DELAY_MS: '0', PIT_FILL_MS: '300', AUTH_RATE_LIMIT: '200' },
     stdio: 'pipe',
   });
   for (let i = 0; i < 100; i++) {
@@ -40,7 +40,7 @@ async function account(name: string) {
   return (await r.json()) as { token: string };
 }
 
-interface Client { ws: WebSocket; states: GameState[]; errors: string[]; waiting: { code?: string } | null; spectated: GameState[]; pod: PodView | null; challenged: { code: string } | null }
+interface Client { ws: WebSocket; states: GameState[]; errors: string[]; rated?: { before: number; after: number; format?: string }; waiting: { code?: string } | null; spectated: GameState[]; pod: PodView | null; challenged: { code: string } | null }
 
 function connect(token: string): Promise<Client> {
   return new Promise((resolve) => {
@@ -53,6 +53,7 @@ function connect(token: string): Promise<Client> {
       if (m.t === 'spectate') c.spectated.push(m.state);
       if (m.t === 'pod') c.pod = m.pod;
       if (m.t === 'challenged') c.challenged = m;
+      if (m.t === 'rated') c.rated = m;
     });
     c.ws.on('open', () => resolve(c));
   });
@@ -171,6 +172,29 @@ describe('online play', () => {
     // the views agree on who won (each is rotated to its own seat)
     const winnerSeat = (v: GameState, i: number) => (v.winner! + i) % 4;
     expect(new Set(ends.map((v, i) => winnerSeat(v, i))).size).toBe(1);
+    cs.forEach((c) => c.ws.close());
+  }, 120_000);
+
+  it('ranked Pit Fight: two players queue, bots fill the table, and the finish moves the Pit Fight ladder only', async () => {
+    const cs = await Promise.all(['rank1', 'rank2'].map(async (n) => connect((await account(n)).token)));
+    const allTimeBefore = (await (await fetch(`${BASE}/api/ladder`)).json()).length;
+    cs.forEach((c, i) => c.ws.send(JSON.stringify({ t: 'queue', deck: toDeckList(autoBuildDeck(findCard(i ? 'Katsu' : 'Dorinthea')!.id, 'blitz', 7 + i)), format: 'upf' })));
+    await until(() => cs.every((c) => c.states.length > 0), 8000); // bots fill the empty seats after a short wait
+    expect(cs[0].states.at(-1)!.players.length).toBe(4);
+    for (let steps = 0; steps < 8000; steps++) {
+      if (cs.every((c) => c.states.at(-1)!.phase === 'gameOver')) break;
+      const mover = cs.find((c) => { const v = c.states.at(-1)!; return v.phase !== 'gameOver' && !v.players[0].eliminated && (v.pendingChoices?.[0]?.player ?? v.priority) === 0; });
+      if (!mover) { await wait(5); continue; }
+      const before = mover.states.length;
+      mover.ws.send(JSON.stringify({ t: 'act', action: chooseAction(mover.states.at(-1)!, 0, 'normal').action }));
+      for (let i = 0; i < 200 && mover.states.length === before && mover.errors.length === 0; i++) await wait(5);
+      if (mover.errors.length) throw new Error(`server rejected a move: ${mover.errors.join('; ')}`);
+    }
+    await until(() => cs.every((c) => !!c.rated), 5000);
+    expect(cs.every((c) => c.rated?.format === 'upf')).toBe(true);
+    const lad = await (await fetch(`${BASE}/api/ladder?format=upf`)).json();
+    expect(lad.map((r: { username: string }) => r.username).sort()).toEqual(['rank1', 'rank2']);
+    expect((await (await fetch(`${BASE}/api/ladder`)).json()).length).toBe(allTimeBefore); // the one-on-one rating is untouched
     cs.forEach((c) => c.ws.close());
   }, 120_000);
 

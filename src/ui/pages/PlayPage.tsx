@@ -298,9 +298,9 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                   {setup.format === 'upf' ? (
                     <>
                       <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
-                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Find a Pit Fight table</button>
+                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked Pit Fight table</button>
                       <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
-                      <div className="small muted">Pit Fight games are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
+                      <div className="small muted">The public table is ranked on its own Pit Fight ladder (your finishing place against the other players); rooms are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
                     </>
                   ) : (
                     <>

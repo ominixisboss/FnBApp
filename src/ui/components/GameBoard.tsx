@@ -764,7 +764,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         )}
         {online && (
           <span className={`online-badge ${online.opponent?.connected === false ? 'warn' : ''}`}>
-            ● Online{online.opponent?.connected === false ? ' · opponent disconnected (they forfeit in 2 min)' : ''}
+            ● Online{online.opponent?.connected === false ? (state.players.length > 2 ? ' · a player disconnected (out in 2 min)' : ' · opponent disconnected (they forfeit in 2 min)') : ''}
           </span>
         )}
         {online?.sendEmote && <button className={`icon-btn ${emoteOpen ? 'on' : ''}`} title="Emotes" onClick={() => setEmoteOpen(!emoteOpen)}>💬<span>Emote</span></button>}

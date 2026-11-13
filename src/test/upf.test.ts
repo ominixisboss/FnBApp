@@ -48,4 +48,18 @@ describe('Ultimate Pit Fight', () => {
     const u = concedeSeat(t, t.turnPlayer);
     expect(u.phase).toBe('gameOver');
   });
+  it('bots go for a hero they can knock out, otherwise the biggest threat', () => {
+    const base = pod(4, 3);
+    const tryAttack = (setup: (s: GameState) => void) => {
+      let s = structuredClone(base);
+      s.turnPlayer = 0; s.priority = 0; s.phase = 'action'; s.players[0].actionPoints = 1; s.players[0].resources = 20;
+      setup(s);
+      for (let i = 0; i < 30 && !s.chain.length && s.turnPlayer === 0 && s.phase !== 'gameOver'; i++) s = applyAction(s, chooseAction(s, s.pendingChoices?.[0]?.player ?? s.priority).action);
+      return s.chain[0]?.defender ?? null;
+    };
+    // seat 3 is nearly dead: finish them
+    expect(3).toBe(tryAttack((s) => { s.players[3].life = 1; s.players[1].life = 20; }));
+    // otherwise the leader (far more life and cards) draws the fire
+    expect(1).toBe(tryAttack((s) => { s.players[1].life = 30; s.players[3].life = 18; s.players[3].hand = s.players[3].hand.slice(0, 1); }));
+  });
 });

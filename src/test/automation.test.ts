@@ -3,7 +3,7 @@ import './setup';
 import { findCard, getDb } from '../data/cardDb';
 import type { Card } from '../data/types';
 import { getScript } from '../engine/cardScript';
-import { applyAction, createGame, currentLink, HAND_INDEX, linkPower, playOptions } from '../engine/game';
+import { applyAction, createGame, currentLink, defendOptions, HAND_INDEX, linkPower, playOptions } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import type { GameState } from '../engine/types';
 import { decideOptional } from '../ai/bot';
@@ -97,5 +97,41 @@ describe('new mechanics', () => {
     const pool = getDb().cards.filter((c) => legal(c) && !c.types.includes('Hero'));
     const full = pool.filter((c) => getScript(c).coverage === 'full').length;
     expect(full).toBeGreaterThan(780);
+  });
+});
+
+describe('most-played cards', () => {
+  it('Crush cards parse their next-turn penalties', () => {
+    for (const [n, mod] of [['Debilitate', 'attackPower'], ['Cartilage Crush', 'costMore'], ['Cranial Crush', 'noDraw'], ['Spinal Crush', 'noGoAgain']] as const) {
+      const sc = getScript(findCard(n)!);
+      expect(sc.coverage).toBe('full');
+      expect(sc.conditional.find((c) => c.when === 'crush')!.effects[0]).toMatchObject({ kind: 'oppNextTurn', mod });
+    }
+    for (const n of ['Disable', 'Buckling Blow', 'Righteous Cleansing', 'Frontline Plating', 'Embrace Adversity', 'Crown of Providence', 'Enlightened Strike', 'Spinning Wheel Kick', "Bolt'n' Shot", 'Hostile Encroachment', 'Biting Blade', 'Aether Spindle', 'Scuttle the Canal'])
+      expect([n, getScript(findCard(n)!).coverage]).toEqual([n, 'full']);
+  });
+
+  it('a Debilitate crush makes the next attack weaker', () => {
+    let s = game([findCard('Debilitate')!.id]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'pass' });
+    expect(s.players[1].nextTurn?.attackPower).toBe(2);
+  });
+
+  it('Frontline equipment wears down at the end of your turn, and Adversity equipment only blocks after the token was used', () => {
+    const plating = findCard('Frontline Plating')!.id;
+    const adv = findCard('Embrace Adversity')!.id;
+    const mk = (equip: string[]): DeckList => ({ heroId: findCard('Dorinthea')!.id, weaponIds: [], equipmentIds: equip, cardIds: Array(30).fill(filler()) });
+    let s = createGame([{ name: 'A', isBot: false, deck: mk([plating]) }, { name: 'B', isBot: false, deck: mk([adv]) }], 3, 'blitz', 0);
+    const d0 = s.players[0].equipment[0].defenseMod;
+    while (s.turnPlayer === 0) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.players[0].equipment[0].defenseMod).toBe(d0 - 1);
+    // B's Embrace Adversity can't defend A's attack: A destroyed no Might token
+    s = structuredClone(s);
+    s.turnPlayer = 0; s.priority = 0; s.phase = 'action'; s.players[0].actionPoints = 1; s.players[0].resources = 10;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    expect(defendOptions(s, 1).some((o) => o.uid === s.players[1].equipment[0].inst.uid)).toBe(false);
   });
 });

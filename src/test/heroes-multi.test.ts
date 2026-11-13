@@ -81,9 +81,35 @@ describe('the last heroes', () => {
     expect(s.players[0].weapons).toEqual([]);
   });
 
-  it('Yorick shares the decks out', () => {
-    const s = createGame([{ name: 'Y', isBot: true, deck: deck('Yorick') }, { name: 'B', isBot: true, deck: deck('Dorinthea', { cardIds: Array(40).fill(findCard('Sigil of Solace', 1)?.id ?? filler()) }) }], 3);
-    const ids = new Set([...s.players[0].deck, ...s.players[0].hand].map((c) => c.cardId));
-    expect(ids.size).toBeGreaterThan(1);
+  it('Yorick: all heroes draw from one shared deck and share a graveyard, even after a JSON round trip', () => {
+    let s = createGame([{ name: 'Y', isBot: true, deck: deck('Yorick') }, { name: 'B', isBot: true, deck: deck('Dorinthea', { cardIds: Array(40).fill(findCard('Sigil of Solace', 1)?.id ?? filler()) }) }], 3);
+    expect(s.players[0].deck).toBe(s.players[1].deck);
+    expect(s.players[0].deck.length).toBe(80 - s.players[0].hand.length - s.players[1].hand.length);
+    s = JSON.parse(JSON.stringify(s)); // a saved game or a replay
+    for (let i = 0; i < 300 && s.turn < 4; i++) s = applyAction(s, chooseAction(s, s.pendingChoices?.[0]?.player ?? s.priority).action);
+    expect(s.players[0].deck).toBe(s.players[1].deck);
+    expect(s.players[0].graveyard).toBe(s.players[1].graveyard);
+  });
+  it('Bolfar: the next crush attack also attacks a second hero, who defends it separately', () => {
+    const crush = getDb().cards.find((c) => c.types.includes('Guardian') && c.types.includes('Attack') && c.types.includes('Action') && /Crush - /.test(c.text) && Number(c.cost ?? 9) <= 3 && Number(c.power) >= 4 && c.legal.length > 0)!;
+    let s: GameState = createGame([{ name: 'Bo', isBot: false, deck: deck('Bolfar', { cardIds: Array(40).fill(crush.id) }) }, { name: 'L', isBot: false, deck: deck('Dorinthea') }, { name: 'R', isBot: false, deck: deck('Dorinthea') }], 5, 'upf', 0);
+    s = structuredClone(s);
+    s.players[0].resources = 10; s.players[0].actionPoints = 1; s.players[0].focus = 1;
+    const life0 = s.players.map((x) => x.life);
+    const act = playOptions(s, 0).find((o) => o.index === HERO_INDEX)!;
+    s = applyAction(s, { type: 'activate', uid: act.uid, index: act.index, pitch: [] });
+    while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    if (s.pendingChoices?.length) s = applyAction(s, { type: 'choose', picks: [s.players[1].hero.uid] });
+    expect(s.chain[0].also?.defender).toBe(2);
+    expect(s.priority).toBe(1);
+    s = applyAction(s, { type: 'defend', uids: [] }); // the first hero
+    expect(s.phase).toBe('defend');
+    expect(s.priority).toBe(2); // the second hero declares their own block
+    s = applyAction(s, { type: 'defend', uids: [] });
+    while (s.pendingChoices?.length) s = applyAction(s, { type: 'choose', yes: false });
+    while (s.phase === 'reaction') s = applyAction(s, { type: 'pass' });
+    expect(s.players[1].life).toBeLessThan(s.players[1].hero ? life0[1] : 0);
+    expect(s.players[2].life).toBeLessThan(life0[2]);
   });
 });

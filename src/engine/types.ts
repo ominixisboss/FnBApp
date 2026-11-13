@@ -86,6 +86,10 @@ export interface PlayerState {
   redirectTo?: PlayerId;
   /** extra intellect until the end of this player's next turn (The Librarian) */
   bonusIntellect?: number;
+  /** Pit Fight memory for the bots: how much each opponent has attacked this player lately */
+  attackedBy?: Partial<Record<PlayerId, number>>;
+  /** penalties for this player's next turn (Crush cards): applied at the start of it */
+  nextTurn?: { attackPower?: number; costMore?: number; noDraw?: boolean; noGoAgain?: boolean; noSmallAttacks?: boolean };
   weapons: WeaponState[];
   equipment: EquipState[];
   permanents: PermanentState[]; // auras, items, allies, tokens
@@ -151,12 +155,14 @@ export interface ChainLink {
   noEquipDefense?: boolean;
   instants?: number; // instants the attacker played on this link
   reactionCount?: number; // attack reactions played on this link
-  destination?: 'soul' | 'deckBottom';
+  destination?: 'soul' | 'deckBottom' | 'hand';
   /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
   wagers?: { tokens: string[]; winnerDraw?: number }[];
   noDefenseReactions?: boolean;
   /** the defending hero (in a two-player game, the attacker's opponent) */
   defender?: PlayerId;
+  /** Bolfar: the attack also targets a second hero, who defends it separately */
+  also?: { defender: PlayerId; defenders: Defender[]; stage: 'pending' | 'declaring' | 'done'; main?: { defender: PlayerId; defenders: Defender[] } };
   /** attacking an ally (its permanent uid) instead of the hero */
   target?: number;
   unpreventable?: boolean;
@@ -206,6 +212,10 @@ export interface PendingChoice {
 }
 
 export interface GameState {
+  /** Yorick: every hero shares one deck and one graveyard (the players' arrays are the same objects) */
+  sharedZones?: boolean;
+  /** Pit Fight: the order heroes were knocked out (first out first) */
+  knockedOut?: PlayerId[];
   seed: number;
   nextUid: number;
   turn: number;

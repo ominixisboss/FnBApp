@@ -2,7 +2,7 @@
 // player only what they may see (see src/online/view.ts).
 import type { WebSocket } from 'ws';
 import { getDb, isHero } from '../src/data/cardDb';
-import { applyAction, concedeSeat, createGame } from '../src/engine/game';
+import { applyAction, concedeSeat, createGame, placements } from '../src/engine/game';
 import type { DeckList } from '../src/engine/game';
 import type { Action, GameState, PlayerId } from '../src/engine/types';
 import { formatName, validateDeck } from '../src/deck/deck';
@@ -188,7 +188,8 @@ function record(room: Room): Promise<unknown> {
 
 /** Ranked games (quick match) move both players' Elo ratings. */
 async function rate(room: Room) {
-  if (room.isPrivate || !room.state || room.state.winner === null || room.size > 2) return; // Pit Fight is unranked
+  if (room.isPrivate || !room.state || room.state.winner === null) return;
+  if (room.size > 2) return ratePit(room);
   const [a, b] = await Promise.all(room.seats.map((s) => store.getRating(s.userId)));
   const ra = a?.rating ?? START_RATING;
   const rb = b?.rating ?? START_RATING;
@@ -210,6 +211,31 @@ async function rate(room: Room) {
   await store.setSeasonRating(room.seats[1].userId, season, room.format, { rating: snb, games: (sb0?.games ?? 0) + 1, peak: Math.max(snb, sb0?.peak ?? START_RATING) });
   send(room.seats[0].ws, { t: 'rated', before: sra, after: sna, season, format: room.format });
   send(room.seats[1].ws, { t: 'rated', before: srb, after: snb, season, format: room.format });
+}
+
+/** Ranked Pit Fight: every pair of human players is an Elo game decided by finishing order (bots don't count).
+ * It moves only the Pit Fight season ladder, not the one-on-one rating. */
+async function ratePit(room: Room) {
+  const s = room.state!;
+  const order = placements(s);
+  const humans = room.seats.map((x, i) => ({ seat: i as PlayerId, x })).filter((h) => !h.x.bot);
+  if (humans.length < 2) return;
+  const season = currentSeason();
+  const rows = await Promise.all(humans.map((h) => store.getSeasonRating(h.x.userId, season, room.format)));
+  const before = rows.map((r) => r?.rating ?? START_RATING);
+  const place = (seat: PlayerId) => order.indexOf(seat);
+  const after = humans.map((h, i) => {
+    const k = ((rows[i]?.games ?? 0) < 10 ? 40 : 24) / (humans.length - 1);
+    let d = 0;
+    humans.forEach((o, j) => {
+      if (j === i) return;
+      const e = 1 / (1 + 10 ** ((before[j] - before[i]) / 400));
+      d += k * ((place(h.seat) < place(o.seat) ? 1 : 0) - e);
+    });
+    return Math.round(before[i] + d);
+  });
+  await Promise.all(humans.map((h, i) => store.setSeasonRating(h.x.userId, season, room.format, { rating: after[i], games: (rows[i]?.games ?? 0) + 1, peak: Math.max(after[i], rows[i]?.peak ?? START_RATING) })));
+  humans.forEach((h, i) => send(h.x.ws, { t: 'rated', before: before[i], after: after[i], season, format: room.format }));
 }
 
 function saveReplay(room: Room) {

@@ -708,7 +708,7 @@ function comboToBanish(p: PlayerState, api: HeroApi) {
   const i = p.deck.findIndex((d) => /combo/i.test(cardOf(d).text) || cardOf(d).keywords.includes('Combo'));
   if (i < 0) { api.log(p, `${p.name} finds no card with combo.`); return; }
   const [c] = p.deck.splice(i, 1);
-  p.deck = api.shuffle(p.deck);
+  p.deck.splice(0, p.deck.length, ...api.shuffle(p.deck));
   p.banished.push(c);
   p.turn.flags[`playBanished${c.uid}`] = 1;
   api.log(p, `${p.name} banishes ${cardOf(c).name} from the deck: it may be played this turn.`);
@@ -1170,7 +1170,7 @@ HERO_ABILITIES.push(
       const i = p.deck.findIndex((d) => cardOf(d).types.includes('Figment'));
       if (i < 0) return;
       const [f] = p.deck.splice(i, 1);
-      p.deck = api.shuffle(p.deck);
+      p.deck.splice(0, p.deck.length, ...api.shuffle(p.deck));
       p.permanents.push({ inst: f, ward: 0 });
       api.log(p, `${p.name} searches for ${cardOf(f).name} and puts it into the arena.`);
     },
@@ -1206,18 +1206,17 @@ const lowestLife = (list: PlayerState[]) => [...list].sort((a, b) => a.life - b.
 HERO_ABILITIES.push(
   {
     id: 'bolfar',
-    summary: 'Bolfar can’t equip weapons. Action {r}{r}{r}: your next crush attack this turn also hits another hero you can attack, for the same damage (they don’t get to defend it separately). Go again.',
-    partial: true,
+    summary: 'Bolfar can’t equip weapons. Action {r}{r}{r}: your next crush attack this turn also attacks another hero you can attack (the one with the least life). They defend it separately and take its damage. Go again.',
     noWeapons: true,
     match: (t) => t.includes('The next attack action card with crush you play this turn may attack an additional hero'),
-    onLinkResolve: ({ p, api }, l) => {
-      if (l.attacker !== p.id || !flag(p, 'bolfarExtra') || !isCrush(cardOf(l.inst))) return;
+    onAttack: ({ p, api }, l) => {
+      if (l.attacker !== p.id || !flag(p, 'bolfarExtra') || l.fromWeapon || !isCrush(cardOf(l.inst))) return;
       p.turn.flags.bolfarExtra = 0;
-      const extra = api.targets(p).filter((q) => q.id !== (l.defender ?? -1));
-      if (!l.hit || !l.damage || !extra.length) return;
+      const extra = api.targets(p).filter((q) => q.id !== l.defender);
+      if (!extra.length) return;
       const q = lowestLife(extra);
+      l.also = { defender: q.id, defenders: [], stage: 'pending' };
       api.log(p, `${cardOf(l.inst).name} also attacks ${q.name} (Bolfar).`);
-      api.dealDamage(q, l.damage, false, cardOf(l.inst).name);
     },
     activations: [{
       label: 'Next crush attack hits an additional hero', instant: false, oncePerTurn: true, goAgain: true,
@@ -1227,6 +1226,7 @@ HERO_ABILITIES.push(
       botValue: ({ s }) => (s.players.length > 2 ? 1 : 0),
     }],
   },
+
   {
     id: 'brevant',
     summary: 'Any number of Chivalry in the deck. Whenever you protect another hero (Ultimate Pit Fight), create a Might token.',
@@ -1368,8 +1368,7 @@ HERO_ABILITIES.push(
   },
   {
     id: 'theryon',
-    summary: 'The first time each turn another hero destroys a card they don’t control (an ally killed by their damage), you may pay {r}{r}: they destroy a non-hero permanent they control.',
-    partial: true,
+    summary: 'The first time each turn another hero destroys a card they don’t control (an ally, a card in an arsenal, …), you may pay {r}{r}: they destroy a non-hero permanent they control.',
     match: (t) => t.includes('another hero destroys a card they don\'t control'),
     onOtherDestroys: ({ p, api }, by) => {
       if (flag(p, 'theryon')) return;
@@ -1404,16 +1403,17 @@ HERO_ABILITIES.push(
   },
   {
     id: 'yorick',
-    summary: 'At the start of the game, every hero’s deck is shuffled together and dealt back out evenly. (The shared graveyard isn’t simulated: each hero keeps their own.)',
-    partial: true,
+    summary: 'At the start of the game, every hero’s deck is shuffled together: all heroes draw from the same deck and share one graveyard.',
     match: (t) => t.includes('all heroes shuffle their starting decks together'),
     setup: ({ s, api }) => {
-      const all = api.shuffle(s.players.flatMap((q) => q.deck));
-      const n = s.players.length;
-      s.players.forEach((q, i) => { q.deck = all.filter((_, j) => j % n === i); });
-      api.log(null, 'Yorick: every hero’s deck is shuffled together and shared out.');
+      const deck = api.shuffle(s.players.flatMap((q) => q.deck));
+      const graveyard = s.players.flatMap((q) => q.graveyard);
+      for (const q of s.players) { q.deck = deck; q.graveyard = graveyard; }
+      s.sharedZones = true;
+      api.log(null, 'Yorick: every hero’s deck is shuffled together. All heroes share this deck and one graveyard.');
     },
   },
+
 );
 
 function graveEquipment(s: GameState, p: PlayerState) {
