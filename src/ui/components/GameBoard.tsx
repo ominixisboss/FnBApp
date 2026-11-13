@@ -21,6 +21,7 @@ import { hideHover } from './HoverCard';
 import { computeProgress, progressDiff } from '../../stats/progress';
 import type { MatchStats, Progress } from '../../stats/progress';
 import { loadMatches } from '../../stats/matches';
+import { addDrill } from '../../learn/drills';
 import { HintArrows, MatchIntro, damageSource, themeOf, useVfx } from './Vfx';
 import type { Theme } from './Vfx';
 import type { ChainLink } from '../../engine/types';
@@ -1452,7 +1453,8 @@ function ProgressGains({ before }: { before: Progress }) {
 
 /** Post-game review: the Hard bot re-checks each of your decisions and points out where it would have played differently. */
 function GameReview({ decisions, onClose }: { decisions: { before: GameState; action: Action }[]; onClose: () => void }) {
-  const [rows, setRows] = useState<{ turn: number; yours: string; better: string; why: string }[]>([]);
+  const [rows, setRows] = useState<{ turn: number; yours: string; better: string; why: string; before: GameState; a: Action; b: Action }[]>([]);
+  const [saved, setSaved] = useState(false);
   const [done, setDone] = useState(0);
   const list = useMemo(() => decisions.filter((d) => ['play', 'activate', 'defend', 'pass'].includes(d.action.type) && ['action', 'defend'].includes(d.before.phase)).slice(-60), [decisions]);
   useEffect(() => {
@@ -1466,7 +1468,7 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
         const same = a.type === b.type && (
           (a.type === 'play' || a.type === 'activate') ? a.uid === (b as typeof a).uid
             : a.type === 'defend' ? [...a.uids].sort().join() === [...(b as typeof a).uids].sort().join() : true);
-        if (!same) setRows((r) => [...r, { turn: d.before.turn, yours: describeAction(d.before, a), better: describeAction(d.before, b), why: sug.reason }]);
+        if (!same) setRows((r) => [...r, { turn: d.before.turn, yours: describeAction(d.before, a), better: describeAction(d.before, b), why: sug.reason, before: d.before, a, b }]);
         setDone((n) => n + 1);
       }
     })();
@@ -1482,6 +1484,12 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
           {done < list.length ? `Checking your decisions… ${done}/${list.length}` : `${matched} of ${list.length} decisions matched what the Hard bot would do.`} The bot isn’t perfect, so treat these as ideas rather than mistakes.
         </p>
         {rows.length === 0 && done === list.length && <p>🎯 No differences: you played this game like the Hard bot would.</p>}
+        {rows.length > 0 && done === list.length && (
+          <div className="row" style={{ marginBottom: '.6rem' }}>
+            <button className="primary" disabled={saved} onClick={() => { rows.forEach((r) => addDrill(r.before, r.a, r.b, r.why)); setSaved(true); }}>{saved ? '✓ Saved to the mistake trainer' : `Save ${rows.length} position${rows.length > 1 ? 's' : ''} to the mistake trainer`}</button>
+            {saved && <a className="btn-link small" href="#drills">Open the trainer</a>}
+          </div>
+        )}
         <div className="col" style={{ gap: '.5rem' }}>
           {rows.map((r, i) => (
             <div key={i} className="review-row">

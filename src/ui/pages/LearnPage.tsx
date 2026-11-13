@@ -19,6 +19,7 @@ export default function LearnPage({ lesson }: { lesson?: string }) {
         <button className="primary" style={{ width: '100%' }} onClick={() => setPractice(true)}>▶ Guided practice game</button>
         <a href="#guides" className="learn-extra">📚 Hero guides</a>
         <a href="#puzzles" className="learn-extra">🧩 Lethal puzzles</a>
+        <a href="#drills" className="learn-extra">🎯 Mistake trainer</a>
         <a href="#gauntlet" className="learn-extra">🏟 Gauntlet</a>
       </div>
       <div className="lesson">

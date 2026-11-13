@@ -24,6 +24,7 @@ import { online, useOnline } from './online/client';
 import ReplayPage from './ui/pages/ReplayPage';
 import PrivacyPage from './ui/pages/PrivacyPage';
 import GuidesPage from './ui/pages/GuidesPage';
+import DrillsPage from './ui/pages/DrillsPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -127,6 +128,7 @@ export default function App() {
             {route === 'replay' && <ReplayPage id={rest[0]} />}
             {route === 'privacy' && <PrivacyPage />}
             {route === 'guides' && <GuidesPage heroId={rest[0]} />}
+            {route === 'drills' && <DrillsPage />}
           </div>
         )}
       </main>

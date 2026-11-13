@@ -27,7 +27,7 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Hero-tuned decks**: bots and starter decks are built around each hero's archetype (Weapon Warrior, Guardian Crush, Ninja Combo, Brute Big Hits, Draconic Aggro, Stealth Assassin, Arcane Wizard, Runechant Runeblade, Mechanologist Boost) with signature cards.
 
 - **Progression:** XP for every game, levels with titles, three daily quests that change at midnight, 19 achievements, and unlockable card sleeves, playmats and avatar frames. Progress is calculated from your match history, so it syncs with your account.
-- **Lethal puzzles:** 11 "win this turn" positions, each checked by a brute-force solver to have a winning line that the bots miss. You can see the solution after a failed attempt.
+- **Lethal puzzles:** 20 "win this turn" positions, each checked by a brute-force solver to have a winning line that the bots miss. You can see the solution after a failed attempt.
 - **The Gauntlet:** eight bot heroes in a row, from Easy to Hard. One loss ends the run.
 - **Sealed & Draft:** open six packs from one of 15 sets, or draft three packs at a table of seven bots. Then pick a hero, build a deck of 30 or more cards (or auto-build one) and play it.
 - **Game review:** after a game, the Hard bot re-checks your decisions and lists where it would have played differently, and why.

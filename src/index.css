@@ -1320,3 +1320,10 @@ table.odds th:first-child, table.odds td:first-child { text-align: left; }
 .guide-head > .col { flex: 1; min-width: 240px; }
 .guide-ability { white-space: pre-line; background: #0004; border-left: 3px solid var(--gold, #c9a14a); padding: .5rem .7rem; margin: .2rem 0; }
 .guide-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: .6rem; }
+
+/* mistake trainer */
+.drill-hand { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 130px)); gap: .5rem; }
+.drill-arsenal { display: flex; flex-direction: column; align-items: center; gap: .2rem; outline: 2px dashed #a57c4688; outline-offset: 3px; border-radius: 8px; }
+.drill-opt { text-align: left; padding: .6rem .8rem; }
+.drill-opt.right { border-color: #3fae6a; background: #1c3a2799; }
+.drill-opt.wrong { border-color: #c0392b; background: #3a1c1c99; }
