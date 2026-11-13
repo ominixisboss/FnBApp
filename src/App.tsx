@@ -26,6 +26,7 @@ import ReplayPage from './ui/pages/ReplayPage';
 import PrivacyPage from './ui/pages/PrivacyPage';
 import GuidesPage from './ui/pages/GuidesPage';
 import DrillsPage from './ui/pages/DrillsPage';
+import CampaignPage from './ui/pages/CampaignPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -138,6 +139,7 @@ export default function App() {
             {route === 'privacy' && <PrivacyPage />}
             {route === 'guides' && <GuidesPage heroId={rest[0]} />}
             {route === 'drills' && <DrillsPage />}
+            {route === 'campaign' && <CampaignPage id={rest[0]} />}
           </div>
         )}
       </main>

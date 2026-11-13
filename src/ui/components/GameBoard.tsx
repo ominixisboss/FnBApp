@@ -243,7 +243,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
-  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number } | null>(null);
+  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number; lastX?: number; tilt?: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
@@ -591,12 +591,24 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     }
     d.el.style.setProperty('--dx', `${dx}px`);
     d.el.style.setProperty('--dy', `${dy}px`);
-    d.el.classList.toggle('will-play', e.clientY < (d.handTop ?? window.innerHeight) - 30);
+    // the card leans the way it's moving, like it's being swung through the air
+    const vx = e.clientX - (d.lastX ?? e.clientX);
+    d.lastX = e.clientX;
+    d.tilt = (d.tilt ?? 0) * 0.75 + Math.max(-16, Math.min(16, vx * 1.6)) * 0.25;
+    d.el.style.setProperty('--tilt', `${d.tilt.toFixed(1)}deg`);
+    const over = e.clientY < (d.handTop ?? window.innerHeight) - 30;
+    d.el.classList.toggle('will-play', over);
+    colRef.current?.classList.toggle('drop-ready', over);
   };
   const dragReset = (el: HTMLElement) => {
+    // spring back into the hand (if the card wasn't played, it glides home with a little overshoot)
+    el.classList.add('returning');
     el.classList.remove('dragging', 'will-play');
     el.style.removeProperty('--dx');
     el.style.removeProperty('--dy');
+    el.style.removeProperty('--tilt');
+    setTimeout(() => el.classList.remove('returning'), 450);
+    colRef.current?.classList.remove('drop-ready');
     setDragging(false);
   };
   const dragEnd = (e: React.PointerEvent<HTMLDivElement>, inst: CardInst) => {

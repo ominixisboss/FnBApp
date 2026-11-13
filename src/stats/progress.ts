@@ -4,6 +4,7 @@
 import { getDb } from '../data/cardDb';
 import { CLASSES } from '../data/types';
 import type { MatchRecord } from './matches';
+import { CAMPAIGNS } from '../learn/campaigns';
 
 /** Extra numbers recorded at the end of each game (for quests and achievements). */
 export interface MatchStats {
@@ -16,7 +17,7 @@ export interface MatchStats {
 
 // ---------------------------------------------------------------- feats (puzzles, gauntlet)
 
-export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number; tournamentWins?: number; tournamentTop?: number; seasonPeak?: number }
+export interface Feats { puzzles: string[]; gauntletBest: number; gauntletWins: number; sealedWins: number; draftWins: number; tournamentWins?: number; tournamentTop?: number; seasonPeak?: number; campaigns?: string[] }
 const FEATS_KEY = 'fab-trainer.feats.v1';
 export function loadFeats(): Feats {
   try { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0, ...JSON.parse(localStorage.getItem(FEATS_KEY) ?? '{}') }; } catch { return { puzzles: [], gauntletBest: 0, gauntletWins: 0, sealedWins: 0, draftWins: 0 }; }
@@ -112,6 +113,7 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'hard', icon: '💀', name: 'Giant Slayer', text: 'Beat a Hard bot', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && (m.difficulty === 'hard' || m.difficulty === 'mythic')) },
   { id: 'season-gold', icon: '🥇', name: 'Gold Season', text: 'Reach Gold (1250) in a ranked season', goal: 1, reward: 300, check: (_ms, f) => ((f.seasonPeak ?? 0) >= 1250 ? 1 : 0) },
   { id: 'season-diamond', icon: '💎', name: 'Diamond Season', text: 'Reach Diamond (1550) in a ranked season', goal: 1, reward: 600, check: (_ms, f) => ((f.seasonPeak ?? 0) >= 1550 ? 1 : 0) },
+  ...CAMPAIGNS.map((c) => ({ id: `campaign-${c.id}`, icon: '🗺', name: c.title, text: `Finish the ${c.title} campaign`, goal: 1, reward: 400, check: (_ms: MatchRecord[], f: Feats) => (f.campaigns?.includes(c.id) ? 1 : 0) })),
   { id: 'mythic', icon: '🔮', name: 'Fate Breaker', text: 'Beat a Mythic bot', goal: 1, reward: 400, check: (ms) => count(ms, (m) => m.won && m.difficulty === 'mythic') },
   { id: 'online', icon: '🌐', name: 'Proven', text: 'Win an online game', goal: 1, reward: 200, check: (ms) => count(ms, (m) => m.won && m.mode === 'online') },
   { id: 'classes-5', icon: '🎭', name: 'Versatile', text: 'Win with 5 different classes', goal: 5, reward: 300, check: (ms) => new Set(ms.filter(won).map((m) => heroClass(m.myHeroId))).size },
@@ -156,6 +158,7 @@ export const COSMETICS: Cosmetic[] = [
   { id: 'flame', kind: 'frame', name: 'Phoenix', unlock: { achievement: 'comeback' } },
   { id: 'mythic', kind: 'frame', name: 'Mythic', unlock: { achievement: 'wins-100' } },
   { id: 'laurel', kind: 'sleeve', name: 'Season Laurel', unlock: { achievement: 'season-gold' } },
+  ...CAMPAIGNS.map((c) => ({ id: c.reward.id, kind: 'sleeve' as const, name: c.reward.name, unlock: { achievement: `campaign-${c.id}` } })),
   { id: 'arena', kind: 'mat', name: 'Grand Arena', unlock: { achievement: 'season-diamond' } },
   { id: 'diamondf', kind: 'frame', name: 'Diamond', unlock: { achievement: 'season-diamond' } },
 ];

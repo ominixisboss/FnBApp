@@ -391,7 +391,7 @@ html.in-game, html.in-game body { overflow: hidden; }
   filter: drop-shadow(0 6px 10px #000c);
 }
 .fan-card:first-child { margin-left: 0; }
-.fan-card:hover { translate: 0 calc(var(--hw) * -0.6) !important; rotate: 0deg !important; scale: 1.18; z-index: 60 !important; }
+html:not(.no-hover) .fan-card:hover { translate: 0 calc(var(--hw) * -0.6) !important; rotate: 0deg !important; scale: 1.18; z-index: 60 !important; }
 .hand-fan.is-dragging .fan-card:not(.dragging):hover { translate: 0 0 !important; scale: 1; }
 .fan-card.dragging { translate: var(--dx) var(--dy) !important; rotate: 0deg !important; scale: 1.08; z-index: 100 !important; transition: scale .15s; cursor: grabbing; }
 .fan-card.dragging.will-play { scale: 1.2; filter: drop-shadow(0 0 18px #f6d58e) drop-shadow(0 10px 20px #000); }
@@ -604,7 +604,7 @@ table.history tr.me-row td { background: #d9a4411a; }
 
   .hand-fan { bottom: calc(var(--peek) - var(--hw) * 1.3956); }
   .fan-card { margin-left: calc(var(--hw) * -0.34); }
-  .fan-card:hover { translate: 0 calc(var(--hw) * -0.75) !important; scale: 1.12; }
+  html:not(.no-hover) .fan-card:hover { translate: 0 calc(var(--hw) * -0.75) !important; scale: 1.12; }
 
   .dock { right: 16px; bottom: 16px; width: var(--side); }
   .arena-hint { left: 16px; bottom: 16px; width: var(--side); }
@@ -690,10 +690,10 @@ table.history tr.me-row td { background: #d9a4411a; }
   /* hand: a strip along the bottom; tap it (touch) or hover (mouse) to raise it */
   .hand-fan { left: calc((100vw - var(--rcol)) / 2); bottom: calc(var(--peek) - var(--hw) * 1.3956); transition: bottom .2s ease-out; }
   .fan-card { margin-left: calc(var(--hw) * -0.3); }
-  .fan-card:hover { translate: 0 calc(var(--hw) * -1.05) !important; scale: 1.2; }
+  html:not(.no-hover) .fan-card:hover { translate: 0 calc(var(--hw) * -1.05) !important; scale: 1.2; }
   .hand-fan.open { bottom: 6px; }
   .hand-fan.open .fan-card { margin-left: calc(var(--hw) * -0.12); }
-  .hand-fan.open .fan-card:hover { translate: 0 calc(var(--hw) * -0.15) !important; scale: 1.05; }
+  html:not(.no-hover) .hand-fan.open .fan-card:hover { translate: 0 calc(var(--hw) * -0.15) !important; scale: 1.05; }
   .hand-scrim { position: absolute; inset: 0; z-index: 7; background: #0008; animation: pageIn .15s ease-out; }
 
   .dock { right: 4px; bottom: 4px; width: calc(var(--rcol) - 8px); gap: 4px; }
@@ -1411,7 +1411,7 @@ html.big-text .log, html.big-text .small { font-size: .95em; }
 
   .hand-fan { bottom: calc(6px + var(--sa-b)); padding: 0 6px; }
   .fan-card { margin-left: calc(var(--hw) * -0.42); transform-origin: 50% 220%; }
-  .fan-card:hover { translate: 0 calc(var(--hw) * -0.35) !important; scale: 1.1; }
+  html:not(.no-hover) .fan-card:hover { translate: 0 calc(var(--hw) * -0.35) !important; scale: 1.1; }
   .dock { right: 8px; bottom: var(--ctl); width: min(190px, 48vw); }
   .arena .prompt { padding: 6px; gap: 5px; }
   .arena .prompt .msg { font-size: .7rem; max-height: 3.2em; overflow: hidden; }
@@ -1492,3 +1492,97 @@ html.big-text .log, html.big-text .small { font-size: .95em; }
 @keyframes cfRise { from { opacity: 0; transform: translateY(60px) scale(.6) rotate(-4deg); } to { opacity: 1; transform: none; } }
 .fan-card .card.focused { outline: 3px solid #f6d58e; outline-offset: 2px; }
 .no-anim .card-focus, .no-anim .cf-card, .no-anim .cf-actions { animation: none; }
+
+/* ===================================================== motion polish: springy cards, smooth drags, tactile buttons */
+:root { --spring: cubic-bezier(.2, 1.3, .35, 1); --glide: cubic-bezier(.2, .8, .2, 1); }
+.fan-card { transition: translate .3s var(--spring), rotate .3s var(--spring), scale .22s var(--glide), filter .2s; }
+.fan-card.dragging { rotate: var(--tilt, 0deg) !important; transition: scale .15s, rotate .08s linear; }
+.fan-card.returning { transition: translate .42s var(--spring), rotate .42s var(--spring), scale .3s var(--glide); }
+.arena-board .mat { transition: box-shadow .25s var(--glide); }
+.arena-board.drop-ready .mat { box-shadow: 0 0 0 2px #f6d58eaa, 0 0 46px #f6d58e33 inset, 0 0 30px #f6d58e33; }
+.arena-board.drop-ready::after { content: 'Release to play'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; pointer-events: none;
+  font: 700 1rem Cinzel, Georgia, serif; letter-spacing: .08em; color: #f6d58e; text-shadow: 0 0 12px #000, 0 0 24px #f6d58e88; animation: cfFade .2s ease-out; }
+
+/* buttons press in and spring back; primary buttons catch a light sweep on hover */
+button, .btn-link, .tile, .deckbox, .guide-hero, .nav a { -webkit-tap-highlight-color: transparent; }
+button { transition: transform .12s var(--glide), filter .15s, border-color .15s, background-color .15s, box-shadow .2s; }
+button:active:not(:disabled), .btn-link:active { transform: scale(.95); }
+button.primary, .play-big, .cf-play { position: relative; overflow: hidden; }
+button.primary::before, .cf-play::before { content: ''; position: absolute; inset: 0; pointer-events: none; transform: translateX(-120%);
+  background: linear-gradient(100deg, transparent 30%, #ffffff40 50%, transparent 70%); }
+button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::before { transform: translateX(120%); transition: transform .65s var(--glide); }
+
+/* pages glide in; panels and tiles lift with a warm glow */
+@keyframes pageIn { from { opacity: 0; transform: translateY(14px) scale(.99); } to { opacity: 1; transform: none; } }
+.page-anim { animation: pageIn .42s var(--glide) backwards; } /* no fill afterwards: a leftover transform would trap the fixed-position game board */
+.panel { transition: border-color .2s, box-shadow .25s; }
+.tile:hover, .guide-hero:hover .card { box-shadow: 0 14px 30px #000a, 0 0 0 1px #d9a44166, 0 0 26px #d9a44122; }
+.tile:active, .deckbox:active { transform: translateY(-1px) scale(.98); transition-duration: .08s; }
+.deckbox { transition: transform .3s var(--spring), box-shadow .25s, border-color .2s; }
+@keyframes zoomIn { from { opacity: 0; transform: translateY(16px) scale(.94); } to { opacity: 1; transform: none; } }
+.modal { animation: zoomIn .32s var(--spring) both; }
+
+/* the active tab gets a glowing underline that grows in */
+.nav a { position: relative; }
+.nav a::after { content: ''; position: absolute; left: 22%; right: 22%; bottom: 1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, #f6d58e, transparent);
+  transform: scaleX(0); transition: transform .35s var(--spring); box-shadow: 0 0 8px #f6d58e; }
+.nav a.active::after { transform: scaleX(1); }
+@media (max-width: 640px) and (orientation: portrait) { .nav a::after { bottom: auto; top: 0; } }
+
+/* cards in grids rise in one after another */
+.grid > *, .deckbox-grid > *, .guide-grid > * { animation: fadeUp .45s var(--glide) both; }
+.grid > :nth-child(n+2), .deckbox-grid > :nth-child(n+2), .guide-grid > :nth-child(n+2) { animation-delay: .03s; }
+.grid > :nth-child(n+4), .deckbox-grid > :nth-child(n+4), .guide-grid > :nth-child(n+4) { animation-delay: .07s; }
+.grid > :nth-child(n+7), .deckbox-grid > :nth-child(n+7), .guide-grid > :nth-child(n+7) { animation-delay: .11s; }
+.grid > :nth-child(n+11), .deckbox-grid > :nth-child(n+11), .guide-grid > :nth-child(n+11) { animation-delay: .15s; }
+.no-anim .fan-card, .no-anim button, .no-anim .deckbox { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .fan-card, button, .deckbox, .nav a::after { transition: none !important; } .grid > *, .deckbox-grid > *, .guide-grid > * { animation: none !important; } }
+
+/* ===================================================== campaigns */
+.campaign-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+.campaign-card { position: relative; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; text-decoration: none; color: var(--text);
+  background: #1a140f; border: 1px solid #4a3520; box-shadow: 0 10px 26px #000a; animation: fadeUp .5s var(--glide) both; transition: transform .3s var(--spring), box-shadow .3s, border-color .2s; }
+.campaign-card:hover { transform: translateY(-5px); border-color: #a57c46; box-shadow: 0 18px 40px #000c, 0 0 30px #d9a44122; }
+.cc-art { height: 140px; background: #2a2119 center 22% / 160% no-repeat; position: relative; transition: background-size .6s var(--glide); }
+.campaign-card:hover .cc-art { background-size: 175%; }
+.cc-art::after { content: ''; position: absolute; inset: 0; background: linear-gradient(transparent 40%, #1a140f); }
+.cc-body { padding: .2rem .9rem .9rem; display: flex; flex-direction: column; gap: .25rem; }
+.cc-body h3 { margin: 0; font-family: Cinzel, Georgia, serif; }
+.cc-progress { height: 6px; border-radius: 999px; background: #000a; overflow: hidden; }
+.cc-progress i { display: block; height: 100%; background: linear-gradient(90deg, #b8322a, #f6d58e); box-shadow: 0 0 10px #f6d58e88; transition: width .6s var(--glide); }
+.campaign-head { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.campaign-path { display: flex; gap: 0; align-items: stretch; overflow-x: auto; padding: .4rem .2rem 1rem; position: relative; scrollbar-width: thin; }
+.cp-node { position: relative; flex: 1 0 120px; display: flex; flex-direction: column; align-items: center; gap: .3rem; background: none; border: 0; padding: .3rem; color: var(--muted);
+  animation: fadeUp .45s var(--glide) both; }
+.cp-node::before { content: ''; position: absolute; top: 24px; left: -50%; width: 100%; height: 3px; background: #3a2e24; z-index: 0; }
+.cp-node:first-child::before { display: none; }
+.cp-node.done::before, .cp-node.open::before { background: linear-gradient(90deg, #f6d58e, #d9a441); box-shadow: 0 0 8px #f6d58e88; }
+.cp-dot { position: relative; z-index: 1; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font: 700 1.1rem Cinzel, Georgia, serif;
+  background: #1a140f; border: 2px solid #4a3520; box-shadow: 0 4px 12px #000a; transition: transform .3s var(--spring), box-shadow .3s; }
+.cp-node.done .cp-dot { background: radial-gradient(circle, #f6d58e, #b8862f); color: #1a140f; border-color: #fff3c4; }
+.cp-node.open .cp-dot { border-color: #f6d58e; color: #f6d58e; animation: nodePulse 2s ease-in-out infinite; }
+.cp-node.sel .cp-dot { transform: scale(1.18); box-shadow: 0 0 0 4px #b8322a66, 0 0 22px #f6d58e88; }
+.cp-node.locked { opacity: .45; }
+.cp-title { font: 600 .82rem Cinzel, Georgia, serif; color: var(--text); text-align: center; line-height: 1.2; }
+.cp-diff { font-size: .7rem; }
+@keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 0 #f6d58e66; } 50% { box-shadow: 0 0 0 8px #f6d58e00, 0 0 18px #f6d58e66; } }
+.chapter-scene { background: linear-gradient(135deg, #2a2119, #15110d); border-color: #6b4e2a; animation: zoomIn .4s var(--spring) both; }
+.cs-text { font: 1.05rem/1.55 Georgia, serif; min-height: 4.6em; margin: .2rem 0; color: #f1e4cc; cursor: pointer; }
+.cs-caret { color: #f6d58e; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.cs-twist { align-self: flex-start; padding: .35rem .7rem; border-radius: 999px; background: #3a1d12; border: 1px solid #b8622a; color: #ffcfa3; font-size: .85rem; }
+.cs-fight { font-size: 1.3rem !important; padding: .55em 2.2em !important; margin-top: .3rem; }
+.cs-opp { animation: cfRise .5s var(--spring) both; }
+@media (max-width: 640px) { .cs-opp { display: none; } .cp-node { flex-basis: 96px; } }
+/* campaign reward sleeves */
+.sleeve-proving.card-back, .arena.sleeve-proving .mat-side.me .card-back { background: repeating-linear-gradient(135deg, #6b4a22 0 7px, #4a3216 7px 14px); box-shadow: inset 0 0 0 2px #f6d58e; color: #fff0c2; }
+.sleeve-embers.card-back, .arena.sleeve-embers .mat-side.me .card-back { background: radial-gradient(circle at 50% 80%, #ff7a2a, #7a1808 55%, #2a0604); box-shadow: inset 0 0 0 2px #ffb35a; color: #ffe0b8; }
+.sleeve-knives.card-back, .arena.sleeve-knives .mat-side.me .card-back { background: repeating-radial-gradient(circle at 50% 50%, #1c1024 0 4px, #2e1a3c 4px 8px); box-shadow: inset 0 0 0 2px #b28ad8; color: #e8d4ff; }
+.sleeve-storm-scholar.card-back, .arena.sleeve-storm-scholar .mat-side.me .card-back { background: linear-gradient(160deg, #1b2c4a, #0b1424 60%), #0b1424; box-shadow: inset 0 0 0 2px #ffe35a, inset 0 0 18px #7fb3ff66; color: #fff6c4; }
+
+/* portrait: the opponent's name and counters wrap instead of running off the edge */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena .mat-side.opp .mat-info { justify-self: end; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
+  .arena .mat-info .mat-name { font-size: .66rem; }
+  .arena .mat-info .res { gap: .2rem; font-size: .7rem; }
+}
