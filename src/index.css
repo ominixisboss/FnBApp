@@ -1471,3 +1471,24 @@ html.big-text .log, html.big-text .small { font-size: .95em; }
   .page:has(.lobby) { padding-bottom: calc(150px + var(--sa-b)); }
   .lobby-side .play-big:disabled { opacity: 1; filter: none; background: linear-gradient(180deg, #5a4a3c, #3a2e24); border-color: #6b5a48; color: #c9b8a0; }
 }
+
+/* ---------------------------------------------------------------- tap-to-focus (touch): the chosen card rises with a Play button */
+.card-focus { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 60%, #0008, #000c 70%);
+  backdrop-filter: blur(2px); animation: cfFade .18s ease-out both; padding: max(12px, var(--sa-t)) max(12px, var(--sa-r)) max(12px, var(--sa-b)) max(12px, var(--sa-l)); }
+.cf-inner { display: flex; align-items: center; gap: 18px; --cfw: min(62vw, 300px, calc((100dvh - 40px) * .58)); }
+.cf-card { animation: cfRise .32s cubic-bezier(.2, 1.3, .35, 1) both; filter: drop-shadow(0 18px 40px #000) drop-shadow(0 0 22px #f6d58e44); }
+.cf-actions { display: flex; flex-direction: column; gap: 10px; min-width: 190px; animation: cfFade .25s .08s ease-out both; }
+.cf-play { font: 700 1.15rem/1 Cinzel, Georgia, serif !important; letter-spacing: .05em; padding: .95em 1.2em !important; border-radius: 999px !important;
+  background: linear-gradient(180deg, #e2733a, #b8322a 60%, #8c1f18) !important; border: 2px solid #f0a35a !important; color: #fff;
+  box-shadow: 0 0 0 3px #00000080, 0 8px 22px #b8322a77, inset 0 1px 0 #ffffff55; }
+.cf-play:disabled { background: linear-gradient(180deg, #4a3e34, #2c241d) !important; border-color: #5a4a3c !important; color: #b9a891; box-shadow: none; }
+.cf-sec { flex: 1; padding: .7em .9em; border-radius: 999px; background: #000a; white-space: nowrap; }
+.cf-why { font-size: .78rem; color: #e8b9a8; text-align: center; max-width: 230px; }
+@media (orientation: portrait) {
+  .cf-inner { flex-direction: column; gap: 14px; --cfw: min(64vw, 300px, calc((100dvh - 260px) * .72)); }
+  .cf-actions { width: min(80vw, 320px); }
+}
+@keyframes cfFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cfRise { from { opacity: 0; transform: translateY(60px) scale(.6) rotate(-4deg); } to { opacity: 1; transform: none; } }
+.fan-card .card.focused { outline: 3px solid #f6d58e; outline-offset: 2px; }
+.no-anim .card-focus, .no-anim .cf-card, .no-anim .cf-actions { animation: none; }

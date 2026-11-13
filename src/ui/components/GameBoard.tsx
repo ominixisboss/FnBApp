@@ -247,7 +247,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [dragging, setDragging] = useState(false);
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
-  const compactTouch = () => !!window.matchMedia?.('(orientation: landscape) and (max-height: 560px) and (pointer: coarse)').matches;
+  // touch screens: tapping a card brings it up large with a Play button (a second way to play besides dragging)
+  const [focus, setFocus] = useState<number | null>(null);
+  const touchUI = () => !!window.matchMedia?.('(pointer: coarse)').matches;
+  useEffect(() => { setFocus(null); }, [state]);
   // Android back button while in a game
   useEffect(() => {
     const back = () => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); };
@@ -548,6 +551,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setDetail(cardOf(inst));
   };
 
+  /** a tap on one of your cards: selections (pitching, blocking) toggle at once; decisions open the focus view */
+  const tapCard = (inst: CardInst) => {
+    if (!touchUI() || pending || manual || (myTurn && state.phase === 'defend')) return clickHand(inst);
+    if (focus === inst.uid) { setFocus(null); return clickHand(inst); } // tapping the raised card again plays it
+    setFocus(inst.uid);
+    hideHover();
+  };
+
   const clickArena = (inst: CardInst) => {
     rememberRect(inst.uid);
     if (manual) return setMoveMenu({ inst, player: HUMAN });
@@ -791,7 +802,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               return (myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '') + hintClass(inst.uid);
             }}
             marker={(inst) => hintMarker(inst.uid)}
-            arsenalClick={(i) => clickHand(i)}
+            arsenalClick={(i) => tapCard(i)}
             onDeck={manual ? () => setMoveMenu({ inst: me.hero, player: HUMAN }) : undefined}
             arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
@@ -818,12 +829,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               onMouseEnter={() => sfx('hover')}
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
-                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid)} marker={hintMarker(inst.uid)} tilt={false}
-                  onInspect={() => { if (compactTouch()) setHandOpen(true); }}
+                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid) + (focus === inst.uid ? ' focused' : '')} marker={hintMarker(inst.uid)} tilt={false}
+                  noPopout={touchUI()}
                   onClick={() => {
                     if (suppressClick.current) { suppressClick.current = false; return; }
-                    if (!handOpen && compactTouch()) { setHandOpen(true); return; }
-                    clickHand(inst);
+                    tapCard(inst);
                   }}
                   onHover={setHover}
                   badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
@@ -832,6 +842,35 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           );
         })}
       </div>
+
+      {focus !== null && (() => {
+        const inst = [...me.hand, ...me.arsenal].find((h) => h.uid === focus);
+        if (!inst) return null;
+        const c = cardOf(inst);
+        const opts = options.filter((o) => o.uid === inst.uid);
+        const arsenalStep = myTurn && state.phase === 'arsenal' && me.hand.some((h) => h.uid === inst.uid);
+        const reason = !myTurn ? 'It’s not your turn to act.'
+          : state.phase === 'reaction' ? 'Only reactions and instants can be played now.'
+          : state.stack?.length ? 'Only instants can be played while something is on the stack.'
+          : 'You can’t pay for it right now (resources or action points).';
+        const label = arsenalStep ? 'Put in arsenal' : opts.length ? `Play${opts[0].cost ? ` · ⛀${opts[0].cost}` : ''}` : 'Can’t play now';
+        const can = arsenalStep || opts.length > 0;
+        return (
+          <div className="card-focus" onClick={() => setFocus(null)}>
+            <div className="cf-inner" onClick={(e) => e.stopPropagation()}>
+              <div className="cf-card"><CardView card={c} width="var(--cfw)" noPopout tilt={false} onClick={() => { if (can) { setFocus(null); clickHand(inst); } }} /></div>
+              <div className="cf-actions">
+                <button className="primary cf-play" disabled={!can} onClick={() => { setFocus(null); clickHand(inst); }}>{label}</button>
+                {!can && <div className="cf-why">{reason}</div>}
+                <div className="row" style={{ gap: '.4rem' }}>
+                  <button className="cf-sec" onClick={() => { setFocus(null); setDetail(c); }}>🔍 Details</button>
+                  <button className="cf-sec" onClick={() => setFocus(null)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="dock">
         <div className="phase-ladder" title="Turn structure">
