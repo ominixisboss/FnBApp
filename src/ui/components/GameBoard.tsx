@@ -17,6 +17,7 @@ import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
 import { musicEnabled, setMusicEnabled, setMusicMood } from '../music';
+import { applyOrientation, isNative, orientationPref } from '../../native';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
 import { computeProgress, progressDiff } from '../../stats/progress';
@@ -242,11 +243,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
-  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number } | null>(null);
+  const dragRef = useRef<{ uid: number; x: number; y: number; moved: boolean; el: HTMLElement; handTop?: number; lastX?: number; tilt?: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   // On short landscape touch screens the hand is a strip: the first tap raises it, the next tap plays.
   const [handOpen, setHandOpen] = useState(false);
-  const compactTouch = () => !!window.matchMedia?.('(orientation: landscape) and (max-height: 560px) and (pointer: coarse)').matches;
+  // touch screens: tapping a card brings it up large with a Play button (a second way to play besides dragging)
+  const [focus, setFocus] = useState<number | null>(null);
+  const touchUI = () => !!window.matchMedia?.('(pointer: coarse)').matches;
+  useEffect(() => { setFocus(null); }, [state]);
   // Android back button while in a game
   useEffect(() => {
     const back = () => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); };
@@ -547,6 +551,14 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setDetail(cardOf(inst));
   };
 
+  /** a tap on one of your cards: selections (pitching, blocking) toggle at once; decisions open the focus view */
+  const tapCard = (inst: CardInst) => {
+    if (!touchUI() || pending || manual || (myTurn && state.phase === 'defend')) return clickHand(inst);
+    if (focus === inst.uid) { setFocus(null); return clickHand(inst); } // tapping the raised card again plays it
+    setFocus(inst.uid);
+    hideHover();
+  };
+
   const clickArena = (inst: CardInst) => {
     rememberRect(inst.uid);
     if (manual) return setMoveMenu({ inst, player: HUMAN });
@@ -579,12 +591,24 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     }
     d.el.style.setProperty('--dx', `${dx}px`);
     d.el.style.setProperty('--dy', `${dy}px`);
-    d.el.classList.toggle('will-play', e.clientY < (d.handTop ?? window.innerHeight) - 30);
+    // the card leans the way it's moving, like it's being swung through the air
+    const vx = e.clientX - (d.lastX ?? e.clientX);
+    d.lastX = e.clientX;
+    d.tilt = (d.tilt ?? 0) * 0.75 + Math.max(-16, Math.min(16, vx * 1.6)) * 0.25;
+    d.el.style.setProperty('--tilt', `${d.tilt.toFixed(1)}deg`);
+    const over = e.clientY < (d.handTop ?? window.innerHeight) - 30;
+    d.el.classList.toggle('will-play', over);
+    colRef.current?.classList.toggle('drop-ready', over);
   };
   const dragReset = (el: HTMLElement) => {
+    // spring back into the hand (if the card wasn't played, it glides home with a little overshoot)
+    el.classList.add('returning');
     el.classList.remove('dragging', 'will-play');
     el.style.removeProperty('--dx');
     el.style.removeProperty('--dy');
+    el.style.removeProperty('--tilt');
+    setTimeout(() => el.classList.remove('returning'), 450);
+    colRef.current?.classList.remove('drop-ready');
     setDragging(false);
   };
   const dragEnd = (e: React.PointerEvent<HTMLDivElement>, inst: CardInst) => {
@@ -748,6 +772,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${music ? 'on' : ''}`} title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span>Music</span></button>
           {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
+          {isNative() && <button className="icon-btn" title="Screen orientation" onClick={() => { const next = orientationPref() === 'portrait' ? 'landscape' : 'portrait'; void applyOrientation(next); }}>📱<span>{orientationPref() === 'portrait' ? 'Landscape' : 'Portrait (one hand)'}</span></button>}
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
         </div>
@@ -789,7 +814,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               return (myTurn && options.some((o) => o.uid === inst.uid && o.kind === 'activation') ? 'playable' : '') + hintClass(inst.uid);
             }}
             marker={(inst) => hintMarker(inst.uid)}
-            arsenalClick={(i) => clickHand(i)}
+            arsenalClick={(i) => tapCard(i)}
             onDeck={manual ? () => setMoveMenu({ inst: me.hero, player: HUMAN }) : undefined}
             arsenalClass={(i) => handClass(i) + hintClass(i.uid)}
             fx={fx}
@@ -816,12 +841,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
               onMouseEnter={() => sfx('hover')}
             >
               <div className={motionOk() ? '' : 'anim-deal'}>
-                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid)} marker={hintMarker(inst.uid)} tilt={false}
-                  onInspect={() => { if (compactTouch()) setHandOpen(true); }}
+                <CardView card={cardOf(inst)} width="var(--hw)" className={handClass(inst) + hintClass(inst.uid) + (focus === inst.uid ? ' focused' : '')} marker={hintMarker(inst.uid)} tilt={false}
+                  noPopout={touchUI()}
                   onClick={() => {
                     if (suppressClick.current) { suppressClick.current = false; return; }
-                    if (!handOpen && compactTouch()) { setHandOpen(true); return; }
-                    clickHand(inst);
+                    tapCard(inst);
                   }}
                   onHover={setHover}
                   badge={pending && pitchOf(cardOf(inst)) ? `+${pitchOf(cardOf(inst))}` : undefined} />
@@ -830,6 +854,35 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           );
         })}
       </div>
+
+      {focus !== null && (() => {
+        const inst = [...me.hand, ...me.arsenal].find((h) => h.uid === focus);
+        if (!inst) return null;
+        const c = cardOf(inst);
+        const opts = options.filter((o) => o.uid === inst.uid);
+        const arsenalStep = myTurn && state.phase === 'arsenal' && me.hand.some((h) => h.uid === inst.uid);
+        const reason = !myTurn ? 'It’s not your turn to act.'
+          : state.phase === 'reaction' ? 'Only reactions and instants can be played now.'
+          : state.stack?.length ? 'Only instants can be played while something is on the stack.'
+          : 'You can’t pay for it right now (resources or action points).';
+        const label = arsenalStep ? 'Put in arsenal' : opts.length ? `Play${opts[0].cost ? ` · ⛀${opts[0].cost}` : ''}` : 'Can’t play now';
+        const can = arsenalStep || opts.length > 0;
+        return (
+          <div className="card-focus" onClick={() => setFocus(null)}>
+            <div className="cf-inner" onClick={(e) => e.stopPropagation()}>
+              <div className="cf-card"><CardView card={c} width="var(--cfw)" noPopout tilt={false} onClick={() => { if (can) { setFocus(null); clickHand(inst); } }} /></div>
+              <div className="cf-actions">
+                <button className="primary cf-play" disabled={!can} onClick={() => { setFocus(null); clickHand(inst); }}>{label}</button>
+                {!can && <div className="cf-why">{reason}</div>}
+                <div className="row" style={{ gap: '.4rem' }}>
+                  <button className="cf-sec" onClick={() => { setFocus(null); setDetail(c); }}>🔍 Details</button>
+                  <button className="cf-sec" onClick={() => setFocus(null)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="dock">
         <div className="phase-ladder" title="Turn structure">

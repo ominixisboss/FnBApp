@@ -15,6 +15,8 @@ import { HeroPicker } from './DecksPage';
 import { leaderboard, useAuth } from '../auth';
 import { disablePush, enablePush, pushEnabled, pushSupported } from '../push';
 import { a11y, setA11y } from '../a11y';
+import { applyOrientation, isNative, orientationPref } from '../../native';
+import type { OrientationPref } from '../../native';
 import type { LeaderRow } from '../auth';
 
 const heroName = (id: string) => getDb().byId.get(id)?.name ?? 'Unknown hero';
@@ -329,12 +331,22 @@ function NotificationsToggle() {
 
 function AccessibilityPanel() {
   const [s, setS] = useState(a11y);
+  const [orient, setOrient] = useState(orientationPref);
   const toggle = (k: 'cb' | 'bigText') => { setA11y(k, !s[k]); setS(a11y()); };
   return (
     <div className="panel col" style={{ gap: '.4rem' }}>
-      <b>♿ Accessibility</b>
+      <b>♿ Accessibility &amp; display</b>
       <label className="row small"><input type="checkbox" checked={s.cb} onChange={() => toggle('cb')} /> Colour-blind pitch markers: ▲1 red, ■2 yellow, ●3 blue on every card</label>
       <label className="row small"><input type="checkbox" checked={s.bigText} onChange={() => toggle('bigText')} /> Larger text</label>
+      {isNative() && (
+        <label className="row small">Screen
+          <select value={orient} onChange={(e) => { const v = e.target.value as OrientationPref; setOrient(v); void applyOrientation(v); }}>
+            <option value="auto">Turns with the phone</option>
+            <option value="portrait">Portrait (one-handed)</option>
+            <option value="landscape">Landscape</option>
+          </select>
+        </label>
+      )}
       <span className="small muted">Animations can be turned off in the top bar, and they switch off by themselves if your device asks for reduced motion. Screen readers announce each move in a game.</span>
     </div>
   );

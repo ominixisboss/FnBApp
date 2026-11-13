@@ -193,6 +193,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         </div>
         {!tutorial && (
           <div className="more-modes">
+            <a href="#campaign">🗺 Campaigns</a>
             <a href="#tournament">🏅 Armory night</a>
             <a href="#cups">🏆 Friend cups</a>
             <a href="#gauntlet">🏟 Gauntlet</a>
