@@ -24,7 +24,7 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Profile & stats**: display name and hero avatar. Stat tiles show games, record, win rate, streaks and average game length, plus recent form, win rate by your hero, by opponent hero, by opponent type and by format, and full match history.
 - **Accounts & cloud sync** (needs the server): username/password sign-in. Profile, decks and match history sync across devices; decks merge newest-wins and deletions carry over.
 - **Online play** (needs the server): quick match by format, or private rooms with a 5-letter code. The server runs the game with the same rules engine and validates every move. Each player only receives what they may see: the opponent's hand, both decks and face-down arsenal are hidden. Reconnecting resumes the game; a player who stays disconnected for 2 minutes forfeits. Results feed both players' stats and an online leaderboard.
-- **Hero abilities**: 45 of the 86 heroes are automated, including Betsy, Olympia, Zane, Hala, Prism, Levia, Azalea, Enigma, Dromai, Puffin, Marlynn, Gravy Bones, Dorinthea, Bravo, Benji, Arakni, Ira, Fai, Cindra/Fang, Rhinar, Kayo, Aurora, Oscilio, Terra, Vynnset, Kavdaen, Data Doll, Dash, Emperor, Lyath, Valda and Tuffnut. The card pop-out says what's automated for each hero.
+- **Hero abilities**: 73 of the 86 heroes are automated, including Boltyn, Briar, Chane, Kano, Oldhim, Iyslander, Viserai, Teklovossen, Victor Goldmane, Shiyana, Betsy, Olympia, Zane, Hala, Prism, Levia, Azalea, Enigma, Dromai, Puffin, Marlynn, Gravy Bones, Dorinthea, Bravo, Benji, Arakni, Ira, Fai, Cindra/Fang, Rhinar, Kayo, Aurora, Oscilio, Terra, Vynnset, Kavdaen, Data Doll, Dash, Emperor, Lyath, Valda and Tuffnut. The card pop-out says what's automated for each hero.
 - **Hero-tuned decks**: bots and starter decks are built around each hero's archetype (Weapon Warrior, Guardian Crush, Ninja Combo, Brute Big Hits, Draconic Aggro, Stealth Assassin, Arcane Wizard, Runechant Runeblade, Mechanologist Boost) with signature cards.
 
 - **Progression:** XP for every game, levels with titles, three daily quests that change at midnight, 19 achievements, and unlockable card sleeves, playmats and avatar frames. Progress is calculated from your match history, so it syncs with your account.
@@ -102,11 +102,11 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,300 |
-| Partly automated | ~1,520 |
-| Stats only (text not automated) | ~2,150 |
+| Fully automated | ~1,440 |
+| Partly automated | ~1,470 |
+| Stats only (text not automated) | ~1,910 |
 
-Hero abilities for 45 of the 86 heroes are automated, including the wager and crowd heroes Betsy, Olympia, Zane, Tuffnut, Pleiades and Killjoy. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, create tokens, or (in sandbox mode) move any card between zones.
+Hero abilities for 73 of the 86 heroes are automated. The 13 still manual are Bolfar, Brevant, Kox, Frankie, Prism (both awakened versions), Reya, Ruu'di, Squizzy, Taipanis, Taylor, The Librarian, Theryon, Yoji and Yorick: they protect or redirect damage between several players, use an inventory or event deck, or are joke heroes with shared decks. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, create tokens, or (in sandbox mode) move any card between zones.
 
 Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, reprise, decompose, chi, and choosing the order of your start-of-turn triggers. `src/test/rules.test.ts` checks rules scenarios (go again, dominate, blade break, temper, arcane barrier, intimidate, the chain closing, trigger order).
 
@@ -116,7 +116,9 @@ Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, r
 
 **Lasting effects:** unpreventable damage, "defense reactions can't be played this chain link", "can't be played from hand", "+N defense while defending a weapon attack", "+N defense if an attack reaction was played this chain link", and auras that give your (non-)attack action cards extra defense.
 
-Not yet supported: heave, aim counters, rune gate, watery grave, fragment, quell, suspense, Evo upgrades, stealing, choosing targets other than the opposing hero, and multiplayer formats such as Ultimate Pit Fight (the engine is built for two players). The bots play every card using its stats plus whatever text is automated.
+Also automated: heave (from the arsenal at end of turn, making Seismic Surge), aim counters, rune gate, watery grave, fragment, quell, suspense, mirage, guardwell, spectra, scrap, beat chest, Evo upgrades and stealing. Attacks can target an ally or an attackable aura instead of the hero, and damage effects that say "any target" ask you to pick one.
+
+**Ultimate Pit Fight** (3 or 4 heroes, young hero, 40-card deck) is playable offline against 2 or 3 bots. You can attack only the heroes on your left and right: tap a seat at the top of the board to face them. The last hero standing wins. Limits: only the attacker and the defender get priority in the reaction step, and online UPF isn't supported yet. The bots play every card using its stats plus whatever text is automated.
 
 ## Development
 

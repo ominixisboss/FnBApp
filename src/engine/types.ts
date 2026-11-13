@@ -1,6 +1,7 @@
 import type { AttackFilter, Effect } from './cardScript';
 
-export type PlayerId = 0 | 1;
+/** seats around the table: 2 players normally, up to 4 in Ultimate Pit Fight */
+export type PlayerId = 0 | 1 | 2 | 3;
 /** 'goldfish' = an opponent that never acts (for testing decks in the sandbox) */
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'mythic' | 'goldfish';
 
@@ -73,6 +74,10 @@ export interface PlayerState {
   intimidated: CardInst[];
   /** counters on the hero card (e.g. Blaze's energy counters) */
   heroCounters?: number;
+  /** knocked out of a multiplayer game */
+  eliminated?: boolean;
+  /** the opponent this player has chosen to attack next (multiplayer) */
+  focus?: PlayerId;
   /** Shiyana: the hero she is copying until the start of her next turn */
   copyOf?: string;
   weapons: WeaponState[];
@@ -144,6 +149,8 @@ export interface ChainLink {
   /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
   wagers?: { tokens: string[]; winnerDraw?: number }[];
   noDefenseReactions?: boolean;
+  /** the defending hero (in a two-player game, the attacker's opponent) */
+  defender?: PlayerId;
   /** attacking an ally (its permanent uid) instead of the hero */
   target?: number;
   unpreventable?: boolean;
@@ -198,7 +205,7 @@ export interface GameState {
   phase: Phase;
   priority: PlayerId; // who must act now
   passes: number; // consecutive passes in reaction step
-  players: [PlayerState, PlayerState];
+  players: PlayerState[];
   chain: ChainLink[];
   chainOpen: boolean;
   winner: PlayerId | null;
@@ -223,6 +230,8 @@ export type Action =
   | { type: 'choose'; picks?: number[]; yes?: boolean }
   /** Heave: at the end of your turn, pay to put a card from hand face-up into your arsenal */
   | { type: 'heave'; uid: number; pitch: number[] }
+  /** multiplayer: choose which opponent you'll attack next */
+  | { type: 'focus'; player: PlayerId }
   | ManualAction;
 
 export type ManualAction =

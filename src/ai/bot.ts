@@ -6,8 +6,8 @@ import { getScript } from '../engine/cardScript';
 import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
-  defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, other, pitchOf,
-  heaveOptions, heroAbilityOf, playOptions, powerOf,
+  defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, pitchOf,
+  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf,
 } from '../engine/game';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
@@ -237,7 +237,7 @@ function keepValue(c: Card, threat: number, life: number): number {
 }
 
 function opponentThreat(s: GameState, p: PlayerState): number {
-  const o = s.players[other(p.id)];
+  const o = s.players[oppOf(s, p.id)];
   // rough expectation: ~2.5 damage per card in hand + weapon
   return o.intellect * 2.5 + (o.weapons.length ? 2 : 0);
 }
@@ -255,7 +255,7 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
     return { action: { type: 'pass' }, reason: 'Nothing worth playing.' };
   }
   const threat = opponentThreat(s, p);
-  const opp = s.players[other(p.id)];
+  const opp = s.players[oppOf(s, p.id)];
   const cands = items.slice(0, 10);
   let best: { plan: Item[]; score: number; pitch: number[] } = { plan: [], score: -Infinity, pitch: [] };
   const handCards = p.hand.map((h) => ({ uid: h.uid, c: cardOf(h) }));
@@ -484,7 +484,7 @@ function planReaction(s: GameState, pid: PlayerId, difficulty: Difficulty): BotD
       const extra = effectValue(sc.onPlay.filter((e) => e.kind !== 'targetAttackPower' && e.kind !== 'weakenAttack'));
       if (sc.onPlay.some((e) => e.kind === 'weakenAttack')) continue;
       gain = Math.max(0, power + bonus - def) - Math.max(0, power - def) + extra * 0.7;
-      if (power + bonus - def >= s.players[other(pid)].life) gain += 50;
+      if (power + bonus - def >= s.players[oppOf(s, pid)].life) gain += 50;
     } else if (has(c, 'Defense Reaction')) {
       const d = (defenseOf(c) ?? 0) + sc.onPlay.reduce((a, e) => a + (e.kind === 'thisDefense' ? e.amount : 0), 0);
       gain = Math.min(d, Math.max(0, power - def));

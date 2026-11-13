@@ -1,11 +1,10 @@
 // "Mythic" bot: for each sensible move, play out many possible futures (with the hidden cards reshuffled each
 // time, so it can't cheat) using the Hard bot for both players, and pick the move that does best on average.
-import { applyAction, autoPitch, checkDefense, defendOptions, playOptions } from '../engine/game';
+import { applyAction, autoPitch, checkDefense, defendOptions, oppOf, playOptions } from '../engine/game';
 import type { Action, GameState, PlayerId } from '../engine/types';
 import { chooseAction, decideOptional } from './bot';
 import type { BotDecision } from './bot';
 
-const other = (p: PlayerId): PlayerId => (p === 0 ? 1 : 0);
 const key = (a: Action) => JSON.stringify(a);
 
 /** Small seeded RNG for determinization. */
@@ -21,12 +20,14 @@ function shuffleInPlace<T>(a: T[], r: () => number) {
  *  redealt from the cards they could be, and both decks are reshuffled. */
 export function determinize(s: GameState, pid: PlayerId, r: () => number): GameState {
   const t: GameState = structuredClone(s);
-  const opp = t.players[other(pid)];
   const me = t.players[pid];
-  const hidden = [...opp.hand, ...opp.deck];
-  shuffleInPlace(hidden, r);
-  opp.hand = hidden.slice(0, opp.hand.length);
-  opp.deck = hidden.slice(opp.hand.length);
+  for (const opp of t.players) {
+    if (opp.id === pid) continue;
+    const hidden = [...opp.hand, ...opp.deck];
+    shuffleInPlace(hidden, r);
+    opp.hand = hidden.slice(0, opp.hand.length);
+    opp.deck = hidden.slice(opp.hand.length);
+  }
   shuffleInPlace(me.deck, r);
   t.seed = Math.floor(r() * 0x7fffffff);
   for (const pl of t.players) { pl.isBot = true; pl.difficulty = 'hard'; }
@@ -40,7 +41,7 @@ const MARGIN = 1.5;
 /** How good a position is for `pid` (life, cards and the end of the game). */
 export function evaluate(s: GameState, pid: PlayerId): number {
   if (s.phase === 'gameOver') return s.winner === pid ? 100 : -100;
-  const me = s.players[pid], op = s.players[other(pid)];
+  const me = s.players[pid], op = s.players[oppOf(s, pid)];
   const cards = (p: typeof me) => p.hand.length + p.arsenal.length;
   return me.life - op.life + CARD_WEIGHT * (cards(me) - cards(op));
 }

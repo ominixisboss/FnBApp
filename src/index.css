@@ -1589,3 +1589,16 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .choice-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .7rem; }
 .choice-card { display: flex; flex-direction: column; align-items: center; gap: .25rem; cursor: pointer; transition: transform .2s var(--spring); }
 .choice-card.on { transform: translateY(-6px); }
+
+/* Ultimate Pit Fight: every opponent along the top; tap a neighbour to face them */
+.pit-strip { position: absolute; top: calc(46px + var(--sa-t)); left: 50%; transform: translateX(-50%); z-index: 11; display: flex; gap: 6px; }
+.pit-seat { display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px; background: #0d0a08e6; border: 1px solid #4a3520; transition: transform .25s var(--spring), box-shadow .25s, border-color .2s; }
+.pit-seat.facing { border-color: #f6d58e; box-shadow: 0 0 0 1px #f6d58e66, 0 0 16px #f6d58e44; transform: translateY(2px) scale(1.04); }
+.pit-seat.turn .ps-name::after { content: ' ●'; color: #6fdc8c; }
+.pit-seat.out { opacity: .4; filter: grayscale(1); }
+.pit-seat .card { border-radius: 4px; }
+.ps-name { font: 600 .74rem Cinzel, Georgia, serif; color: #f1e4cc; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-life { font-weight: 800; font-size: .8rem; color: #ff8a7a; }
+.arena:has(.pit-strip) .arena-board { top: calc(94px + var(--sa-t)); }
+.arena:has(.pit-strip) .opp-hand { display: none; } /* hand sizes are on the seats */
+@media (max-width: 640px) and (orientation: portrait) { .pit-strip { top: calc(2px + var(--sa-t)); left: 4px; right: 4px; transform: none; gap: 3px; justify-content: center; } .pit-seat { min-width: 0; flex: 0 1 auto; padding: 2px 6px; gap: 4px; } .pit-seat .card { display: none; } .ps-name { max-width: 64px; font-size: .62rem; } .ps-hand { display: none; } }

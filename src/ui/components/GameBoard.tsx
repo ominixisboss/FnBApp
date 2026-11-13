@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, heaveOptions, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -34,7 +34,7 @@ const BOT_DELAY = 650;
 interface Pending { opt: PlayOption; pitch: number[]; mode?: number; optional?: OptionalChoice }
 
 interface Floater { id: number; player: PlayerId; amount: number }
-interface Fx { floaters: Floater[]; lifeAnim: [string, string]; lifeKey: [number, number]; theme: [Theme, Theme]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
+interface Fx { floaters: Floater[]; lifeAnim: string[]; lifeKey: number[]; theme: Theme[]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
 
 const readSetting = (k: string, def: boolean) => { try { const v = localStorage.getItem(`fab-trainer.${k}`); return v === null ? def : v === '1'; } catch { return def; } };
 const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fab-trainer.${k}`, v ? '1' : '0'); } catch { /* ignore */ } };
@@ -43,7 +43,7 @@ const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-red
 
 function playSounds(a: GameState, b: GameState) {
   if (b.phase === 'gameOver' && a.phase !== 'gameOver') return sfx(b.winner === HUMAN ? 'win' : 'lose');
-  const lifeLoss = Math.max(a.players[0].life - b.players[0].life, a.players[1].life - b.players[1].life);
+  const lifeLoss = Math.max(...b.players.map((p, i) => a.players[i].life - p.life));
   if (lifeLoss >= 5) sfx('bigHit');
   else if (lifeLoss > 0) sfx('hit');
   if (b.chain.length > a.chain.length) sfx('play');
@@ -59,7 +59,7 @@ function playSounds(a: GameState, b: GameState) {
 function playHaptics(a: GameState, b: GameState) {
   if (b.phase === 'gameOver' && a.phase !== 'gameOver') return buzz(b.winner === HUMAN ? 'win' : 'lose');
   const myLoss = a.players[HUMAN].life - b.players[HUMAN].life;
-  const theirLoss = a.players[1].life - b.players[1].life;
+  const theirLoss = b.players.reduce((t, p, i) => t + (i === HUMAN ? 0 : a.players[i].life - p.life), 0);
   if (myLoss >= 5) return buzz('bigHit');
   if (myLoss > 0) return buzz('hit');
   if (theirLoss > 0) return buzz('dealt');
@@ -119,16 +119,16 @@ function useZoneGlide(oppHandRef: React.RefObject<HTMLDivElement | null>, state:
 function useFx(state: GameState, skip: React.MutableRefObject<boolean>): Fx {
   const prev = useRef<GameState | null>(null);
   const seq = useRef(1);
-  const [fx, setFx] = useState<Fx>({ floaters: [], lifeAnim: ['', ''], lifeKey: [0, 0], theme: ['normal', 'normal'], shakeKey: 0, banner: null });
+  const [fx, setFx] = useState<Fx>({ floaters: [], lifeAnim: state.players.map(() => ''), lifeKey: state.players.map(() => 0), theme: state.players.map(() => 'normal' as Theme), shakeKey: 0, banner: null });
   useEffect(() => {
     const before = prev.current;
     prev.current = state;
     if (skip.current) { skip.current = false; return; }
     const next: Partial<Fx> = {};
     const floaters: Floater[] = [];
-    const lifeAnim: [string, string] = [...fx.lifeAnim];
-    const lifeKey: [number, number] = [...fx.lifeKey];
-    const theme: [Theme, Theme] = [...fx.theme];
+    const lifeAnim: string[] = [...fx.lifeAnim];
+    const lifeKey: number[] = [...fx.lifeKey];
+    const theme: Theme[] = [...fx.theme];
     let shake = false;
     if (before) {
       for (const pid of [0, 1] as PlayerId[]) {
@@ -276,7 +276,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, [state, online, initial]);
   const fx = useFx(state, skipFx);
   // chess clock (local games)
-  const [times, setTimes] = useState<[number, number]>(() => [(clock ?? 0) * 60000, (clock ?? 0) * 60000]);
+  const [times, setTimes] = useState<number[]>(() => initial.players.map(() => (clock ?? 0) * 60000));
   useEffect(() => {
     if (!clock || online || state.phase === 'gameOver') return;
     const who = state.priority;
@@ -285,7 +285,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       const now = performance.now();
       const dt = now - last;
       last = now;
-      setTimes((ts) => { const n: [number, number] = [...ts]; n[who] = Math.max(0, n[who] - dt); return n; });
+      setTimes((ts) => { const n: number[] = [...ts]; n[who] = Math.max(0, n[who] - dt); return n; });
     }, 250);
     return () => clearInterval(t);
   }, [clock, online, state.priority, state.phase]);
@@ -312,7 +312,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     statPrev.current = state;
     if (!b) return;
     const g = gameStats.current;
-    const dmg = b.players[1].life - state.players[1].life;
+    const dmg = state.players.reduce((t, p, i) => t + (i === HUMAN ? 0 : b.players[i].life - p.life), 0);
     if (dmg > 0) { g.damageDealt += dmg; g.turnDmg[state.turn] = (g.turnDmg[state.turn] ?? 0) + dmg; g.maxTurnDamage = Math.max(g.maxTurnDamage, g.turnDmg[state.turn]); }
     if (state.chain.length > b.chain.length && state.chain[state.chain.length - 1].attacker === HUMAN) g.attacks++;
     const lb = b.chain[b.chain.length - 1];
@@ -358,7 +358,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, [state, onGameOver]);
 
   const me = state.players[HUMAN];
-  const opp = state.players[1];
+  // the opponent shown across the table: the other side of the current attack, or the one you're facing
+  const oppSeat = oppOf(state, HUMAN);
+  const opp = state.players[oppSeat];
   const myTurn = state.priority === HUMAN && state.phase !== 'gameOver';
   const dangerClass = state.phase !== 'gameOver' && me.life > 0 && me.life <= 5 ? 'danger' : '';
   const options = useMemo(() => (myTurn ? playOptions(state, HUMAN) : []), [state, myTurn]);
@@ -792,10 +794,27 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         })}
       </div>
 
+      {state.players.length > 2 && (
+        <div className="pit-strip" role="list" aria-label="Opponents">
+          {state.players.filter((pl) => pl.id !== HUMAN).map((pl) => {
+            const canFace = targetableOpponents(state, HUMAN).includes(pl.id);
+            return (
+              <button key={pl.id} role="listitem" className={`pit-seat ${pl.id === oppSeat ? 'facing' : ''} ${pl.eliminated ? 'out' : ''} ${state.turnPlayer === pl.id ? 'turn' : ''}`}
+                disabled={pl.eliminated || !canFace || !!state.chain.length} title={pl.eliminated ? `${pl.name} is out` : canFace ? `Face ${pl.name} (your next attack goes to them)` : `${pl.name} isn't next to you: you can't attack them`}
+                onClick={() => act({ type: 'focus', player: pl.id })}>
+                <CardView card={cardOf(pl.hero)} width={34} tilt={false} noPopout />
+                <span className="ps-name">{pl.name.replace(' (bot)', '')}</span>
+                <span className="ps-life">{pl.eliminated ? '✖' : `♥ ${pl.life}`}</span>
+                <span className="ps-hand small muted">✋{pl.hand.length}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="arena-board" ref={colRef}>
         <div className="mat">
           <div ref={oppRef}>
-            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => (manual && !online ? setMoveMenu({ inst: i, player: 1 }) : setDetail(cardOf(i)))} onZone={setZone} fx={fx} onDeck={manual && !online ? () => setMoveMenu({ inst: opp.hero, player: 1 }) : undefined} />
+            <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => (manual && !online ? setMoveMenu({ inst: i, player: oppSeat }) : setDetail(cardOf(i)))} onZone={setZone} fx={fx} onDeck={manual && !online ? () => setMoveMenu({ inst: opp.hero, player: oppSeat }) : undefined} />
           </div>
           <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
           {!!state.stack?.length && (
@@ -1347,7 +1366,7 @@ function ManualTools({ state, act }: { state: GameState; act: (a: Action, snapsh
     <div className="col">
       <p className="muted small" style={{ margin: 0 }}>Use these to apply card text the simulator doesn’t automate yet (hero abilities, unusual effects).</p>
       {row('You', 0)}
-      {row(state.players[1].name.slice(0, 10), 1)}
+      {state.players.filter((pl) => pl.id !== HUMAN).map((pl) => <div key={pl.id}>{row(pl.name.slice(0, 10), pl.id)}</div>)}
       <div className="row small">
         <b style={{ width: 70 }}>Attack</b>
         <button className="small" disabled={!currentLink(state)} onClick={() => act({ type: 'manual', op: 'power', amount: -1 })}>−1 ⚔</button>

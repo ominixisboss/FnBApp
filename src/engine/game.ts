@@ -29,6 +29,38 @@ export const MAX_TURNS = 150;
 // ---------------------------------------------------------------- helpers
 
 export const other = (p: PlayerId): PlayerId => (p === 0 ? 1 : 0);
+
+// ---------------------------------------------------------------- seats (two players, or 3-4 in Ultimate Pit Fight)
+
+export const alivePlayers = (s: GameState) => s.players.filter((p) => !p.eliminated);
+/** the next player round the table who is still in the game */
+export function nextAlive(s: GameState, pid: PlayerId): PlayerId {
+  const n = s.players.length;
+  for (let i = 1; i <= n; i++) { const q = ((pid + i) % n) as PlayerId; if (!s.players[q].eliminated) return q; }
+  return pid;
+}
+/** Who a player may attack or target: in Ultimate Pit Fight only the heroes to their immediate left and right. */
+export function targetableOpponents(s: GameState, pid: PlayerId): PlayerId[] {
+  const n = s.players.length;
+  const out: PlayerId[] = [];
+  const step = (dir: 1 | -1) => { for (let i = 1; i < n; i++) { const q = ((pid + dir * i + n * 4) % n) as PlayerId; if (!s.players[q].eliminated) return q; } return null; };
+  for (const q of [step(1), step(-1)]) if (q !== null && q !== pid && !out.includes(q)) out.push(q);
+  return out;
+}
+/** The opponent an effect of this player means: the other side of the current attack, or their chosen focus. */
+export function oppOf(s: GameState, pid: PlayerId): PlayerId {
+  if (s.players.length === 2) return other(pid);
+  const l = s.chain[s.chain.length - 1];
+  if (l) {
+    const d = defenderOf(l);
+    if (pid === l.attacker) return d;
+    if (pid === d) return l.attacker;
+  }
+  const t = targetableOpponents(s, pid);
+  const f = s.players[pid].focus;
+  return f !== undefined && t.includes(f) ? f : t[0] ?? other(pid);
+}
+export const defenderOf = (l: ChainLink): PlayerId => l.defender ?? other(l.attacker);
 export const cardOf = (i: CardInst): Card => card(i.cardId);
 
 function rand(s: GameState): number {
@@ -122,7 +154,7 @@ function heroApi(s: GameState): HeroApi {
       log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
     },
     intimidate: (t) => {
-      s.players[other(t.id)].turn.intimidated = true;
+      s.players[oppOf(s, t.id)].turn.intimidated = true;
       if (!t.hand.length) return;
       const d = t.hand.splice(Math.floor(rand(s) * t.hand.length), 1)[0];
       t.intimidated.push(d);
@@ -132,7 +164,7 @@ function heroApi(s: GameState): HeroApi {
 }
 
 export function heroCtx(s: GameState, p: PlayerState): HeroCtx {
-  return { s, p, opp: s.players[other(p.id)], api: heroApi(s) };
+  return { s, p, opp: s.players[oppOf(s, p.id)], api: heroApi(s) };
 }
 
 /** A hero's automated ability (Shiyana uses the ability of the hero she's copying). */
@@ -219,10 +251,10 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
 // ---------------------------------------------------------------- setup
 
 /** `first`: who takes the first turn (decided by a die roll before the game); random if not given. */
-export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId): GameState {
+export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId): GameState {
   const s: GameState = {
     seed, nextUid: 1, turn: 1, turnPlayer: 0, phase: 'action', priority: 0, passes: 0,
-    players: [null!, null!], chain: [], chainOpen: false, winner: null, log: [], format,
+    players: setup.map(() => null!), chain: [], chainOpen: false, winner: null, log: [], format,
   };
   setup.forEach((ps, idx) => {
     const id = idx as PlayerId;
@@ -260,7 +292,8 @@ export function createGame(setup: [PlayerSetup, PlayerSetup], seed = Date.now() 
     s.players[id] = p;
   });
   for (const p of s.players) ability(p)?.setup?.(heroCtx(s, p));
-  const coin = rand(s) < 0.5 ? 0 : 1; // always drawn, so the rest of the game is the same whoever goes first
+  const roll = rand(s); // always drawn, so the rest of the game is the same whoever goes first
+  const coin = (s.players.length === 2 ? (roll < 0.5 ? 0 : 1) : Math.floor(roll * s.players.length)) as PlayerId;
   s.turnPlayer = first ?? coin;
   s.priority = s.turnPlayer;
   log(s, null, `${pname(s, s.turnPlayer)} goes first.`);
@@ -280,8 +313,7 @@ function draw(s: GameState, p: PlayerState, count = 1, triggers = true) {
   if (!triggers || n === 0) return;
   p.turn.drew = true;
   if (s.phase === 'action' || s.phase === 'defend' || s.phase === 'reaction') {
-    const o = s.players[other(p.id)];
-    ability(o)?.onOpponentDraw?.(heroCtx(s, o), n);
+    for (const o of s.players) if (o.id !== p.id && !o.eliminated) ability(o)?.onOpponentDraw?.(heroCtx(s, o), n);
   }
 }
 
@@ -303,7 +335,7 @@ function startTurn(s: GameState) {
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
   // Shiyana becomes a copy of the opposing hero until the start of her next turn
   if (cardOf(p.hero).name.startsWith('Shiyana')) {
-    const target = s.players[other(p.id)].hero;
+    const target = s.players[oppOf(s, p.id)].hero;
     p.copyOf = cardOf(target).name.startsWith('Shiyana') ? undefined : target.cardId;
     if (p.copyOf) log(s, p.id, `${p.name} becomes a copy of ${card(p.copyOf).name}.`);
   }
@@ -421,7 +453,7 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
       else log(s, p.id, `${p.name} doesn't wager.`);
       break;
     case 'damageTarget': {
-      const opp = s.players[other(p.id)];
+      const opp = s.players[oppOf(s, p.id)];
       const pick = picks[0];
       if (pick !== undefined && pick !== opp.hero.uid) damageAlly(s, opp, pick, c.resume.amount, c.resume.source);
       else if (dealDamage(s, opp.id, c.resume.amount, c.resume.arcane, c.resume.source) > 0 && c.resume.arcane) p.turn.arcaneDealt = true;
@@ -429,9 +461,18 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
     }
     case 'attackTarget': {
       const l = s.chain[c.resume.link];
-      const opp = s.players[other(p.id)];
       const pick = picks[0];
-      if (!l || pick === undefined || pick === opp.hero.uid) break;
+      if (!l || pick === undefined) break;
+      // a hero: that player defends (multiplayer); otherwise one of their allies or spectra auras
+      const heroSeat = s.players.find((x) => x.hero.uid === pick);
+      if (heroSeat) {
+        if (heroSeat.id !== defenderOf(l)) { l.defender = heroSeat.id; l.target = undefined; if (s.phase === 'defend') s.priority = heroSeat.id; log(s, p.id, `${cardOf(l.inst).name} attacks ${heroSeat.name}.`); }
+        break;
+      }
+      const owner = s.players.find((x) => x.permanents.some((pm) => pm.inst.uid === pick));
+      if (!owner) break;
+      if (owner.id !== defenderOf(l)) { l.defender = owner.id; if (s.phase === 'defend') s.priority = owner.id; }
+      const opp = owner;
       const pm = opp.permanents.find((x) => x.inst.uid === pick);
       if (!pm) break;
       if (getScript(cardOf(pm.inst)).spectra) {
@@ -560,7 +601,7 @@ function noteDiscard(s: GameState, p: PlayerState, inst: CardInst) {
 
 /** Evaluate a printed condition ("If you have less life than an opposing hero, ..."). */
 export function evalCondition(s: GameState, p: PlayerState, cond: Condition, link?: ChainLink): boolean {
-  const opp = s.players[other(p.id)];
+  const opp = s.players[oppOf(s, p.id)];
   const chainBy = s.chain.filter((l) => l.attacker === p.id);
   switch (cond.kind) {
     case 'auraThisTurn': return !!p.turn.auraPlayed;
@@ -995,7 +1036,7 @@ export function defendOptions(s: GameState, pid: PlayerId): DefendOption[] {
 export function checkDefense(s: GameState, uids: number[]): string | null {
   const l = currentLink(s);
   if (!l) return 'No attack to defend';
-  const p = s.players[other(l.attacker)];
+  const p = s.players[defenderOf(l)];
   const fromHand = uids.filter((u) => p.hand.some((h) => h.uid === u));
   if (l.noHandDefense && fromHand.length > 0) return 'This attack can’t be defended by cards from hand.';
   if (l.dominate && fromHand.length > 1) return 'Dominate: this attack can’t be defended by more than 1 card from hand.';
@@ -1020,12 +1061,17 @@ export function applyAction(prev: GameState, action: Action): GameState {
     case 'orderTriggers': doOrderTriggers(s, action.order); break;
     case 'choose': doChoose(s, action); break;
     case 'heave': doHeave(s, action.uid, action.pitch); break;
+    case 'focus': {
+      const who = s.players[s.turnPlayer === s.priority ? s.priority : s.turnPlayer];
+      if (targetableOpponents(s, who.id).includes(action.player)) { who.focus = action.player; log(s, who.id, `${who.name} turns to face ${s.players[action.player].name}.`); }
+      break;
+    }
     case 'defend': doDefend(s, action.uids, action.boosts ?? [], action.pitch ?? []); break;
     case 'arsenal': if (action.pitchOrder) s.players[s.turnPlayer].turn.pitchOrder = action.pitchOrder; doArsenal(s, action.uid); break;
     case 'concede': {
       const loser = s.priority;
       log(s, loser, `${pname(s, loser)} concedes.`);
-      endGame(s, other(loser));
+      eliminate(s, s.players[loser]);
       break;
     }
     case 'manual': doManual(s, action); break;
@@ -1196,7 +1242,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
 
 /** After `pid` adds a layer, the other player gets priority (they may respond with an instant or pass). */
 function openPriority(s: GameState, pid: PlayerId) {
-  s.priority = other(pid);
+  s.priority = nextAlive(s, pid);
   s.passes = 1; // the player who just acted counts as having passed
   settleStack(s);
 }
@@ -1208,7 +1254,7 @@ function settleStack(s: GameState) {
 
 function passOnStack(s: GameState) {
   s.passes += 1;
-  if (s.passes < 2) { s.priority = other(s.priority); return; }
+  if (s.passes < alivePlayers(s).length) { s.priority = nextAlive(s, s.priority); return; }
   // both players passed in a row: the top layer resolves, then the turn player gets priority
   const layer = s.stack!.pop()!;
   s.passes = 0;
@@ -1325,14 +1371,21 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   s.chain.push(link);
   s.chainOpen = true;
   // allies and spectra auras can be attacked: a human attacker chooses the target (bots go for the hero)
-  const targets = attackablePermanents(s.players[other(p.id)]);
-  if (targets.length && !p.isBot) {
-    const oppHero = s.players[other(p.id)].hero;
-    ask(s, { player: p.id, kind: 'target', prompt: `What does ${c.name} attack?`, options: [oppHero, ...targets.map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'attackTarget', link: s.chain.length - 1 } });
+  // who defends: the hero the combat chain is focused on, else the attacker's chosen neighbour (bots: the weakest)
+  const prev = s.chain[s.chain.length - 2];
+  const legal = targetableOpponents(s, p.id);
+  link.defender = prev ? defenderOf(prev)
+    : p.focus !== undefined && legal.includes(p.focus) ? p.focus
+    : p.isBot ? [...legal].sort((a, b) => s.players[a].life - s.players[b].life)[0] ?? oppOf(s, p.id)
+    : legal[0] ?? oppOf(s, p.id);
+  const heroes = prev ? [s.players[link.defender].hero] : legal.map((q) => s.players[q].hero);
+  const targets = (prev ? [link.defender] : legal).flatMap((q) => attackablePermanents(s.players[q]));
+  if ((targets.length || heroes.length > 1) && !p.isBot) {
+    ask(s, { player: p.id, kind: 'target', prompt: `What does ${c.name} attack?`, options: [...heroes, ...targets.map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'attackTarget', link: s.chain.length - 1 } });
   }
   p.turn.attacks += 1;
   if (fromWeapon) p.turn.weaponAttacked = true;
-  const target = s.players[other(p.id)];
+  const target = s.players[link.defender];
   target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;
   // pending "next attack" effects
   const grantedOnAttack: Effect[] = [];
@@ -1347,7 +1400,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
     const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (name === 'Runechant') { destroy(); if (dealDamage(s, other(p.id), 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true; }
+    if (name === 'Runechant') { destroy(); if (dealDamage(s, link.defender!, 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true; }
     else if (name === 'Quicken') { destroy(); link.goAgain = true; }
     else if (name === 'Courage') { destroy(); link.powerMod += 1; }
     else if (name === 'Embodiment of Lightning' && !fromWeapon) { destroy(); link.goAgain = true; }
@@ -1387,7 +1440,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   if (s.phase === 'gameOver') return;
   log(s, p.id, `Attack: ${c.name} — ${linkPower(link)} power${link.goAgain ? ', go again' : ''}${link.dominate ? ', dominate' : ''}${link.overpower ? ', overpower' : ''}.`, link.dominate ? RULES.dominate : link.overpower ? RULES.overpower : link.goAgain ? RULES.goAgain : undefined);
   s.phase = 'defend';
-  s.priority = other(p.id);
+  s.priority = link.defender!;
 }
 
 function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: number[] = []) {
@@ -1397,7 +1450,7 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
   if (err) throw new Error(err);
   const legal = new Set(defendOptions(s, s.priority).map((o) => o.uid));
   if (uids.some((u) => !legal.has(u))) throw new Error('That card can’t defend.');
-  const d = s.players[other(l.attacker)];
+  const d = s.players[defenderOf(l)];
   const names: string[] = [];
   for (const uid of uids) {
     const h = removeFrom(d.hand, uid);
@@ -1488,8 +1541,13 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
   s.passes = 0;
 }
 
+/** In the reaction step, priority goes back and forth between the attacker and the defender. */
+function swapReactionPriority(s: GameState) {
+  const l = currentLink(s);
+  s.priority = !l ? other(s.priority) : s.priority === l.attacker ? defenderOf(l) : l.attacker;
+}
 function afterReactionPlay(s: GameState) {
-  s.priority = other(s.priority);
+  swapReactionPriority(s);
   s.passes = 0;
 }
 
@@ -1499,7 +1557,7 @@ function doPass(s: GameState, pitchOrder?: number[]) {
   if (s.phase === 'reaction') {
     s.passes += 1;
     if (s.passes >= 2) resolveDamage(s);
-    else s.priority = other(s.priority);
+    else swapReactionPriority(s);
     return;
   }
   if (s.phase === 'action') {
@@ -1519,7 +1577,7 @@ function doPass(s: GameState, pitchOrder?: number[]) {
 function resolveDamage(s: GameState) {
   const l = currentLink(s)!;
   const attacker = s.players[l.attacker];
-  const defender = s.players[other(l.attacker)];
+  const defender = s.players[defenderOf(l)];
   // "If this is defended by an action card / has N or more power / ... this chain link, ..."
   if (!l.fromWeapon) resolveConditionals(s, attacker, cardOf(l.inst), l.inst, 'ifLink', l);
   ability(attacker)?.beforeDamage?.(heroCtx(s, attacker), l);
@@ -1658,14 +1716,15 @@ function endTurn(s: GameState) {
   if (p.deck.length === 0 && p.hand.length === 0 && p.arsenal.length === 0) {
     log(s, p.id, `${p.name} has no cards left.`);
   }
-  s.turnPlayer = other(s.turnPlayer);
+  s.turnPlayer = nextAlive(s, s.turnPlayer);
   s.turn += 1;
   const outOfCards = (pl: PlayerState) => pl.deck.length + pl.hand.length + pl.arsenal.length === 0;
-  if (s.turn > MAX_TURNS || s.players.every(outOfCards)) {
+  if (s.turn > MAX_TURNS || alivePlayers(s).every(outOfCards)) {
     // simulator safeguard against stalled games: higher life total wins
-    const [a, b] = s.players;
-    log(s, null, s.turn > MAX_TURNS ? `Turn limit reached.` : 'Both players are out of cards.');
-    endGame(s, a.life >= b.life ? 0 : 1);
+    log(s, null, s.turn > MAX_TURNS ? `Turn limit reached.` : 'Every player is out of cards.');
+    // the hero still standing with the most life wins (ties go to the earlier seat)
+    const best = alivePlayers(s).reduce((x, y) => (y.life > x.life ? y : x));
+    endGame(s, best.id);
     return;
   }
   startTurn(s);
@@ -1742,7 +1801,7 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
 }
 
 function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: CardInst) {
-  const opp = s.players[other(p.id)];
+  const opp = s.players[oppOf(s, p.id)];
   const srcName = cardOf(src).name;
   const askedBefore = s.pendingChoices?.length ?? 0;
   for (let ei = 0; ei < effects.length; ei++) {
@@ -2003,11 +2062,24 @@ function doManual(s: GameState, a: Extract<Action, { type: 'manual' }>) {
 function checkWin(s: GameState) {
   if (s.phase === 'gameOver') return;
   for (const p of s.players) {
-    if (p.life <= 0) {
-      endGame(s, other(p.id));
-      return;
+    if (p.life <= 0 && !p.eliminated) {
+      eliminate(s, p);
+      if ((s.phase as string) === 'gameOver') return;
     }
   }
+}
+
+/** A hero at 0 life (or who concedes) is out; with one hero left, they win. */
+function eliminate(s: GameState, p: PlayerState) {
+  if (s.players.length === 2) { endGame(s, other(p.id)); return; }
+  p.eliminated = true;
+  log(s, p.id, `${p.name} is knocked out!`);
+  const left = alivePlayers(s);
+  if (left.length === 1) { endGame(s, left[0].id); return; }
+  // an attack involving them ends; if it was their turn, play moves on
+  if (s.chain.some((l) => l.attacker === p.id || defenderOf(l) === p.id)) { s.chain = []; s.chainOpen = false; s.phase = 'action'; s.priority = s.turnPlayer; }
+  if (s.turnPlayer === p.id) { s.chain = []; s.chainOpen = false; delete s.stack; s.pendingChoices = undefined; s.turnPlayer = nextAlive(s, p.id); startTurn(s); }
+  else if (s.players[s.priority].eliminated) s.priority = s.turnPlayer;
 }
 
 function endGame(s: GameState, winner: PlayerId) {

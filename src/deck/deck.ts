@@ -8,7 +8,7 @@ import { getScript } from '../engine/cardScript';
 import { archetypeFor } from './archetypes';
 import type { Archetype } from './archetypes';
 
-export type DeckFormat = 'blitz' | 'cc' | 'll' | 'sage' | 'commoner' | 'casual';
+export type DeckFormat = 'blitz' | 'cc' | 'll' | 'sage' | 'commoner' | 'upf' | 'casual';
 
 export interface Deck {
   id: string;
@@ -27,6 +27,8 @@ export const FORMAT_RULES: Record<DeckFormat, { minDeck: number; maxDeck: number
   ll: { minDeck: 60, maxDeck: 80, copies: 3, young: null, legalKey: 'll' },
   sage: { minDeck: 40, maxDeck: 40, copies: 2, young: null, legalKey: 'sage' },
   commoner: { minDeck: 40, maxDeck: 40, copies: 2, young: null, legalKey: 'commoner' },
+  // Ultimate Pit Fight: a young hero and a 40-card deck, up to 2 copies (comprehensive rules 9.3)
+  upf: { minDeck: 40, maxDeck: 40, copies: 2, young: true, legalKey: 'blitz' },
   casual: { minDeck: 20, maxDeck: 200, copies: 99, young: null, legalKey: null },
 };
 
@@ -38,6 +40,7 @@ export const FORMATS: [DeckFormat, string, string][] = [
   ['ll', 'Living Legend', 'Classic Constructed rules with the Living Legend card pool'],
   ['sage', 'Silver Age', 'commons and rares, 40 cards, max 2 copies'],
   ['commoner', 'Commoner', 'only common cards, 40 cards, max 2 copies'],
+  ['upf', 'Ultimate Pit Fight', '3–4 heroes, young hero, 40 cards; attack your neighbours, last one standing wins'],
   ['casual', 'Casual', 'no restrictions'],
 ];
 export const formatName = (f: string) => FORMATS.find((x) => x[0] === f)?.[1] ?? f;
