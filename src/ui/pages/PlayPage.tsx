@@ -40,6 +40,8 @@ interface Setup {
   clock?: number;
   /** Ultimate Pit Fight: how many bot opponents (2 or 3) */
   pitBots?: 2 | 3;
+  /** Smash Palace: reveal an event card at the start of every turn */
+  events?: boolean;
 }
 
 interface Opponent { heroId: string; name: string; deck: DeckList }
@@ -120,7 +122,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       { name: 'You', isBot: false, deck: withInventory(ctx.pool, pre.chosen) },
       { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
       ...(ctx.more ?? []).map((o) => ({ name: o.name, isBot: true, difficulty: setup.difficulty, deck: o.deck })),
-    ], Date.now() & 0x7fffffff, setup.format, first));
+    ], Date.now() & 0x7fffffff, setup.format, first, { events: setup.format === 'upf' && !!setup.events }));
     setPre(null);
   };
   const matchOver = match && (match.wins[0] >= 2 || match.wins[1] >= 2);
@@ -157,7 +159,12 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         <GameBoard key={`spec-${sp.names.join('-')}`} initial={sp.state} tutorial={false} onExit={() => online.unspectate()}
           online={{ state: sp.state, send: () => {}, opponent: null, error: null }} />
         <div className="replay-shield" />
-        <div className="replay-bar"><span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span><button className="small" onClick={() => online.unspectate()}>Stop watching</button></div>
+        <div className="replay-bar">
+          {sp.seats && sp.seats.length > 2
+            ? <span className="small">👁 Watching from <span className="seg">{sp.seats.map((n, i) => <button key={i} className={`small ${sp.seat === i ? 'on' : ''}`} onClick={() => online.spectateSeat(i)}>{n}</button>)}</span></span>
+            : <span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span>}
+          <button className="small" onClick={() => online.unspectate()}>Stop watching</button>
+        </div>
       </>
     );
   }
@@ -276,6 +283,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                       <div className="pit-wait">{Array.from({ length: net.table.size }, (_, i) => <span key={i} className={net.table!.seats[i] ? 'in' : ''}>{net.table!.seats[i] ?? 'empty seat'}</span>)}</div>
                       <div className="small muted">{net.code ? 'The game starts when every seat is taken.' : 'Bots take the empty seats 30 seconds after a second player joins.'}</div>
                       {(net.table.host || !net.code) && <button className="primary" onClick={() => online.fillBots()}>Start now with bots in the empty seats</button>}
+                      {net.table.host && net.code && net.table.seats.length < net.table.size && <FriendsPanel canChallenge label="➕ Invite" allowOffline onChallenge={(u) => online.invite(u)} />}
                     </>
                   )}
                   <button onClick={() => online.cancel()}>Cancel</button>
@@ -299,7 +307,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     <>
                       <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
                       <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked Pit Fight table</button>
-                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4, !!setup.events); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
                       <div className="small muted">The public table is ranked on its own Pit Fight ladder (your finishing place against the other players); rooms are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
                     </>
                   ) : (
@@ -345,6 +353,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
             <span className="lobby-label">Table</span>
             <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} heroes</button>)}</div>
             <span className="muted">Offline vs bots. You can attack the heroes on your left and right; last one standing wins.</span>
+            <label className="row small" title="Smash Palace: at the start of every turn, the turn player reveals the top card of a shared event deck and follows it. Games with Fightmaster Kox always use it."><input type="checkbox" checked={!!setup.events} onChange={(e) => setSetup({ ...setup, events: e.target.checked })} /> Event deck (Smash Palace)</label>
           </div>
         )}
         <div className="row small">
@@ -396,7 +405,7 @@ function DeckBox({ hero, title, sub, selected, onClick }: { hero: Card; title: s
 }
 
 /** Friends with online status; challenge one to a game with your selected deck. */
-function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; onChallenge: (username: string) => void }) {
+function FriendsPanel({ canChallenge, onChallenge, label = '⚔ Challenge', allowOffline = false }: { canChallenge: boolean; onChallenge: (username: string) => void; label?: string; allowOffline?: boolean }) {
   const [list, setList] = useState<FriendRow[] | null>(null);
   useEffect(() => {
     let off = false;
@@ -416,7 +425,7 @@ function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; on
           <span className="grow">{f.name}</span>
           {f.status === 'in-game'
             ? <button className="small" title="Watch their game" onClick={() => online.spectate(f.username)}>👁 Watch</button>
-            : <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>}
+            : <button className="small" disabled={!canChallenge || (f.status !== 'online' && !allowOffline)} title={f.status === 'online' ? 'Challenge with your selected deck' : allowOffline ? 'They get a notification' : 'Offline'} onClick={() => onChallenge(f.username)}>{label}</button>}
         </div>
       ))}
     </div>

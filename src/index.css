@@ -1406,7 +1406,12 @@ html.big-text .log, html.big-text .small { font-size: .95em; }
   .arena-bar { top: auto; bottom: var(--ctl); left: 8px; right: auto; height: auto; padding: 0; background: none; gap: 6px; z-index: 12; }
   .arena-bar .grow, .arena-bar .arena-title { display: none; }
   .arena-bar .icon-btn { width: 44px; height: 44px; justify-content: center; padding: 0; font-size: 1.1rem; background: #000b; border-color: #ffffff2a; }
-  .bar-more.open { top: auto !important; bottom: 52px; left: 0; right: auto !important; }
+  /* one ☰ button in the top-left corner; everything else is in its menu, so nothing covers the hand */
+  .arena-bar { top: calc(6px + var(--sa-t)); bottom: auto; }
+  .arena:has(.pit-strip) .arena-bar { top: calc(40px + var(--sa-t)); }
+  .arena-bar .bar-quick { display: none; }
+  .bar-more.open .portrait-only { display: flex; }
+  .bar-more.open { top: 52px !important; bottom: auto; left: 0; right: auto !important; max-height: calc(100dvh - 140px); overflow-y: auto; }
   .chess-clock, .online-badge { position: fixed; top: calc(6px + var(--sa-t)); left: 50%; transform: translateX(-50%); }
   .arena:has(.pit-strip) .online-badge, .arena:has(.pit-strip) .chess-clock { top: calc(40px + var(--sa-t)); }
 
@@ -1607,3 +1612,7 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .pit-wait span { padding: 4px 10px; border-radius: 999px; border: 1px dashed #4a3520; color: #8a7a66; font-size: .8rem; }
 .pit-wait span.in { border-style: solid; border-color: #f6d58e; color: #f1e4cc; animation: pit-in .3s var(--spring); }
 @keyframes pit-in { from { transform: scale(.7); opacity: 0; } }
+
+.bar-more .portrait-only { display: none; }
+.event-chip { position: absolute; z-index: 11; right: calc(10px + var(--sa-r)); top: calc(94px + var(--sa-t)); max-width: 46vw; padding: 4px 10px; border-radius: 999px; background: #1a1006e6; border: 1px solid #c9a24a88; color: #f1e4cc; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pit-in .35s var(--spring); }
+@media (max-width: 640px) and (orientation: portrait) { .event-chip { top: calc(40px + var(--sa-t)); right: 6px; font-size: .62rem; } }

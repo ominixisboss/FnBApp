@@ -25,6 +25,7 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
     p.inventory = p.inventory?.map(() => HIDDEN_ID);
   }
   s.seed = 0; // don't leak the RNG
+  if (s.eventDeck) s.eventDeck = s.eventDeck.map(() => HIDDEN_ID); // only how many are left
   // decisions: the other players only see that one is being made, not the cards involved
   if (s.pendingChoices) s.pendingChoices = s.pendingChoices.map((c) => (c.player === viewer ? c : { ...c, options: c.options.map((o) => ({ ...o, cardId: HIDDEN_ID })) }));
   if (viewer === 0) return s;

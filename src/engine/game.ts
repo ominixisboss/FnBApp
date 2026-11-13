@@ -1,6 +1,6 @@
 // Flesh and Blood rules engine (core rules). Pure functions: every action returns a new state.
 import type { Card } from '../data/types';
-import { card, findCard, has, n } from '../data/cardDb';
+import { card, findCard, getDb, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
 import { getHeroAbility } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
@@ -44,6 +44,8 @@ export function nextAlive(s: GameState, pid: PlayerId): PlayerId {
 /** Who a player may attack or target: in Ultimate Pit Fight only the heroes to their immediate left and right. */
 export function targetableOpponents(s: GameState, pid: PlayerId): PlayerId[] {
   const n = s.players.length;
+  // events: "you may attack any opposing hero"
+  if (s.players[pid].turn?.flags.anyTarget) return s.players.filter((q) => q.id !== pid && !q.eliminated).map((q) => q.id);
   const out: PlayerId[] = [];
   const step = (dir: 1 | -1) => { for (let i = 1; i < n; i++) { const q = ((pid + dir * i + n * 4) % n) as PlayerId; if (!s.players[q].eliminated) return q; } return null; };
   for (const q of [step(1), step(-1)]) if (q !== null && q !== pid && !out.includes(q)) out.push(q);
@@ -151,6 +153,20 @@ function heroApi(s: GameState): HeroApi {
     clash: (p) => { const w = clash(s); void p; return w === null ? null : s.players[w]; },
     ask: (chooser, owner, key, prompt, botYes, data, cards) => ask(s, { player: chooser.id, kind: 'yesno', prompt, options: (cards ?? []).map((cid, i) => ({ uid: -1 - i, cardId: cid })), resume: { type: 'hero', owner: owner.id, key, data, botYes } }),
     equip: (p, cid) => equipCard(s, p, cid),
+    orderEvents: (p) => {
+      const top = (s.eventDeck ?? []).slice(0, 3);
+      if (!top.length) return;
+      if (p.isBot) {
+        // the events that help Kox most go on top: Gold and card draw first, punishing ones last
+        const good = ['Hit the Jackpot', 'Benefactor of Bloodworth Goldmane', 'Tremor of Anticipation', 'Rally the Underdog', 'Arena Medic', 'Crushing Impact'];
+        const score = (cid: string) => { const i = good.indexOf(card(cid).name); return i < 0 ? 99 : i; };
+        s.eventDeck!.splice(0, top.length, ...[...top].sort((a, b) => score(a) - score(b)));
+        log(s, p.id, `${p.name} looks at the top ${top.length} cards of the event deck and puts them back in an order.`);
+        return;
+      }
+      ask(s, { player: p.id, kind: 'opt', prompt: 'Fightmaster Kox: tap the events in the order you want them to come (first = next). Any you leave go after them.', options: top.map((cid, i) => ({ uid: -1 - i, cardId: cid })), resume: { type: 'eventOrder' } });
+    },
+    pick: (chooser, owner, key, prompt, options, data) => ask(s, { player: chooser.id, kind: 'target', prompt, options: options.map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'hero', owner: owner.id, key, data, botYes: true } }),
     targets: (p) => targetableOpponents(s, p.id).map((q) => s.players[q]),
     pay: (p, amount) => {
       if (availableResources(p, []) < amount) return false;
@@ -266,7 +282,7 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
 // ---------------------------------------------------------------- setup
 
 /** `first`: who takes the first turn (decided by a die roll before the game); random if not given. */
-export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId): GameState {
+export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId, opts: { events?: boolean } = {}): GameState {
   const s: GameState = {
     seed, nextUid: 1, turn: 1, turnPlayer: 0, phase: 'action', priority: 0, passes: 0,
     players: setup.map(() => null!), chain: [], chainOpen: false, winner: null, log: [], format,
@@ -309,6 +325,11 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
     s.players[id] = p;
   });
   for (const p of s.players) ability(p)?.setup?.(heroCtx(s, p));
+  // Smash Palace: a shared event deck (Fightmaster Kox can arrange it)
+  if (opts.events || s.players.some((p) => ability(p)?.id === 'kox')) {
+    s.eventDeck = shuffle(s, getDb().cards.filter((c) => c.types.includes('Event') && !c.types.includes('Hero')).map((c) => c.id));
+    s.eventDiscard = [];
+  }
   const roll = rand(s); // always drawn, so the rest of the game is the same whoever goes first
   const coin = (s.players.length === 2 ? (roll < 0.5 ? 0 : 1) : Math.floor(roll * s.players.length)) as PlayerId;
   s.turnPlayer = first ?? coin;
@@ -353,6 +374,8 @@ function startTurn(s: GameState) {
   s.phase = 'action';
   s.priority = s.turnPlayer;
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
+  for (const pl of s.players) if (pl.drinkFrom === p.id) pl.drinkFrom = undefined; // "until the start of your next turn"
+  if (s.eventDeck) flipEvent(s, p);
   if (p.nextTurn) {
     const n = p.nextTurn;
     if (n.attackPower) p.effects.push({ kind: 'nextAttackPower', amount: -n.attackPower, filter: { kind: 'any' }, source: 'crush' });
@@ -432,7 +455,7 @@ function offerProtect(s: GameState, l: ChainLink) {
     const best = [...opts].sort((a, b) => (defenseOf(cardOf(b)) ?? 0) - (defenseOf(cardOf(a)) ?? 0) || (pitchOf(cardOf(b)) - pitchOf(cardOf(a))))[0];
     // bots protect when their hero profits from it, or when the attacker is their neighbour too
     const botYes = protectWorthIt(s, q, l, best);
-    ask(s, { player: q.id, kind: 'yesno', prompt: `Protect ${s.players[defenderOf(l)].name} from ${cardOf(l.inst).name} with ${cardOf(best).name}?`, options: [{ uid: best.uid, cardId: best.cardId }], resume: { type: 'hero', owner: q.id, key: 'protect', data: [li, best.uid], botYes } });
+    ask(s, { player: q.id, kind: 'pick', prompt: `Protect ${s.players[defenderOf(l)].name} from ${cardOf(l.inst).name} (${linkPower(l)} power)? Pick the card to defend with, or skip.`, confirm: 'Protect with this', skippable: true, botPick: botYes ? best.uid : null, options: [best, ...opts.filter((o) => o !== best)].map((o) => ({ uid: o.uid, cardId: o.cardId })), resume: { type: 'protect', link: li } });
   }
 }
 
@@ -569,8 +592,41 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
     }
     case 'hero': {
       const owner = s.players[c.resume.owner];
-      if (c.resume.key === 'protect') { if (a.yes) doProtect(s, owner, c.resume.data![0], c.resume.data![1]); break; }
-      ability(owner)?.onChoice?.(heroCtx(s, owner), c.resume.key, !!a.yes, c.resume.data);
+      ability(owner)?.onChoice?.(heroCtx(s, owner), c.resume.key, !!a.yes, c.resume.data, picks);
+      break;
+    }
+    case 'protect': if (picks[0] !== undefined) doProtect(s, p, c.resume.link, picks[0]); else log(s, p.id, `${p.name} doesn't protect.`); break;
+    case 'handToBottom': {
+      const inst = (picks[0] !== undefined && removeFrom(p.hand, picks[0])) || p.hand.shift();
+      if (inst) { p.deck.push(inst); log(s, p.id, `${p.name} puts a card from their hand on the bottom of their deck.`); }
+      break;
+    }
+    case 'defendCost': {
+      const l = currentLink(s);
+      const duid = c.resume.uid;
+      const x = l?.defenders.find((d) => d.inst.uid === duid) ?? l?.also?.defenders.find((d) => d.inst.uid === duid);
+      const oc = x && getScript(cardOf(x.inst)).optional;
+      if (picks[0] === undefined || !x || !oc) { log(s, p.id, `${p.name} doesn't use ${x ? cardOf(x.inst).name : 'the card'}'s ability.`); break; }
+      const inst = removeFrom(p.hand, picks[0]) ?? removeFrom(p.arsenal, picks[0]);
+      if (!inst) break;
+      p.deck.push(inst);
+      log(s, p.id, `${cardOf(x.inst).name}: ${p.name} puts a card on the bottom of their deck and ${oc.effectText}.`);
+      optionalPayoff(s, p, oc, cardOf(inst), x.inst);
+      break;
+    }
+    case 'cleanse': {
+      const t = s.players[c.resume.target];
+      const name = picks[0] !== undefined ? cardOf(t.deck.find((d) => d.uid === picks[0]) ?? t.deck[0]).name : null;
+      if (name) cleanseName(s, p, t, c.resume.n, name, 'Righteous Cleansing');
+      break;
+    }
+    case 'event': resolveEventChoice(s, p, c.resume.key, picks, !!a.yes, c, c.resume.data); break;
+    case 'eventOrder': {
+      const top = (s.eventDeck ?? []).splice(0, c.options.length);
+      const keep = picks.map((u) => c.options.findIndex((o) => o.uid === u)).filter((i) => i >= 0).map((i) => top[i]);
+      const rest = top.filter((_, i) => !picks.includes(c.options[i].uid));
+      s.eventDeck = [...keep, ...rest, ...(s.eventDeck ?? [])];
+      log(s, p.id, `${p.name} puts the top ${top.length} cards of the event deck back in the order they want.`);
       break;
     }
     case 'wager':
@@ -652,9 +708,16 @@ function addWager(s: GameState, p: PlayerState, li: number, tokens: string[], wi
 
 function settleWagers(s: GameState, l: ChainLink) {
   if (!l.wagers?.length) return;
-  const winner = s.players[l.hit ? l.attacker : other(l.attacker)];
+  const winner = s.players[l.hit ? l.attacker : defenderOf(l)];
+  const loser = s.players[l.hit ? defenderOf(l) : l.attacker];
   for (const w of l.wagers) {
     log(s, winner.id, `${winner.name} wins the wager.`);
+    if (w.goldSwap) {
+      const gold = loser.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+      loser.permanents = loser.permanents.filter((pm) => !gold.includes(pm));
+      winner.permanents.push(...gold);
+      if (gold.length) log(s, winner.id, `${winner.name} gains control of ${gold.length} Gold from ${loser.name}.`);
+    }
     for (const t of w.tokens) createToken(s, winner, t, 1);
     if (w.winnerDraw) draw(s, winner, w.winnerDraw);
     ability(winner)?.onWagerWin?.(heroCtx(s, winner), l);
@@ -694,6 +757,205 @@ function damageAlly(s: GameState, owner: PlayerState, uid: number, amount: numbe
   return amount;
 }
 
+/** Banish the cards named `name` from the top `n` of `t`'s deck (Righteous Cleansing). */
+function cleanseName(s: GameState, p: PlayerState, t: PlayerState, n: number, name: string, src: string) {
+  const top = t.deck.slice(0, n);
+  const gone = top.filter((x) => cardOf(x).name === name);
+  t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !gone.includes(x)));
+  t.banished.push(...gone);
+  for (const g of gone) banishedFromOpp(s, p, g);
+  log(s, p.id, `${src}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${gone.length} ${name}.`);
+}
+
+// ---------------------------------------------------------------- Smash Palace event deck
+
+/** At the start of each turn, the turn player reveals the top card of the event deck and follows it. */
+function flipEvent(s: GameState, p: PlayerState) {
+  if (!s.eventDeck) return;
+  if (!s.eventDeck.length) { s.eventDeck = shuffle(s, s.eventDiscard ?? []); s.eventDiscard = []; }
+  const id = s.eventDeck.shift();
+  if (!id) return;
+  s.lastEvent = id;
+  log(s, p.id, `Event: ${card(id).name} — ${card(id).text.replace(/\n/g, ' ')}`, 'Event deck (Smash Palace): at the start of each turn, the turn player reveals the top card of the event deck and follows it.');
+  if (!resolveEvent(s, p, id)) (s.eventDiscard ??= []).push(id);
+}
+
+const golds = (p: PlayerState) => p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+const worstCard = (list: CardInst[]) => [...list].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
+const pickOpts = (list: CardInst[]) => list.map((i) => ({ uid: i.uid, cardId: i.cardId }));
+
+/** Follow an event. Returns true if the card stays in play (equipped) instead of going to the event discard. */
+function resolveEvent(s: GameState, p: PlayerState, id: string): boolean {
+  const c = card(id);
+  const others = s.players.filter((q) => q.id !== p.id && !q.eliminated);
+  const ev = (key: string, k: Partial<NonNullable<GameState['pendingChoices']>[0]>, data?: number[]) =>
+    ask(s, { player: p.id, kind: 'pick', prompt: '', options: [], ...k, resume: { type: 'event', key, data } } as NonNullable<GameState['pendingChoices']>[0]);
+  if (c.types.includes('Equipment')) {
+    const slot = ['Head', 'Chest', 'Arms', 'Legs', 'Off-Hand'].find((t) => c.types.includes(t))!;
+    const cur = p.equipment.find((e) => !e.destroyed && cardOf(e.inst).types.includes(slot));
+    if (!cur) { equipCard(s, p, id); return true; }
+    if (p.isBot) { if ((defenseOf(c) ?? 0) > equipDefense(cur)) { equipCard(s, p, id); return true; } return false; }
+    ask(s, { player: p.id, kind: 'yesno', prompt: `${c.name}: equip it in place of ${cardOf(cur.inst).name}?`, options: [{ uid: -1, cardId: id }], resume: { type: 'event', key: 'equip' } });
+    return true; // decided in the answer
+  }
+  switch (c.name) {
+    case 'Air of a Comeback': {
+      const naa = p.graveyard.filter((g) => has(cardOf(g), 'Action') && !has(cardOf(g), 'Attack'));
+      if (!naa.length) break;
+      if (!p.isBot) { ev('comeback', { prompt: `${c.name}: put a non-attack action card from your graveyard on top of your deck${p.hand.length ? '' : ' (no cards in hand: instead you may play it this turn for free)'}? Pick one, or skip.`, confirm: 'Choose it', skippable: true, options: pickOpts(naa) }); break; }
+      comeback(s, p, [...naa].sort((a, b) => costOf(cardOf(b)) - costOf(cardOf(a)))[0]);
+      break;
+    }
+    case 'Benefactor of Bloodworth Goldmane': createToken(s, p, 'Gold', 1); p.effects.push({ kind: 'nextAttackGoldPower', source: c.name }); break;
+    case 'Big Hits, Big Applause':
+      p.turn.flags.clashDraw = 1;
+      for (const q of others) clash(s, p.id, q.id);
+      break;
+    case 'Code of Conduct: Kill or Be Killed': p.turn.flags.anyTarget = 1; p.turn.flags.killOrBeKilled = 1; break;
+    case 'Crowd Roars Fight!': p.effects.push({ kind: 'nextAttackPower', amount: 1, filter: { kind: 'any' }, source: c.name }); p.turn.flags.anyTarget = 1; p.turn.flags.anyTargetNext = 1; break;
+    case 'Crushing Impact': p.turn.flags.crushingImpact = 1; break;
+    case "Didn't See That Coming":
+      for (const q of others) if (q.life > p.life && q.hand.length) {
+        if (!q.isBot) ask(s, { player: q.id, kind: 'pick', prompt: `${c.name}: you have more life than ${p.name}. Discard a card.`, confirm: 'Discard it', options: pickOpts(q.hand), resume: { type: 'event', key: 'discard' } });
+        else discardCard(s, q, worstCard(q.hand));
+      }
+      break;
+    case 'Dominate the Competition': p.effects.push({ kind: 'nextAttackDominate', source: c.name }); break;
+    case 'Ez Sqeez Bookie Syndicate': p.turn.flags.ezSqeez = 1; break;
+    case 'Fight Night Prize Purse': {
+      if (!others.length) break;
+      if (!p.isBot && others.length > 1) { ask(s, { player: p.id, kind: 'target', prompt: `${c.name}: choose an opponent. You each create a Gold token.`, options: pickOpts(others.map((q) => q.hero)), resume: { type: 'event', key: 'purse' } }); break; }
+      const q = [...others].sort((a, b) => pitThreat(s, p, a) - pitThreat(s, p, b))[0]; // the least threatening gets the Gold
+      createToken(s, p, 'Gold', 1); createToken(s, q, 'Gold', 1);
+      break;
+    }
+    case 'Hit the Jackpot': createToken(s, p, 'Gold', 1); draw(s, p, golds(p).length); log(s, p.id, `${p.name} draws ${golds(p).length} (one per Gold).`); break;
+    case 'Ire of the Crowd': p.turn.flags.ire = 1; break;
+    case 'Let Me Buy You a Drink': {
+      const g = golds(p)[0];
+      if (g) removePermanent(s, p, g.inst.uid);
+      if (!others.length) break;
+      if (!p.isBot && others.length > 1) { ask(s, { player: p.id, kind: 'target', prompt: `${c.name}: choose an opponent. They draw a card, and their attacks on you get -2{p} until your next turn.`, options: pickOpts(others.map((q) => q.hero)), resume: { type: 'event', key: 'drink' } }); break; }
+      drink(s, p, [...others].sort((a, b) => pitThreat(s, p, b) - pitThreat(s, p, a))[0]);
+      break;
+    }
+    case "Lion's Pounce":
+      // it attacks every other hero; each blocks with their best equipment
+      for (const q of others) {
+        const eq = q.equipment.filter((e) => !e.destroyed).sort((a, b) => equipDefense(b) - equipDefense(a))[0];
+        const block = eq ? equipDefense(eq) : 0;
+        log(s, q.id, `Lion's Pounce attacks ${q.name}${eq ? `, who blocks with ${cardOf(eq.inst).name} (${block})` : ''}.`);
+        if (3 - block > 0) dealDamage(s, q.id, 3 - block, false, "Lion's Pounce");
+        if (s.phase === 'gameOver') break;
+      }
+      break;
+    case 'Pick Yourself Up Off the Floor': {
+      const atk = p.graveyard.filter((g) => has(cardOf(g), 'Attack') && has(cardOf(g), 'Action'));
+      if (!atk.length) break;
+      if (!p.isBot && atk.length > 1) { ev('pickUp', { prompt: `${c.name}: put an attack action card from your graveyard on top of your deck${others.some((q) => q.life > p.life) ? ' (you have less life than an opponent: into your hand instead)' : ''}.`, confirm: 'Choose it', options: pickOpts(atk) }); break; }
+      pickUp(s, p, [...atk].sort((a, b) => powerOf(cardOf(b)) - powerOf(cardOf(a)))[0]);
+      break;
+    }
+    case 'Rally the Underdog': draw(s, p, others.some((q) => q.life > p.life) ? 2 : 1); break;
+    case 'Random Events Unfold':
+      if (!(s.eventDeck ?? []).some((x) => card(x).name !== c.name)) break; // nothing else to flip
+      s.eventDeck = [...shuffle(s, s.eventDeck ?? []), id];
+      flipEvent(s, p);
+      return true; // it went to the bottom of the event deck
+    case 'The Moat Exchange':
+      for (const q of [p, ...others]) {
+        const pool = [...q.hand, ...q.arsenal];
+        if (!pool.length) continue;
+        if (!q.isBot) { ask(s, { player: q.id, kind: 'pick', multi: true, prompt: `${c.name}: put any number of cards from your hand or arsenal on the bottom of your deck, then draw that many.`, confirm: 'Done', skippable: true, options: pickOpts(pool), resume: { type: 'event', key: 'moat' } }); continue; }
+        moat(s, q, pool.filter((x) => pitchOf(cardOf(x)) === 3 && !has(cardOf(x), 'Defense Reaction')).slice(0, 2));
+      }
+      break;
+    case 'Tremor of Anticipation': p.turn.flags.tremor = 1; createToken(s, p, 'Gold', 1); break;
+    case "Visit the 'Winner Takes All'": p.turn.flags.winnerTakesAll = 1; break;
+    default: {
+      // events the card-text compiler handles (Arena Medic, ...)
+      const inst = mk(s, id, p.id);
+      resolveEffects(s, p, getScript(c).onPlay, inst);
+      resolveConditionals(s, p, c, inst, 'if');
+    }
+  }
+  return false;
+}
+
+function comeback(s: GameState, p: PlayerState, inst: CardInst) {
+  if (!p.hand.length) {
+    p.turn.flags[`playGrave${inst.uid}`] = 1; p.turn.flags[`freePlay${inst.uid}`] = 1;
+    log(s, p.id, `${p.name} may play ${cardOf(inst).name} from their graveyard this turn without paying its cost.`);
+  } else {
+    removeFrom(p.graveyard, inst.uid); p.deck.unshift(inst);
+    log(s, p.id, `${p.name} puts ${cardOf(inst).name} from their graveyard on top of their deck.`);
+  }
+}
+function pickUp(s: GameState, p: PlayerState, inst: CardInst) {
+  removeFrom(p.graveyard, inst.uid);
+  const less = s.players.some((q) => q.id !== p.id && !q.eliminated && q.life > p.life);
+  if (less) p.hand.push(inst); else p.deck.unshift(inst);
+  log(s, p.id, `${p.name} puts ${cardOf(inst).name} from their graveyard ${less ? 'into their hand' : 'on top of their deck'}.`);
+}
+function drink(s: GameState, p: PlayerState, q: PlayerState) {
+  draw(s, q, 1);
+  q.drinkFrom = p.id;
+  log(s, p.id, `${q.name} draws a card; their attacks on ${p.name} get -2{p} until ${p.name}'s next turn.`);
+}
+function moat(s: GameState, q: PlayerState, cards: CardInst[]) {
+  for (const x of cards) { const i = removeFrom(q.hand, x.uid) ?? removeFrom(q.arsenal, x.uid); if (i) q.deck.push(i); }
+  if (cards.length) { draw(s, q, cards.length); log(s, q.id, `${q.name} puts ${cards.length} card${cards.length > 1 ? 's' : ''} on the bottom and draws as many.`); }
+}
+function discardCard(s: GameState, q: PlayerState, inst: CardInst | undefined) {
+  if (!inst || !removeFrom(q.hand, inst.uid)) return;
+  q.graveyard.push(inst); noteDiscard(s, q, inst);
+  log(s, q.id, `${q.name} discards ${cardOf(inst).name}.`);
+}
+
+/** The answer to a choice an event asked for. */
+function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: number[], yes: boolean, c: NonNullable<GameState['pendingChoices']>[0], _data?: number[]) {
+  const id = s.lastEvent;
+  const hero = () => s.players.find((q) => q.hero.uid === picks[0]);
+  switch (key) {
+    case 'equip':
+      if (yes && id) equipCard(s, p, id); else if (id) (s.eventDiscard ??= []).push(id);
+      break;
+    case 'comeback': { const g = p.graveyard.find((x) => x.uid === picks[0]); if (g) comeback(s, p, g); break; }
+    case 'pickUp': { const g = p.graveyard.find((x) => x.uid === picks[0]); if (g) pickUp(s, p, g); break; }
+    case 'discard': discardCard(s, p, p.hand.find((x) => x.uid === picks[0]) ?? worstCard(p.hand)); break;
+    case 'purse': { const q = hero(); if (q) { createToken(s, p, 'Gold', 1); createToken(s, q, 'Gold', 1); } break; }
+    case 'drink': { const q = hero(); if (q) drink(s, p, q); break; }
+    case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
+    case 'payOrWeaken': {
+      const [li, amount, cost] = _data!;
+      const l = s.chain[li];
+      if (!l) break;
+      if (yes && availableResources(p) >= cost) { pay(s, p, cost, autoPitch(p, Math.max(0, cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${cost} for ${cardOf(l.inst).name}.`); }
+      else { l.powerMod -= amount; log(s, p.id, `${cardOf(l.inst).name} gets -${amount}{p} (${linkPower(l)}).`); }
+      break;
+    }
+  }
+  void c;
+}
+
+/** `by` banished an opponent's card: contracts on `by`'s combat chain may be completed (each creates a Silver). */
+function banishedFromOpp(s: GameState, by: PlayerState, inst: CardInst) {
+  const c = cardOf(inst);
+  const pitch = c.pitch ?? 0;
+  const ok: Record<NonNullable<ReturnType<typeof getScript>['contract']>, boolean> = {
+    nonAction: !has(c, 'Action'), attackAction: has(c, 'Attack') && has(c, 'Action'), nonAttackAction: has(c, 'Action') && !has(c, 'Attack'),
+    red: pitch === 1, yellow: pitch === 2, blue: pitch === 3, reaction: has(c, 'Attack Reaction') || has(c, 'Defense Reaction'),
+    lowDefense: (defenseOf(c) ?? 99) <= 2, cheap: costOf(c) <= 1, costly: costOf(c) >= 2, goAgain: getScript(c).goAgain,
+  };
+  for (const l of s.chain) {
+    if (l.attacker !== by.id) continue;
+    const k = getScript(cardOf(l.inst)).contract;
+    if (!k || !ok[k]) continue;
+    log(s, by.id, `${cardOf(l.inst).name}: contract completed (${c.name} banished).`, 'Contract: when you banish a card of the named kind from an opponent, the contract is completed.');
+    createToken(s, by, 'Silver', 1);
+  }
+}
+
 /** A hero destroyed a card someone else controls: Theryon may punish it. */
 function destroyedBy(s: GameState, by: PlayerId, owner: PlayerId) {
   if (by === owner) return;
@@ -715,14 +977,18 @@ function toGraveyard(p: PlayerState, inst: CardInst) {
 }
 
 /** Clash: each hero reveals the top card of their deck; the hero whose card has the greater {p} wins. */
-function clash(s: GameState): PlayerId | null {
-  const tops = s.players.map((pl) => pl.deck[0]);
+function clash(s: GameState, a: PlayerId = s.turnPlayer, b: PlayerId = oppOf(s, s.turnPlayer)): PlayerId | null {
+  const two = [s.players[a], s.players[b]];
+  const tops = two.map((pl) => pl.deck[0]);
   const pw = tops.map((t) => (t ? powerOf(cardOf(t)) : -1));
-  const names = s.players.map((pl, i) => `${pl.name}: ${tops[i] ? `${cardOf(tops[i]!).name} (${pw[i]})` : 'no card'}`);
-  let winner: PlayerId | null = pw[0] > pw[1] ? 0 : pw[1] > pw[0] ? 1 : null;
-  if (winner === null) { const b = s.players.find((pl) => ability(pl)?.winsTiedClash); if (b) winner = b.id; }
+  const names = two.map((pl, i) => `${pl.name}: ${tops[i] ? `${cardOf(tops[i]!).name} (${pw[i]})` : 'no card'}`);
+  let winner: PlayerId | null = pw[0] > pw[1] ? a : pw[1] > pw[0] ? b : null;
+  if (winner === null) { const w = two.find((pl) => ability(pl)?.winsTiedClash); if (w) winner = w.id; }
   log(s, null, `Clash! ${names.join(' vs ')} — ${winner === null ? 'no winner' : `${s.players[winner].name} wins`}.`, 'Clash: each hero reveals the top card of their deck. The hero who revealed the card with the greatest {p} wins.');
-  if (winner !== null) s.players[winner].turn.clashesWon = (s.players[winner].turn.clashesWon ?? 0) + 1;
+  if (winner !== null) {
+    s.players[winner].turn.clashesWon = (s.players[winner].turn.clashesWon ?? 0) + 1;
+    if (s.players[s.turnPlayer].turn.flags.clashDraw) draw(s, s.players[winner], 1); // Big Hits, Big Applause
+  }
   return winner;
 }
 
@@ -996,6 +1262,7 @@ function createToken(s: GameState, p: PlayerState, name: string, amount: number)
   }
   const ab = ability(p);
   if (ab?.tokenCount) amount = ab.tokenCount(heroCtx(s, p), t, amount);
+  if (s.players[s.turnPlayer].turn.flags.tremor && amount > 0) amount += 1; // Tremor of Anticipation
   for (let i = 0; i < amount; i++) {
     const inst = mk(s, t.id, p.id);
     p.permanents.push({ inst, ward: getScript(t).ward });
@@ -1316,7 +1583,12 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   }
   for (let i = 0; i < (sc.additionalCost.handToBottom ?? 0); i++) {
     // the player picks the card (optional.uid); otherwise the least useful one: the lowest pitch-and-power card
-    const pick = p.hand.find((h) => h.uid === optional?.uid) ?? [...p.hand].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
+    const chosen = p.hand.find((h) => h.uid === optional?.uid);
+    if (!chosen && !p.isBot && p.hand.length > 1) {
+      ask(s, { player: pid, kind: 'pick', prompt: `${c.name}: as an additional cost, put a card from your hand on the bottom of your deck.`, confirm: 'Put it on the bottom', options: p.hand.map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'handToBottom' } });
+      continue;
+    }
+    const pick = chosen ?? [...p.hand].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
     if (pick) { removeFrom(p.hand, pick.uid); p.deck.push(pick); log(s, pid, `${p.name} puts a card from their hand on the bottom of their deck.`); }
   }
   for (let i = 0; i < (sc.additionalCost.banishRandomHand ?? 0); i++) {
@@ -1569,6 +1841,14 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     ask(s, { player: p.id, kind: 'target', prompt: `What does ${c.name} attack?`, options: [...heroes, ...targets.map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'attackTarget', link: s.chain.length - 1 } });
   }
   p.turn.attacks += 1;
+  if (link.defender !== undefined && p.drinkFrom === link.defender) { link.powerMod -= 2; log(s, p.id, `${c.name} gets -2{p} (Let Me Buy You a Drink).`); }
+  if (p.turn.flags.anyTargetNext) p.turn.flags.anyTarget = p.turn.flags.anyTargetNext = 0; // Crowd Roars Fight!: only this attack
+  if (link.defender !== undefined && p.turn.flags.ezSqeez) addWager(s, p, s.chain.length - 1, ['Gold', 'Gold']);
+  if (link.defender !== undefined && p.turn.flags.winnerTakesAll) {
+    createToken(s, p, 'Gold', 1); createToken(s, s.players[link.defender], 'Gold', 1);
+    addWager(s, p, s.chain.length - 1, []);
+    link.wagers![link.wagers!.length - 1].goldSwap = true;
+  }
   if (s.players.length > 2 && link.defender !== undefined) { const d = s.players[link.defender]; (d.attackedBy ??= {})[p.id] = (d.attackedBy[p.id] ?? 0) + 1; }
   if (fromWeapon) p.turn.weaponAttacked = true;
   const target = s.players[link.defender];
@@ -1579,6 +1859,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   p.effects = p.effects.filter((e) => {
     if (e.kind === 'nextAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return false; }
     if (e.kind === 'nextAttackGoAgain' && matchesFilter(e.filter, link)) { link.goAgain = true; return false; }
+    if (e.kind === 'nextAttackDominate') { link.dominate = true; return false; }
+    if (e.kind === 'nextAttackGoldPower') { const g = p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold').length; link.powerMod += g; if (g) log(s, p.id, `${c.name} gets +${g}{p} for ${p.name}'s Gold (${e.source}).`); return false; }
     if (e.kind === 'nextAttackOnHit' && matchesFilter(e.filter, link)) { link.extraOnHit = [...link.extraOnHit, ...e.effects]; return false; }
     if (e.kind === 'nextAttackOnAttack' && matchesFilter(e.filter, link)) { grantedOnAttack.push(...e.effects); return false; }
     return true;
@@ -1705,6 +1987,10 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     const oc = getScript(cardOf(x.inst)).optional;
     if (!oc || oc.timing !== 'defend') throw new Error(`${cardOf(x.inst).name} has no defend option.`);
     let used: Card | null = null;
+    if ((oc.cost.kind === 'handToBottom') && !d.isBot && d.hand.length + d.arsenal.length > 0) {
+      ask(s, { player: d.id, kind: 'pick', prompt: `${cardOf(x.inst).name}: put a card from your hand or arsenal on the bottom of your deck to ${oc.effectText}? Pick one, or skip.`, confirm: 'Put it on the bottom', skippable: true, options: [...d.hand, ...d.arsenal].map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'defendCost', uid: x.inst.uid } });
+      continue;
+    }
     if (oc.cost.kind !== 'pay') {
       if (!optionalPayable(d, oc, x.inst.uid)) { log(s, d.id, `${cardOf(x.inst).name}: nothing left to pay with, so its ability isn't used.`); continue; }
       used = payOptional(s, d, oc, { accept: true }, x.inst.uid);
@@ -1811,7 +2097,8 @@ function resolveDamage(s: GameState) {
     if (s.phase === 'gameOver' || !s.chain.includes(l)) return;
   }
   const def = linkDefense(l);
-  const raw = Math.max(0, power - def);
+  let raw = Math.max(0, power - def);
+  if (raw > 0 && raw < 4 && attacker.turn.flags.crushingImpact) { attacker.turn.flags.crushingImpact = 0; raw = 4; log(s, attacker.id, 'Crushing Impact: the damage becomes 4.'); }
   const allyTarget = l.target !== undefined && defender.permanents.some((pm) => pm.inst.uid === l.target);
   const dealt = raw <= 0 ? 0 : allyTarget ? damageAlly(s, defender, l.target!, raw, cardOf(l.inst).name) : dealDamage(s, defender.id, raw, false, cardOf(l.inst).name, l.unpreventable);
   l.hit = dealt > 0;
@@ -1878,6 +2165,7 @@ function closeChain(s: GameState) {
     const e = s.players[d.inst.owner].equipment.find((x) => x.inst.uid === d.inst.uid);
     if (e && !e.destroyed) { e.defenseMod -= equipDefense(e); log(s, d.inst.owner, `${cardOf(e.inst).name} (guardwell) loses its defense.`); }
   }
+  for (const pl of s.players) for (const e of pl.equipment) if (!e.destroyed && pl.turn.flags[`closeDestroy${e.inst.uid}`]) { e.destroyed = true; pl.turn.flags[`closeDestroy${e.inst.uid}`] = 0; log(s, pl.id, `${cardOf(e.inst).name} is destroyed as the combat chain closes.`); }
   if (s.chain.length) log(s, null, 'The combat chain closes.', RULES.chainClose);
   s.chain = [];
   s.chainOpen = false;
@@ -1917,7 +2205,9 @@ function doArsenal(s: GameState, uid: number | null) {
 function endTurn(s: GameState) {
   const p = s.players[s.turnPlayer];
   // quelled equipment is destroyed at the beginning of the end phase; stolen cards go home
+  { const tp = s.players[s.turnPlayer]; if (tp.turn.flags.ire && tp.turn.attackActionHits + tp.turn.weaponHits === 0) { tp.life -= 2; log(s, tp.id, `Ire of the Crowd: ${tp.name} didn't hit a hero this turn and loses 2 life (${tp.life}).`); checkWin(s); if (s.phase === 'gameOver') return; } }
   for (const w of s.players[s.turnPlayer].weapons) if (getScript(cardOf(w.inst)).secondHitCounter && w.counters && !s.players[s.turnPlayer].turn.flags[`hits${w.inst.uid}`]) { w.counters = 0; log(s, s.turnPlayer, `${cardOf(w.inst).name} didn't hit this turn: its +1{p} counters are removed.`); }
+  { const tp = s.players[s.turnPlayer]; for (const pm of [...tp.permanents]) if (getScript(cardOf(pm.inst)).destroyAtEnd) removePermanent(s, tp, pm.inst.uid); }
   for (const e of s.players[s.turnPlayer].equipment) if (!e.destroyed && getScript(cardOf(e.inst)).endPhaseWear) { e.defenseMod -= 1; log(s, s.turnPlayer, `${cardOf(e.inst).name} gets a -1{d} counter (${equipDefense(e)}).`); }
   for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
@@ -1951,7 +2241,8 @@ function endTurn(s: GameState) {
   if (p.deck.length === 0 && p.hand.length === 0 && p.arsenal.length === 0) {
     log(s, p.id, `${p.name} has no cards left.`);
   }
-  s.turnPlayer = nextAlive(s, s.turnPlayer);
+  if (s.extraTurn === s.turnPlayer && !p.eliminated) { s.extraTurn = undefined; log(s, p.id, `${p.name} takes an extra turn (Code of Conduct).`); }
+  else s.turnPlayer = nextAlive(s, s.turnPlayer);
   s.turn += 1;
   const outOfCards = (pl: PlayerState) => pl.deck.length + pl.hand.length + pl.arsenal.length === 0;
   if (s.turn > MAX_TURNS || alivePlayers(s).every(outOfCards)) {
@@ -2021,6 +2312,16 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
     dmg -= prevented;
     e.quelled = true;
     log(s, target, `${p.name} pays ${q} for ${cardOf(e.inst).name} (quell): ${prevented} damage prevented.`, 'Quell N: if you would be dealt damage, you may pay N resources to prevent N of it. If you do, destroy this at the beginning of the end phase.');
+  }
+  // "If you would be dealt damage, you may banish this to prevent N of that damage" (always worth it)
+  for (const e of [...p.equipment]) {
+    const bp = getScript(cardOf(e.inst)).banishPrevent;
+    if (!bp || e.destroyed || dmg <= 0) continue;
+    p.equipment = p.equipment.filter((x) => x !== e);
+    p.banished.push(e.inst);
+    const prevented = Math.min(bp, dmg);
+    dmg -= prevented;
+    log(s, target, `${p.name} banishes ${cardOf(e.inst).name} to prevent ${prevented} damage.`);
   }
   // ward
   for (const pm of [...p.permanents]) {
@@ -2124,9 +2425,11 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         for (const x of top) { const k = cardOf(x).name; groups.set(k, [...(groups.get(k) ?? []), x]); }
         const best = [...groups.values()].sort((a, b) => b.length - a.length || powerOf(cardOf(b[0])) - powerOf(cardOf(a[0])))[0];
         if (!best) break;
-        t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !best.includes(x)));
-        t.banished.push(...best);
-        log(s, p.id, `${srcName}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${best.length} ${cardOf(best[0]).name}.`);
+        if (!p.isBot) {
+          ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length} cards of ${t.name}'s deck. Pick a card: every card with its name is banished, the rest stay on top.`, confirm: 'Banish these', options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'cleanse', target: t.id, n: e.n } });
+          break;
+        }
+        cleanseName(s, p, t, e.n, cardOf(best[0]).name, srcName);
         break;
       }
       case 'oppDraw': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); break; }
@@ -2138,6 +2441,31 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       }
       case 'optDealt': if (p.turn.flags.lastArcane) resolveEffects(s, p, [{ kind: 'opt', amount: p.turn.flags.lastArcane }], src); break;
+      case 'banishDefender': {
+        if (!l) break;
+        const t = s.players[defenderOf(l)];
+        const x = [...l.defenders].filter((d) => d.kind !== 'equipment').sort((a, b) => b.defense - a.defense)[0];
+        if (!x) break;
+        l.defenders = l.defenders.filter((d) => d !== x);
+        (s.players[x.inst.owner] ?? t).banished.push(x.inst);
+        log(s, p.id, `${srcName}: ${cardOf(x.inst).name} is banished.`);
+        banishedFromOpp(s, p, x.inst);
+        break;
+      }
+      case 'destroyIntimidated': {
+        const t = l ? s.players[defenderOf(l)] : opp;
+        const x = t.intimidated.shift();
+        if (x) { toGraveyard(t, x); log(s, p.id, `${srcName}: ${cardOf(x).name} (intimidated) is destroyed.`); }
+        break;
+      }
+      case 'destroyAtChainClose': { const eq = p.equipment.find((x) => x.inst.uid === src.uid); if (eq) { p.turn.flags[`closeDestroy${src.uid}`] = 1; log(s, p.id, `${srcName} will be destroyed when the combat chain closes.`); } break; }
+      case 'payOrWeaken': {
+        if (!l || l.inst.uid !== src.uid) break;
+        if (!p.isBot) { ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: pay ${e.cost} or it gets -${e.amount}{p}?`, options: [], resume: { type: 'event', key: 'payOrWeaken', data: [s.chain.indexOf(l), e.amount, e.cost] } }); break; }
+        if (availableResources(p) >= e.cost && (p.resources >= e.cost || e.amount >= 2)) { pay(s, p, e.cost, autoPitch(p, Math.max(0, e.cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${e.cost} for ${srcName}.`); }
+        else { l.powerMod -= e.amount; log(s, p.id, `${srcName} gets -${e.amount}{p} (${linkPower(l)}).`); }
+        break;
+      }
       case 'runechantsPerNonAttack': {
         const n = p.turn.played.filter((id) => { const c = card(id); return has(c, 'Action') && !has(c, 'Attack'); }).length;
         if (n) createToken(s, p, 'Runechant', n);
@@ -2172,7 +2500,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
       case 'banishTopOpp':
-        for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); } }
+        for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
         break;
       case 'oppDiscardRandom':
         for (let i = 0; i < e.amount; i++) {
@@ -2188,6 +2516,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           const d = opp.hand.splice(Math.floor(rand(s) * opp.hand.length), 1)[0];
           opp.intimidated.push(d);
           log(s, opp.id, `Intimidate: a random card from ${opp.name}'s hand is banished until end of turn.`, RULES.intimidate);
+          banishedFromOpp(s, p, d);
         }
         break;
       case 'opt': {
@@ -2380,6 +2709,7 @@ function eliminate(s: GameState, p: PlayerState) {
   if (s.players.length === 2) { endGame(s, other(p.id)); return; }
   p.eliminated = true;
   (s.knockedOut ??= []).push(p.id);
+  if (s.players[s.turnPlayer].turn.flags.killOrBeKilled && s.turnPlayer !== p.id) s.extraTurn = s.turnPlayer;
   log(s, p.id, `${p.name} is knocked out!`);
   if (s.pendingChoices) { s.pendingChoices = s.pendingChoices.filter((c) => c.player !== p.id); if (!s.pendingChoices.length) s.pendingChoices = undefined; }
   const left = alivePlayers(s);
@@ -2424,6 +2754,9 @@ export function pendingEffectsText(p: PlayerState): string[] {
     if (e.kind === 'nextAttackOnAttack') return `Next ${describeFilter(e.filter)} gets an on-attack effect (${e.source})`;
     if (e.kind === 'nextWagerPower') return `Next attack that wagers +${e.amount} power (${e.source})`;
     if (e.kind === 'nextAttackOnHit') return `Next ${describeFilter(e.filter)} gets an on-hit effect (${e.source})`;
+    if (e.kind === 'nextAttackDominate') return `Next attack gets dominate (${e.source})`;
+    if (e.kind === 'nextAttackGoldPower') return `Next attack +1 power for each Gold you control (${e.source})`;
+    if (e.kind === 'costLess') return `Next ${describeFilter(e.filter)} costs ${e.amount} less (${e.source})`;
     return `Prevent next ${e.amount} damage (${e.source})`;
   });
 }

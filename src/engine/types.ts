@@ -55,7 +55,10 @@ export type TurnEffect =
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }
   /** "your next Guardian attack action card this turn costs {r} less" (Seismic Surge) */
-  | { kind: 'costLess'; amount: number; filter: AttackFilter; source: string };
+  | { kind: 'costLess'; amount: number; filter: AttackFilter; source: string }
+  | { kind: 'nextAttackDominate'; source: string }
+  /** the next attack gets +X{p} when it attacks, X = Gold you control (Benefactor of Bloodworth Goldmane) */
+  | { kind: 'nextAttackGoldPower'; source: string };
 
 export interface PlayerState {
   id: PlayerId;
@@ -86,6 +89,8 @@ export interface PlayerState {
   redirectTo?: PlayerId;
   /** extra intellect until the end of this player's next turn (The Librarian) */
   bonusIntellect?: number;
+  /** Let Me Buy You a Drink: this player's attacks on `from` get -2{p} until the start of `from`'s next turn */
+  drinkFrom?: PlayerId;
   /** Pit Fight memory for the bots: how much each opponent has attacked this player lately */
   attackedBy?: Partial<Record<PlayerId, number>>;
   /** penalties for this player's next turn (Crush cards): applied at the start of it */
@@ -157,7 +162,7 @@ export interface ChainLink {
   reactionCount?: number; // attack reactions played on this link
   destination?: 'soul' | 'deckBottom' | 'hand';
   /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
-  wagers?: { tokens: string[]; winnerDraw?: number }[];
+  wagers?: { tokens: string[]; winnerDraw?: number; goldSwap?: boolean }[];
   noDefenseReactions?: boolean;
   /** the defending hero (in a two-player game, the attacker's opponent) */
   defender?: PlayerId;
@@ -194,7 +199,13 @@ export interface LogEntry {
 /** A decision a player makes in the middle of an effect: which cards to keep on top (opt), what to reload, or yes/no. */
 export interface PendingChoice {
   player: PlayerId;
-  kind: 'opt' | 'reload' | 'yesno' | 'target';
+  kind: 'opt' | 'reload' | 'yesno' | 'target' | 'pick';
+  /** pick: the confirm button's label, whether it can be skipped, and what a bot picks (null: skip) */
+  confirm?: string;
+  skippable?: boolean;
+  botPick?: number | null;
+  /** pick: any number of the options */
+  multi?: boolean;
   prompt: string;
   /** the cards involved (opt: the top of your deck; reload: your hand) */
   options: { uid: number; cardId: string }[];
@@ -206,7 +217,19 @@ export interface PendingChoice {
     | { type: 'attackTarget'; link: number }
     | { type: 'damageTarget'; amount: number; arcane: boolean; source: string }
     /** a hero ability's "you may": answered by `owner`'s ability (onChoice); bots answer `botYes` */
-    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean };
+    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean }
+    /** "put a card from your hand on the bottom of your deck" as an additional cost (Enlightened Strike) */
+    | { type: 'handToBottom' }
+    /** a defending card's "you may put a card ... on the bottom. If you do, ..." (Crown of Providence) */
+    | { type: 'defendCost'; uid: number }
+    /** Righteous Cleansing: banish the cards named like the pick from the top of `target`'s deck */
+    | { type: 'cleanse'; target: PlayerId; n: number }
+    /** protect `link` with the picked card (skip: don't) */
+    | { type: 'protect'; link: number }
+    /** Kox: the top of the event deck in the order picked (unpicked ones after) */
+    | { type: 'eventOrder' }
+    /** a choice an event card asks for (see resolveEventChoice) */
+    | { type: 'event'; key: string; data?: number[] };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
@@ -216,6 +239,13 @@ export interface GameState {
   sharedZones?: boolean;
   /** Pit Fight: the order heroes were knocked out (first out first) */
   knockedOut?: PlayerId[];
+  /** Smash Palace event deck (card ids): the turn player reveals the top card at the start of each turn */
+  eventDeck?: string[];
+  eventDiscard?: string[];
+  /** the event revealed this turn */
+  lastEvent?: string;
+  /** Code of Conduct: this player takes another turn after this one */
+  extraTurn?: PlayerId;
   seed: number;
   nextUid: number;
   turn: number;

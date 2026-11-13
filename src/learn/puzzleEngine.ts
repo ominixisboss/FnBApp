@@ -57,6 +57,7 @@ export function candidateActions(s: GameState): Action[] {
     if (pc.player !== 0) return [];
     if (pc.kind === 'yesno') return [{ type: 'choose', yes: true }, { type: 'choose', yes: false }];
     if (pc.kind === 'target') return pc.options.map((o) => ({ type: 'choose' as const, picks: [o.uid] }));
+    if (pc.kind === 'pick') return [...pc.options.map((o) => ({ type: 'choose' as const, picks: [o.uid] })), ...(pc.skippable ? [{ type: 'choose' as const, picks: [] }] : [])];
     if (pc.kind === 'reload') return [...pc.options.map((o) => ({ type: 'choose' as const, picks: [o.uid] })), { type: 'choose', picks: [] }];
     return [{ type: 'choose', picks: pc.options.map((o) => o.uid) }, { type: 'choose', picks: [] }];
   }

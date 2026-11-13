@@ -202,7 +202,7 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     }
     if (path === '/api/tournaments' && req.method === 'POST') {
       const { name, format, usernames } = (await readBody(req)) as { name?: string; format?: string; usernames?: string[] };
-      const fmt = ['blitz', 'cc', 'll', 'sage', 'commoner', 'casual'].includes(String(format)) ? String(format) : 'blitz';
+      const fmt = ['blitz', 'cc', 'll', 'sage', 'commoner', 'upf', 'casual'].includes(String(format)) ? String(format) : 'blitz';
       const friendIds = new Set((await store.friends(user.id)).map((f) => f.id));
       const players = [{ id: user.id, username: user.username, name: user.username }];
       for (const u of (Array.isArray(usernames) ? usernames : []).slice(0, 7)) {
@@ -211,9 +211,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string) {
         players.push({ id: row.id, username: row.username, name: row.username });
       }
       if (players.length < 2) return json(res, 400, { error: 'Add at least one friend.' });
+      const pitCup = fmt === 'upf';
+      if (pitCup && (players.length < 3 || players.length > 4)) return json(res, 400, { error: 'A Pit Fight cup is for 3 or 4 players: add 2 or 3 friends.' });
       const games: FriendTournament['games'] = [];
-      for (let i = 0; i < players.length; i++) for (let j = i + 1; j < players.length; j++) games.push({ a: players[i].id, b: players[j].id });
-      const t: FriendTournament = { id: randomBytes(6).toString('hex'), name: String(name ?? 'Friend cup').slice(0, 40) || 'Friend cup', format: fmt, owner: user.id, created: Date.now(), players, games };
+      if (!pitCup) for (let i = 0; i < players.length; i++) for (let j = i + 1; j < players.length; j++) games.push({ a: players[i].id, b: players[j].id });
+      const t: FriendTournament = { id: randomBytes(6).toString('hex'), name: String(name ?? 'Friend cup').slice(0, 40) || 'Friend cup', format: fmt, owner: user.id, created: Date.now(), players, games, ...(pitCup ? { pit: { rounds: 3, results: [] } } : {}) };
       await store.putTournament(t.id, players.map((p) => p.id), JSON.stringify(t));
       for (const p of players) if (p.id !== user.id) void pushNotify(p.id, '🏆 Friend cup', `${user.username} added you to “${t.name}”. Challenge your opponents to play your games.`, '/#cups');
       return json(res, 200, t);

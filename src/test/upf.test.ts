@@ -63,3 +63,21 @@ describe('Ultimate Pit Fight', () => {
     expect(1).toBe(tryAttack((s) => { s.players[1].life = 30; s.players[3].life = 18; s.players[3].hand = s.players[3].hand.slice(0, 1); }));
   });
 });
+
+describe('Mythic bot at a Pit Fight table', () => {
+  it('values knocking opponents out and outlasting them, and plays a 3-player game to the end', async () => {
+    const { evaluate } = await import('../ai/mythic');
+    const s = pod(3, 7);
+    const base = evaluate(s, 0);
+    const oneOut = structuredClone(s); oneOut.players[1].eliminated = true; oneOut.knockedOut = [1];
+    expect(evaluate(oneOut, 0)).toBeGreaterThan(base);
+    const firstOut = structuredClone(s); firstOut.players[0].eliminated = true; firstOut.knockedOut = [0];
+    const secondOut = structuredClone(s); secondOut.players[0].eliminated = secondOut.players[1].eliminated = true; secondOut.knockedOut = [1, 0];
+    expect(evaluate(secondOut, 0)).toBeGreaterThan(evaluate(firstOut, 0));
+    // a Mythic bot in seat 0 finishes a game without errors
+    let g = pod(3, 8);
+    g.players[0].difficulty = 'mythic';
+    for (let i = 0; i < 6000 && g.phase !== 'gameOver'; i++) { const who = g.pendingChoices?.[0]?.player ?? g.pendingTriggers?.player ?? g.priority; g = applyAction(g, chooseAction(g, who, who === 0 ? 'mythic' : 'normal').action); }
+    expect(g.phase).toBe('gameOver');
+  }, 300_000);
+});

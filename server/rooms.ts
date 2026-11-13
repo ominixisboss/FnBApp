@@ -17,7 +17,7 @@ import { createPod, joinPod, leavePod, pick as podPick, podDeck, startPod, submi
 import type { PodView } from './pods';
 
 export type ClientMsg =
-  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number }
+  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number; events?: boolean }
   | { t: 'fillBots' }
   | { t: 'join'; code: string; deck: DeckList }
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
@@ -35,6 +35,8 @@ export type ClientMsg =
   | { t: 'challenge'; to: string; deck: DeckList; format: DeckFormat }
   | { t: 'decline'; code: string }
   | { t: 'spectate'; username: string }
+  | { t: 'spectateSeat'; seat: number }
+  | { t: 'invite'; to: string }
   | { t: 'unspectate' };
 
 export type ServerMsg =
@@ -49,7 +51,7 @@ export type ServerMsg =
   | { t: 'declined'; by: string }
   | { t: 'rated'; before: number; after: number; season?: string; format?: string }
   | { t: 'pod'; pod: PodView | null }
-  | { t: 'spectate'; state: GameState; names: [string, string]; watching: string }
+  | { t: 'spectate'; state: GameState; names: [string, string]; watching: string; seats?: string[]; seat?: number }
   | { t: 'spectateEnd' };
 
 /** The emotes players can send in online games. */
@@ -81,6 +83,8 @@ interface Room {
   seats: Seat[];
   /** players at the table: 2, or 3-4 in Ultimate Pit Fight */
   size: number;
+  /** Smash Palace event deck */
+  events?: boolean;
   /** Pit Fight queue: when the waiting players get bots and start */
   fillTimer?: ReturnType<typeof setTimeout>;
   /** a bot's next move is scheduled */
@@ -154,7 +158,7 @@ function seatOf(room: Room, userId: number): number {
 function broadcast(room: Room) {
   if (!room.state) return;
   for (const sp of room.spectators ?? []) {
-    send(sp.ws, { t: 'spectate', state: viewFor(room.state, sp.seat), names: [room.seats[sp.seat].name, room.seats[(sp.seat + 1) % room.seats.length]?.name ?? '?'], watching: room.seats[sp.seat].name });
+    send(sp.ws, spectateMsg(room, sp.seat));
   }
   const n = room.seats.length;
   const info = (x: Seat): SeatInfo => ({ name: x.name, avatar: x.avatar, connected: !!x.ws || !!x.bot, bot: !!x.bot });
@@ -249,7 +253,9 @@ function saveReplay(room: Room) {
 
 /** A finished online game between two members of a friend tournament fills in their open game there. */
 async function tournamentResult(room: Room) {
-  if (!room.state || room.state.winner === null || room.seats.length !== 2) return;
+  if (!room.state || room.state.winner === null) return;
+  if (room.seats.length > 2) return pitCupResult(room);
+  if (room.seats.length !== 2) return;
   const [a, b] = room.seats.map((x) => x.userId);
   const winner = room.seats[room.state.winner].userId;
   for (const raw of await store.tournamentsFor(a)) {
@@ -268,6 +274,24 @@ export interface FriendTournament {
   id: string; name: string; format: string; owner: number; created: number;
   players: { id: number; username: string; name: string }[];
   games: { a: number; b: number; winner?: number; matchId?: string }[];
+  /** Pit Fight cup: every round is one table with all the players; points by finishing place */
+  pit?: { rounds: number; results: { order: number[]; matchId: string }[] };
+}
+
+/** A finished Pit Fight table with exactly a Pit Fight cup's players fills in that cup's next round. */
+async function pitCupResult(room: Room) {
+  const humans = room.seats.filter((x) => !x.bot).map((x) => x.userId);
+  if (humans.length < 3) return;
+  const order = placements(room.state!).map((seat) => room.seats[seat]).filter((x) => !x.bot).map((x) => x.userId);
+  for (const raw of await store.tournamentsFor(humans[0])) {
+    const t = JSON.parse(raw) as FriendTournament;
+    if (!t.pit || t.pit.results.length >= t.pit.rounds) continue;
+    const ids = t.players.map((p) => p.id);
+    if (ids.length !== humans.length || !ids.every((id) => humans.includes(id))) continue;
+    t.pit.results.push({ order, matchId: `online-${room.code}` });
+    await store.putTournament(t.id, ids, JSON.stringify(t));
+    return;
+  }
 }
 
 function finish(room: Room) {
@@ -283,7 +307,7 @@ function finish(room: Room) {
 function start(room: Room) {
   if (room.fillTimer) clearTimeout(room.fillTimer);
   if (queues.get(queueKey(room.format)) === room) queues.delete(queueKey(room.format));
-  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format);
+  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format, undefined, { events: !!room.events });
   room.initial = room.state;
   room.actions = [];
   broadcast(room);
@@ -337,6 +361,10 @@ function runBots(room: Room) {
 function afterAction(room: Room) {
   if (room.state!.phase === 'gameOver') finish(room);
   else { broadcast(room); runBots(room); }
+}
+
+function spectateMsg(room: Room, seat: PlayerId): ServerMsg {
+  return { t: 'spectate', state: viewFor(room.state!, seat), names: [room.seats[seat].name, room.seats[(seat + 1) % room.seats.length]?.name ?? '?'], watching: room.seats[seat].name, seats: room.seats.map((x) => x.name), seat };
 }
 
 /** Tell everyone in a room that is still filling up who has joined. */
@@ -434,7 +462,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           return;
         }
       }
-      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox };
+      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox, events: msg.t === 'host' && format === 'upf' && !!(msg as { events?: boolean }).events };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       if (msg.t === 'queue') queues.set(queueKey(format), room);
@@ -599,7 +627,37 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
       for (const r of rooms.values()) if (r.spectators) r.spectators = r.spectators.filter((sp) => sp.ws !== ws);
       const seat = seatOf(room, target.id) as PlayerId;
       (room.spectators ??= []).push({ ws, seat });
-      send(ws, { t: 'spectate', state: viewFor(room.state, seat), names: [room.seats[seat].name, room.seats[(seat + 1) % room.seats.length].name], watching: room.seats[seat].name });
+      send(ws, spectateMsg(room, seat));
+      return;
+    }
+    case 'spectateSeat': {
+      // Pit Fight: watch the table from another player's seat (only what that player sees)
+      for (const r of rooms.values()) {
+        const sp = r.spectators?.find((x) => x.ws === ws);
+        if (!sp || !r.state) continue;
+        const seat = Number(msg.seat);
+        if (!Number.isInteger(seat) || seat < 0 || seat >= r.seats.length) return err('No such seat.');
+        sp.seat = seat as PlayerId;
+        send(ws, spectateMsg(r, sp.seat));
+        return;
+      }
+      return err('You aren’t watching a game.');
+    }
+    case 'invite': {
+      // the host of a room that is still filling up invites a friend to it
+      const room = current ? rooms.get(current) : undefined;
+      if (!room || room.state || room.ended || !room.isPrivate || room.seats[0].userId !== user.id) return err('Create a room first, then invite friends to it.');
+      if (room.seats.length >= room.size) return err('Your room is full.');
+      const target = await store.userByName(String(msg.to ?? ''));
+      if (!target) return err('No player with that name.');
+      if (!(await store.friends(user.id)).some((f) => f.id === target.id)) return err('You can only invite friends.');
+      if (room.seats.some((x) => x.userId === target.id)) return err(`${target.username} is already at your table.`);
+      if (presence(target.id) === 'in-game') return err(`${target.username} is in a game.`);
+      const p = await profileOf(user.id, user.username);
+      const ch = { from: p.name, username: user.username, code: room.code, format: room.format };
+      send(sockets.get(target.id) ?? null, { t: 'challenged', ...ch });
+      pendingChallenge.set(target.id, ch);
+      void pushNotify(target.id, '⚔ Pit Fight!', `${p.name} invites you to their ${formatName(room.format)} table.`, '/#play/online');
       return;
     }
     case 'unspectate': {

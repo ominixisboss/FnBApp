@@ -1,6 +1,6 @@
 // "Mythic" bot: for each sensible move, play out many possible futures (with the hidden cards reshuffled each
 // time, so it can't cheat) using the Hard bot for both players, and pick the move that does best on average.
-import { applyAction, autoPitch, checkDefense, defendOptions, oppOf, playOptions } from '../engine/game';
+import { alivePlayers, applyAction, autoPitch, checkDefense, defendOptions, oppOf, playOptions } from '../engine/game';
 import type { Action, GameState, PlayerId } from '../engine/types';
 import { chooseAction, decideOptional } from './bot';
 import type { BotDecision } from './bot';
@@ -40,18 +40,31 @@ const CARD_WEIGHT = 2;
 const MARGIN = 1.5;
 /** How good a position is for `pid` (life, cards and the end of the game). */
 export function evaluate(s: GameState, pid: PlayerId): number {
-  if (s.phase === 'gameOver') return s.winner === pid ? 100 : -100;
-  const me = s.players[pid], op = s.players[oppOf(s, pid)];
+  const me = s.players[pid];
   const cards = (p: typeof me) => p.hand.length + p.arsenal.length;
-  return me.life - op.life + CARD_WEIGHT * (cards(me) - cards(op));
+  if (s.players.length <= 2) {
+    if (s.phase === 'gameOver') return s.winner === pid ? 100 : -100;
+    const op = s.players[oppOf(s, pid)];
+    return me.life - op.life + CARD_WEIGHT * (cards(me) - cards(op));
+  }
+  // Pit Fight: outlasting matters most. Knocked out: worse the earlier it happened; otherwise my life and
+  // cards against the average opponent still standing, plus a bonus for every opponent already out.
+  if (s.phase === 'gameOver' && s.winner === pid) return 100;
+  if (me.eliminated || s.phase === 'gameOver') return -100 + 25 * (s.knockedOut ?? []).indexOf(pid);
+  const rivals = alivePlayers(s).filter((p) => p.id !== pid);
+  const avg = rivals.reduce((a, p) => a + p.life + CARD_WEIGHT * cards(p), 0) / Math.max(1, rivals.length);
+  return me.life + CARD_WEIGHT * cards(me) - avg + 15 * (s.players.length - 1 - rivals.length);
 }
+
+/** Whoever must act: the player making a choice or ordering triggers, else the one with priority. */
+const actor = (t: GameState): PlayerId => t.pendingChoices?.[0]?.player ?? t.pendingTriggers?.player ?? t.priority;
 
 function rollout(s: GameState, pid: PlayerId, first: Action, horizon: number): number {
   let t: GameState;
   try { t = applyAction(s, first); } catch { return -999; }
   for (let i = 0; i < 400 && t.phase !== 'gameOver' && t.turn < horizon; i++) {
     let a: Action;
-    try { a = chooseAction(t, t.priority, 'hard').action; } catch { a = { type: 'pass' }; }
+    try { a = chooseAction(t, actor(t), 'hard').action; } catch { a = { type: 'pass' }; }
     try { t = applyAction(t, a); } catch { try { t = applyAction(t, { type: 'pass' }); } catch { break; } }
   }
   return evaluate(t, pid);
@@ -90,7 +103,8 @@ export function chooseMythic(s: GameState, pid: PlayerId, budgetMs = 900): BotDe
   if (!((s.phase === 'action' && !s.stack?.length && s.turnPlayer === pid) || s.phase === 'defend')) return hard;
   const cands = candidates(s, pid, hard.action);
   if (cands.length <= 1) return hard;
-  const horizon = s.turn + 2;
+  // look a full round of the table ahead (two turns one-on-one)
+  const horizon = s.turn + Math.max(2, alivePlayers(s).length);
   const stats = cands.map(() => ({ sum: 0, n: 0 }));
   const r = rng(s.seed ^ (s.turn * 7919) ^ (s.log.length * 104729));
   const deadline = Date.now() + budgetMs;

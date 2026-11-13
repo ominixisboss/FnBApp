@@ -32,7 +32,7 @@ export interface OnlineState {
   /** everyone at the table, starting with you (Ultimate Pit Fight) */
   players: { name: string; avatar: string | null; connected: boolean; bot: boolean }[] | null;
   /** watching a friend's game */
-  spectating: { state: GameState; names: [string, string]; watching: string } | null;
+  spectating: { state: GameState; names: [string, string]; watching: string; seats?: string[]; seat?: number } | null;
 }
 
 let ws: WebSocket | null = null;
@@ -62,7 +62,7 @@ function connect() {
       case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
       case 'pod': set({ pod: msg.pod }); break;
       case 'rated': set({ rated: { before: msg.before, after: msg.after, season: msg.season, format: msg.format } }); break;
-      case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching }, error: null }); break;
+      case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching, seats: msg.seats, seat: msg.seat }, error: null }); break;
       case 'spectateEnd': set({ spectating: null }); break;
       case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null, table: null, players: msg.players ?? null }); break;
       case 'opponent': if (state.opponent) set({ opponent: { ...state.opponent, connected: msg.connected } }); break;
@@ -94,7 +94,7 @@ export const online = {
     ws?.close();
     set({ status: 'offline', game: null, code: null, opponent: null });
   },
-  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number) => sendMsg({ t: 'host', deck, format, sandbox, size }),
+  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number, events?: boolean) => sendMsg({ t: 'host', deck, format, sandbox, size, events }),
   /** Ultimate Pit Fight: start now, with bots in the empty seats */
   fillBots: () => sendMsg({ t: 'fillBots' }),
   queue: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'queue', deck, format }),
@@ -114,6 +114,10 @@ export const online = {
   podPlay: (opponent: string) => sendMsg({ t: 'podPlay', opponent }),
   accept: (deck: DeckList) => { const c = state.challenge; if (c) { sendMsg({ t: 'join', code: c.code, deck }); set({ challenge: null }); } },
   spectate: (username: string) => sendMsg({ t: 'spectate', username }),
+  /** Pit Fight: watch from another seat */
+  spectateSeat: (seat: number) => sendMsg({ t: 'spectateSeat', seat }),
+  /** invite a friend to the room you're hosting */
+  invite: (username: string) => sendMsg({ t: 'invite', to: username }),
   unspectate: () => { sendMsg({ t: 'unspectate' }); set({ spectating: null }); },
   decline: () => { const c = state.challenge; if (c) { sendMsg({ t: 'decline', code: c.code }); set({ challenge: null }); } },
   /** after a finished game, go back to the lobby */

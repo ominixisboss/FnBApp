@@ -198,6 +198,47 @@ describe('online play', () => {
     cs.forEach((c) => c.ws.close());
   }, 120_000);
 
+  it('Pit Fight with friends: invites, a spectator switching seats, and a Pit Fight cup that fills in', async () => {
+    const names = ['cupa', 'cupb', 'cupc', 'cupw'];
+    const accts = await Promise.all(names.map((n) => account(n)));
+    const H = (t: string) => ({ 'content-type': 'application/json', authorization: `Bearer ${t}` });
+    for (const [i, j] of [[0, 1], [0, 2], [3, 0], [1, 0], [2, 0], [0, 3]]) await fetch(`${BASE}/api/friends`, { method: 'POST', headers: H(accts[i].token), body: JSON.stringify({ username: names[j] }) });
+    const cup = await (await fetch(`${BASE}/api/tournaments`, { method: 'POST', headers: H(accts[0].token), body: JSON.stringify({ name: 'Pit cup', format: 'upf', usernames: ['cupb', 'cupc'] }) })).json();
+    expect(cup.pit?.rounds).toBe(3);
+    const cs = await Promise.all(accts.slice(0, 3).map((a) => connect(a.token)));
+    const deck = (h: string, k: number) => toDeckList(autoBuildDeck(findCard(h)!.id, 'blitz', k));
+    cs[0].ws.send(JSON.stringify({ t: 'host', deck: deck('Dorinthea', 1), format: 'upf', size: 3 }));
+    await until(() => !!cs[0].waiting?.code);
+    cs[0].ws.send(JSON.stringify({ t: 'invite', to: 'cupb' }));
+    cs[0].ws.send(JSON.stringify({ t: 'invite', to: 'cupc' }));
+    await until(() => !!cs[1].challenged && !!cs[2].challenged);
+    expect(cs[1].challenged!.code).toBe(cs[0].waiting!.code);
+    cs[1].ws.send(JSON.stringify({ t: 'join', code: cs[1].challenged!.code, deck: deck('Bravo', 2) }));
+    cs[2].ws.send(JSON.stringify({ t: 'join', code: cs[2].challenged!.code, deck: deck('Katsu', 3) }));
+    await until(() => cs.every((c) => c.states.length > 0));
+    // a friend watches, then switches to another seat
+    const w = await connect(accts[3].token);
+    w.ws.send(JSON.stringify({ t: 'spectate', username: 'cupa' }));
+    await until(() => w.spectated.length > 0);
+    w.ws.send(JSON.stringify({ t: 'spectateSeat', seat: 2 }));
+    await until(() => w.spectated.at(-1)!.players[0].name === 'cupc');
+    expect(w.spectated.at(-1)!.players[0].name).toBe('cupc');
+    for (let steps = 0; steps < 8000; steps++) {
+      if (cs.every((c) => c.states.at(-1)!.phase === 'gameOver')) break;
+      const mover = cs.find((c) => { const v = c.states.at(-1)!; return v.phase !== 'gameOver' && !v.players[0].eliminated && (v.pendingChoices?.[0]?.player ?? v.priority) === 0; });
+      if (!mover) { await wait(5); continue; }
+      const before = mover.states.length;
+      mover.ws.send(JSON.stringify({ t: 'act', action: chooseAction(mover.states.at(-1)!, 0, 'normal').action }));
+      for (let i = 0; i < 200 && mover.states.length === before && mover.errors.length === 0; i++) await wait(5);
+      if (mover.errors.length) throw new Error(`server rejected a move: ${mover.errors.join('; ')}`);
+    }
+    let t: { pit: { results: { order: number[] }[] } } | undefined;
+    for (let i = 0; i < 40 && !t?.pit.results.length; i++) { t = (await (await fetch(`${BASE}/api/tournaments`, { headers: H(accts[0].token) })).json()).find((x: { id: string }) => x.id === cup.id); await wait(50); }
+    expect(t!.pit.results.length).toBe(1);
+    expect(t!.pit.results[0].order.length).toBe(3);
+    [...cs, w].forEach((c) => c.ws.close());
+  }, 120_000);
+
   it('sandbox rooms allow manual moves of your own cards only; normal rooms refuse them', async () => {
     const a = await account('frank');
     const b = await account('gina');

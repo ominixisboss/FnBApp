@@ -93,7 +93,15 @@ export type Effect =
   /** reveal the top card of your deck; with `minusPitch` this gets -X{p} for its pitch */
   | { kind: 'revealTop'; minusPitch?: boolean }
   /** create a Runechant for each non-attack action card played this turn; with 3+ this gets go again (Douse in Runeblood) */
-  | { kind: 'runechantsPerNonAttack'; goAgainAt?: number };
+  | { kind: 'runechantsPerNonAttack'; goAgainAt?: number }
+  /** this defending equipment is destroyed when the combat chain closes */
+  | { kind: 'destroyAtChainClose' }
+  /** banish a card defending this chain link (the best one) */
+  | { kind: 'banishDefender' }
+  /** destroy a card of theirs that intimidate banished */
+  | { kind: 'destroyIntimidated' }
+  /** "this gets -N{p} unless you pay {r}" */
+  | { kind: 'payOrWeaken'; amount: number; cost: number };
 
 /** A game-state condition from "If <condition>, ..." sentences. */
 export type Condition =
@@ -230,6 +238,12 @@ export interface CardScript {
   costLessPer?: string; // token name ("Runechant") or 'draconicLink': "costs {r} less for each X you control"
   intimidateOnAttack: boolean;
   additionalCost: { discardRandom?: number; banishRandomHand?: number; banishGraveyard?: number; handToBottom?: number; banishSoul?: number };
+  /** Contract: banishing an opponent's card of this kind (while this is on the combat chain) creates a Silver */
+  contract?: 'nonAction' | 'attackAction' | 'nonAttackAction' | 'red' | 'yellow' | 'blue' | 'reaction' | 'lowDefense' | 'cheap' | 'costly' | 'goAgain';
+  /** destroyed at the beginning of its controller's end phase */
+  destroyAtEnd?: boolean;
+  /** "If you would be dealt damage, you may banish this to prevent N of that damage" */
+  banishPrevent?: number;
   /** Dawnblade: the second time this hits each turn it gets a +1{p} counter; they go if it didn't hit */
   secondHitCounter?: boolean;
   /** at the beginning of your end phase, put a -1{d} counter on this */
@@ -391,7 +405,11 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'banishTopOpp', amount: m[1] ? +m[1] : 1 }];
   if ((m = s.match(/^(?:they|the defending hero|target hero|target opposing hero|each opposing hero) discards? (a|two|\d+) (?:random )?cards?$/i)))
     return [{ kind: 'oppDiscardRandom', amount: toNum(m[1].toLowerCase()) }];
-  if (/^intimidate$/i.test(s)) return [{ kind: 'intimidate' }];
+  if (/^intimidate(?: them| the defending hero| target hero)?$/i.test(s)) return [{ kind: 'intimidate' }];
+  if ((m = s.match(/^banish the top card of their deck and a defending card$/i))) return [{ kind: 'banishTopOpp', amount: 1 }, { kind: 'banishDefender' }];
+  if (/^destroy an intimidated card they own$/i.test(s)) return [{ kind: 'destroyIntimidated' }];
+  if ((m = s.match(/^it gets \+(\d+)\{d\} and "when the combat chain closes, destroy this\.?"$/i))) return [{ kind: 'thisDefense', amount: +m[1] }, { kind: 'destroyAtChainClose' }];
+  if ((m = s.match(/^(?:it|this) gets -(\d+)\{p\} unless you pay ((?:\{r\})+)$/i))) return [{ kind: 'payOrWeaken', amount: +m[1], cost: m[2].length / 3 }];
   if ((m = s.match(/^opt (\d+)$/i))) return [{ kind: 'opt', amount: +m[1] }];
   if (/^mark (?:them|the defending hero|target hero)$/i.test(s)) return [{ kind: 'mark' }];
   if ((m = s.match(/^the next card you play this turn with an arcane damage effect,? (?:instead )?deals that much arcane damage plus (\d+)$/i)))
@@ -901,6 +919,17 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     if (e) return void sc.onDefend.push(...e);
   }
   if (/^at the beginning of your end phase, put a -1\{d\} counter on this\.?$/i.test(sent)) { sc.endPhaseWear = true; return; }
+  if (/^at the beginning of your end phase, destroy this\.?$/i.test(sent)) { sc.destroyAtEnd = true; return; }
+  if ((m = sent.match(/^when this enters the arena, (.+)$/i)) && isPermanentLike) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.onPlay.push(...e);
+  }
+  if ((m = sent.match(/^if you would be dealt damage, you may banish this to prevent (\d+) of that damage\.?$/i))) { sc.banishPrevent = +m[1]; return; }
+  if ((m = sent.match(/^contract - you are contracted to banish opponents' (non-action cards|attack action cards|non-attack action cards|red cards|yellow cards|blue cards|reaction cards|cards with 2 or less \{d\}|cards with cost 1 or less|cards with cost 2 or more|cards with base go again)\.?$/i))) {
+    sc.contract = ({ 'non-action cards': 'nonAction', 'attack action cards': 'attackAction', 'non-attack action cards': 'nonAttackAction', 'red cards': 'red', 'yellow cards': 'yellow', 'blue cards': 'blue', 'reaction cards': 'reaction', 'cards with 2 or less {d}': 'lowDefense', 'cards with cost 1 or less': 'cheap', 'cards with cost 2 or more': 'costly', 'cards with base go again': 'goAgain' } as const)[m[1].toLowerCase() as 'red cards'];
+    return;
+  }
+  if (/^whenever you complete this contract, create a silver token\.?$/i.test(sent) && sc.contract) return;
   if ((m = sent.match(/^when this attacks, the next attack with (\w+) you play this combat chain gets go again\.?$/i))) { sc.onAttack.push({ kind: 'nextAttackGoAgain', filter: { kind: 'keyword', value: titleCase(m[1]) } }); return; }
   if (/^when this attacks, create runechant tokens equal to the number of non-attack action cards you've played this turn\.?$/i.test(sent)) { sc.onAttack.push({ kind: 'runechantsPerNonAttack' }); return; }
   if (/^if 3 or more runechants are created this way, this gets go again\.?$/i.test(sent)) {

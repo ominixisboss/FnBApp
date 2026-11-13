@@ -40,18 +40,19 @@ export default function CupsPage() {
             <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Cup name" />
             <select value={format} onChange={(e) => setFormat(e.target.value)}>{FORMATS.map(([f, n]) => <option key={f} value={f}>{n}</option>)}</select>
           </div>
-          <div className="small muted">Invite friends (up to 7):</div>
+          <div className="small muted">{format === 'upf' ? 'Ultimate Pit Fight cup: pick 2 or 3 friends. You play 3 tables together; 1st place scores 3 points, 2nd 2, 3rd 1.' : 'Invite friends (up to 7):'}</div>
           <div className="row">
             {friendList.length === 0 && <span className="small">Add friends on your <a href="#profile">Profile</a> first.</span>}
             {friendList.map((f) => (
               <label key={f.username} className="row small"><input type="checkbox" checked={picked.includes(f.username)} disabled={!picked.includes(f.username) && picked.length >= 7} onChange={(e) => setPicked(e.target.checked ? [...picked, f.username] : picked.filter((u) => u !== f.username))} />{f.name}</label>
             ))}
           </div>
-          <div><button className="primary" disabled={!picked.length} onClick={() => void create()}>Create cup</button></div>
+          <div><button className="primary" disabled={!picked.length || (format === 'upf' && (picked.length < 2 || picked.length > 3))} onClick={() => void create()}>Create cup</button></div>
         </div>
       )}
       {list?.length === 0 && !creating && <div className="panel">No cups yet. Create one and invite your friends.</div>}
       {list?.map((t) => {
+        if (t.pit) return <PitCup key={t.id} t={t} me={auth.user!.id} />;
         const nameOf = (id: number) => t.players.find((p) => p.id === id)?.name ?? '?';
         const table = t.players.map((p) => ({ ...p, wins: t.games.filter((g) => g.winner === p.id).length, played: t.games.filter((g) => g.winner !== undefined && (g.a === p.id || g.b === p.id)).length }))
           .sort((x, y) => y.wins - x.wins || x.played - y.played);
@@ -89,6 +90,36 @@ export default function CupsPage() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** A Pit Fight cup: points by finishing place over a few tables with all the players. */
+function PitCup({ t, me }: { t: FriendCup; me: number }) {
+  const pit = t.pit!;
+  const points = (id: number) => pit.results.reduce((a, r) => { const i = r.order.indexOf(id); return a + (i < 0 ? 0 : Math.max(0, t.players.length - 1 - i)); }, 0);
+  const table = [...t.players].map((p) => ({ ...p, pts: points(p.id), wins: pit.results.filter((r) => r.order[0] === p.id).length })).sort((a, b) => b.pts - a.pts || b.wins - a.wins);
+  const done = pit.results.length >= pit.rounds;
+  const nameOf = (id: number) => t.players.find((p) => p.id === id)?.name ?? '?';
+  return (
+    <div className="panel cup">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>{t.name} <span className="small muted">· Ultimate Pit Fight · {t.players.length} players · table {Math.min(pit.results.length + 1, pit.rounds)} of {pit.rounds}</span></h3>
+        {done && <b className="ok">🏆 {table[0].name} wins!</b>}
+      </div>
+      <div className="cup-grid">
+        <table className="history">
+          <thead><tr><th>#</th><th>Player</th><th>Points</th><th>Tables won</th></tr></thead>
+          <tbody>{table.map((p, i) => <tr key={p.id} className={p.id === me ? 'me-row' : ''}><td>{i + 1}</td><td>{p.name}</td><td><b>{p.pts}</b></td><td>{p.wins}</td></tr>)}</tbody>
+        </table>
+        <div className="col" style={{ gap: '.25rem' }}>
+          {pit.results.map((r, i) => (
+            <div key={r.matchId} className="pairing"><span className="muted">Table {i + 1}:</span><span>{r.order.map(nameOf).join(' › ')}</span><a className="small" href={`#replay/${r.matchId}`}>▶ Replay</a></div>
+          ))}
+          {!done && <div className="small muted">Play the next table: one of you creates a Pit Fight room on the Play page (Online) and invites the others. The result fills in when exactly this cup's players finish a game.</div>}
+          {!done && <a className="small btn-link" href="#play/online" onClick={() => online.connect()}>Go to online play</a>}
+        </div>
+      </div>
     </div>
   );
 }
