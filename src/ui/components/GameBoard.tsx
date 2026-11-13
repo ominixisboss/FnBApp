@@ -767,11 +767,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             ● Online{online.opponent?.connected === false ? (state.players.length > 2 ? ' · a player disconnected (out in 2 min)' : ' · opponent disconnected (they forfeit in 2 min)') : ''}
           </span>
         )}
-        {online?.sendEmote && <button className={`icon-btn ${emoteOpen ? 'on' : ''}`} title="Emotes" onClick={() => setEmoteOpen(!emoteOpen)}>💬<span>Emote</span></button>}
-        {!online && <button className={`icon-btn ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
-        {!online && <button className="icon-btn" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
+        {online?.sendEmote && <button className={`icon-btn bar-quick ${emoteOpen ? 'on' : ''}`} title="Emotes" onClick={() => setEmoteOpen(!emoteOpen)}>💬<span>Emote</span></button>}
+        {!online && <button className={`icon-btn bar-quick ${showHint ? 'on' : ''}`} title="Move suggestions" onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
+        {!online && <button className="icon-btn bar-quick" title="Undo" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
         <button className={`icon-btn more-btn ${menuOpen ? 'on' : ''}`} title="More" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰<span>More</span></button>
         <div className={`bar-more ${menuOpen ? 'open' : ''}`} onClick={() => setMenuOpen(false)}>
+          {/* on phones in portrait, the quick buttons live in this menu so nothing covers your hand */}
+          {online?.sendEmote && <button className={`icon-btn portrait-only ${emoteOpen ? 'on' : ''}`} onClick={() => setEmoteOpen(!emoteOpen)}>💬<span>Emote</span></button>}
+          {!online && <button className={`icon-btn portrait-only ${showHint ? 'on' : ''}`} onClick={() => setShowHint(!showHint)}>💡<span>Hint</span></button>}
+          {!online && <button className="icon-btn portrait-only" disabled={!history.length} onClick={undo}>↶<span>Undo</span></button>}
           <button className={`icon-btn ${drawer === 'log' ? 'on' : ''}`} title="Game log" onClick={() => setDrawer(drawer === 'log' ? null : 'log')}>📜<span>Log</span></button>
           {!online && <button className={`icon-btn ${drawer === 'manual' ? 'on' : ''}`} title="Manual controls" onClick={() => setDrawer(drawer === 'manual' ? null : 'manual')}>🛠<span>Manual</span></button>}
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
@@ -783,8 +787,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           {isNative() && <button className="icon-btn" title="Screen orientation" onClick={() => { const next = orientationPref() === 'portrait' ? 'landscape' : 'portrait'; void applyOrientation(next); }}>📱<span>{orientationPref() === 'portrait' ? 'Landscape' : 'Portrait (one hand)'}</span></button>}
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
           <button className="icon-btn" title="Concede" onClick={() => { if (confirm('Concede this game?')) act({ type: 'concede' }); }} disabled={state.phase === 'gameOver' || (!online && !myTurn)}>⚑<span>Concede</span></button>
+          <button className="icon-btn portrait-only" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕<span>Leave game</span></button>
         </div>
-        <button className="icon-btn" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
+        <button className="icon-btn bar-quick" title="Leave game" onClick={() => { if (state.phase === 'gameOver' || confirm('Leave this game?')) onExit(); }}>✕</button>
       </div>
 
       <div className="opp-hand" ref={oppHandRef} title={`${opp.name}: ${opp.hand.length} cards in hand`}>
@@ -1623,7 +1628,7 @@ function TriggerOrder({ uids, me, onDone }: { uids: number[]; me: GameState['pla
 function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendingChoices']>[0]; onDone: (a: Action) => void }) {
   const [picks, setPicks] = useState<number[]>([]);
   const C = (id: string) => getDb().byId.get(id)!;
-  const single = choice.kind === 'reload' || choice.kind === 'target' || choice.kind === 'pick';
+  const single = !choice.multi && (choice.kind === 'reload' || choice.kind === 'target' || choice.kind === 'pick');
   const toggle = (u: number) => setPicks(single ? (picks[0] === u ? [] : [u]) : picks.includes(u) ? picks.filter((x) => x !== u) : [...picks, u]);
   return (
     <div className="modal-bg">
@@ -1662,7 +1667,7 @@ function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendi
               <button className="primary" disabled={!picks.length} onClick={() => onDone({ type: 'choose', picks })}>Put it in my arsenal</button>
             </>
           ) : (
-            <button className="primary" onClick={() => onDone({ type: 'choose', picks })}>Done{picks.length < choice.options.length ? ` (${choice.options.length - picks.length} to the bottom)` : ''}</button>
+            <button className="primary" onClick={() => onDone({ type: 'choose', picks })}>Done{choice.resume.type !== 'eventOrder' && picks.length < choice.options.length ? ` (${choice.options.length - picks.length} to the bottom)` : ''}</button>
           )}
         </div>
       </div>
