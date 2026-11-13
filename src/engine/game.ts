@@ -404,6 +404,36 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
       if (a.yes) addWager(s, p, c.resume.link, c.resume.tokens, c.resume.winnerDraw);
       else log(s, p.id, `${p.name} doesn't wager.`);
       break;
+    case 'damageTarget': {
+      const opp = s.players[other(p.id)];
+      const pick = picks[0];
+      if (pick !== undefined && pick !== opp.hero.uid) damageAlly(s, opp, pick, c.resume.amount, c.resume.source);
+      else if (dealDamage(s, opp.id, c.resume.amount, c.resume.arcane, c.resume.source) > 0 && c.resume.arcane) p.turn.arcaneDealt = true;
+      break;
+    }
+    case 'attackTarget': {
+      const l = s.chain[c.resume.link];
+      const opp = s.players[other(p.id)];
+      const pick = picks[0];
+      if (!l || pick === undefined || pick === opp.hero.uid) break;
+      const pm = opp.permanents.find((x) => x.inst.uid === pick);
+      if (!pm) break;
+      if (getScript(cardOf(pm.inst)).spectra) {
+        // Spectra: when this becomes the target of an attack, destroy it; the attack has nothing left to hit
+        log(s, opp.id, `${cardOf(pm.inst).name} (spectra) is targeted by ${cardOf(l.inst).name} and destroyed.`, 'Spectra: this can be attacked. When it becomes the target of an attack, destroy it.');
+        removePermanent(s, opp, pick);
+        s.chain.splice(c.resume.link, 1);
+        if (!l.fromWeapon) graveFromArena(p, l.inst);
+        if (!s.chain.length) s.chainOpen = false;
+        s.phase = 'action';
+        s.priority = s.turnPlayer;
+        s.passes = 0;
+      } else {
+        l.target = pick;
+        log(s, p.id, `${cardOf(l.inst).name} attacks ${cardOf(pm.inst).name}.`);
+      }
+      break;
+    }
     case 'betsy': {
       const l = s.chain[c.resume.link];
       if (a.yes && l && availableResources(p) >= 2) {
@@ -460,6 +490,23 @@ export function crowd(s: GameState, p: PlayerState, cheer: boolean) {
   }
   const ab = ability(p);
   if (cheer) ab?.onCheer?.(heroCtx(s, p)); else ab?.onBoo?.(heroCtx(s, p));
+}
+
+/** What can be attacked or dealt damage besides the hero: allies (they have life) and, for attacks, spectra auras. */
+export function attackablePermanents(p: PlayerState) {
+  return p.permanents.filter((pm) => { const c = cardOf(pm.inst); return (has(c, 'Ally') && (c.health ?? 0) > 0) || getScript(c).spectra; });
+}
+const allies = (p: PlayerState) => p.permanents.filter((pm) => has(cardOf(pm.inst), 'Ally') && (cardOf(pm.inst).health ?? 0) > 0);
+
+/** Damage to an ally: it's destroyed once the damage reaches its life. */
+function damageAlly(s: GameState, owner: PlayerState, uid: number, amount: number, source: string) {
+  const pm = owner.permanents.find((x) => x.inst.uid === uid);
+  if (!pm || amount <= 0) return 0;
+  pm.damage = (pm.damage ?? 0) + amount;
+  const c = cardOf(pm.inst);
+  log(s, owner.id, `${source} deals ${amount} damage to ${c.name} (${Math.max(0, (c.health ?? 0) - pm.damage)} life left).`);
+  if (pm.damage >= (c.health ?? 0)) removePermanent(s, owner, uid);
+  return amount;
 }
 
 const evoCount = (p: PlayerState) => p.equipment.filter((e) => !e.destroyed && cardOf(e.inst).types.includes('Evo')).length;
@@ -1232,6 +1279,12 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   if (p.turn.flags[`runeGated${inst.uid}`]) (link as ChainLink & { runeGated?: boolean }).runeGated = true;
   s.chain.push(link);
   s.chainOpen = true;
+  // allies and spectra auras can be attacked: a human attacker chooses the target (bots go for the hero)
+  const targets = attackablePermanents(s.players[other(p.id)]);
+  if (targets.length && !p.isBot) {
+    const oppHero = s.players[other(p.id)].hero;
+    ask(s, { player: p.id, kind: 'target', prompt: `What does ${c.name} attack?`, options: [oppHero, ...targets.map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'attackTarget', link: s.chain.length - 1 } });
+  }
   p.turn.attacks += 1;
   if (fromWeapon) p.turn.weaponAttacked = true;
   const target = s.players[other(p.id)];
@@ -1431,10 +1484,11 @@ function resolveDamage(s: GameState) {
   const power = linkPower(l);
   const def = linkDefense(l);
   const raw = Math.max(0, power - def);
-  const dealt = raw > 0 ? dealDamage(s, defender.id, raw, false, cardOf(l.inst).name, l.unpreventable) : 0;
+  const allyTarget = l.target !== undefined && defender.permanents.some((pm) => pm.inst.uid === l.target);
+  const dealt = raw <= 0 ? 0 : allyTarget ? damageAlly(s, defender, l.target!, raw, cardOf(l.inst).name) : dealDamage(s, defender.id, raw, false, cardOf(l.inst).name, l.unpreventable);
   l.hit = dealt > 0;
   if (raw === 0) log(s, null, `${cardOf(l.inst).name} is fully blocked.`);
-  if (l.hit && s.phase !== 'gameOver') {
+  if (l.hit && s.phase !== 'gameOver' && !allyTarget) { // hitting an ally isn't hitting a hero
     if (l.fromWeapon) attacker.turn.weaponHits += 1;
     else attacker.turn.attackActionHits += 1;
     const sc = getScript(cardOf(l.inst));
@@ -1651,12 +1705,22 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'arcane': {
         const amp = p.effects.filter((x) => x.kind === 'ampArcane').reduce((a, x) => a + (x.kind === 'ampArcane' ? x.amount : 0), 0);
         if (amp) { p.effects = p.effects.filter((x) => x.kind !== 'ampArcane'); log(s, p.id, `Arcane damage amplified by ${amp}.`); }
+        if (e.any && allies(opp).length && !p.isBot) {
+          ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount + amp} arcane damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount + amp, arcane: true, source: srcName } });
+          break;
+        }
         if (dealDamage(s, opp.id, e.amount + amp, true, srcName) > 0) p.turn.arcaneDealt = true;
         break;
       }
       case 'ampArcane': p.effects.push({ kind: 'ampArcane', amount: e.amount, source: srcName }); log(s, p.id, `Next arcane damage effect deals +${e.amount}.`); break;
       case 'weakenAttack': if (l) { l.powerMod -= e.amount; log(s, p.id, `${cardOf(l.inst).name} gets -${e.amount} power (${linkPower(l)}).`); } break;
-      case 'damage': dealDamage(s, opp.id, e.amount, false, srcName); break;
+      case 'damage':
+        if (e.any && allies(opp).length && !p.isBot) {
+          ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount} damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount, arcane: false, source: srcName } });
+          break;
+        }
+        dealDamage(s, opp.id, e.amount, false, srcName);
+        break;
       case 'gainLife': p.life += e.amount; log(s, p.id, `${p.name} gains ${e.amount} life (${p.life}).`); break;
       case 'loseLifeOpp': opp.life -= e.amount; log(s, opp.id, `${opp.name} loses ${e.amount} life (${opp.life}).`); break;
       case 'draw': draw(s, p, e.amount); log(s, p.id, `${p.name} draws ${e.amount} card${e.amount > 1 ? 's' : ''}.`); break;

@@ -16,8 +16,9 @@ export type AttackFilter =
   | { kind: 'classAttackAction'; value: string }; // "your next Guardian attack action card"
 
 export type Effect =
-  | { kind: 'arcane'; amount: number }
-  | { kind: 'damage'; amount: number }
+  /** any: "to any target" (allies too), otherwise a hero */
+  | { kind: 'arcane'; amount: number; any?: boolean }
+  | { kind: 'damage'; amount: number; any?: boolean }
   | { kind: 'gainLife'; amount: number }
   | { kind: 'loseLifeOpp'; amount: number }
   | { kind: 'draw'; amount: number }
@@ -294,10 +295,10 @@ export function parseEffect(raw: string): Effect[] | null {
     }
     return out;
   }
-  if ((m = s.match(/^deal (\d+) arcane damage(?: to (?:any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
-    return [{ kind: 'arcane', amount: +m[1] }];
-  if ((m = s.match(/^deal (\d+) damage to (?:target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
-    return [{ kind: 'damage', amount: +m[1] }];
+  if ((m = s.match(/^deal (\d+) arcane damage(?: to (any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
+    return [{ kind: 'arcane', amount: +m[1], ...(m[2]?.toLowerCase() === 'any target' ? { any: true } : {}) }];
+  if ((m = s.match(/^deal (\d+) damage to (target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
+    return [{ kind: 'damage', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}) }];
   if ((m = s.match(/^(?:you )?gain (\d+)\{h\}$/i))) return [{ kind: 'gainLife', amount: +m[1] }];
   if ((m = s.match(/^(?:target|each) (?:opposing )?hero loses (\d+)\{h\}$/i)))
     return [{ kind: 'loseLifeOpp', amount: +m[1] }];

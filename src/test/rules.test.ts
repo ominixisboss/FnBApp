@@ -133,3 +133,28 @@ describe('lasting effects', () => {
     expect(s.chain.at(-1)!.defenders[0].defense).toBe(3 + 4);
   });
 });
+
+describe('targets', () => {
+  const tok = (name: string, uid: number, owner: 0 | 1) => ({ inst: { uid, cardId: getDb().cards.find((c) => c.name === name)!.id, owner }, ward: 0 });
+  it('you choose to attack an ally, and the damage goes to the ally', () => {
+    let s = setup([id('Wounding Blow', 1)]);
+    s.players[1].permanents.push(tok('Aether Ashwing', 8001, 1)); // a 1-life ally
+    s = play(s);
+    expect(s.pendingChoices?.[0].kind).toBe('target');
+    s = applyAction(s, { type: 'choose', picks: [8001] });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = resolveLink(s);
+    expect(s.players[1].life).toBe(20);
+    expect(s.players[1].permanents.some((pm) => pm.inst.uid === 8001)).toBe(false);
+  });
+  it('attacking a spectra aura destroys it and the attack ends', () => {
+    let s = setup([id('Wounding Blow', 1)]);
+    const spectra = getDb().cards.find((c) => /^Spectra$/m.test(c.text) && c.types.includes('Aura'))!;
+    s.players[1].permanents.push({ inst: { uid: 8002, cardId: spectra.id, owner: 1 }, ward: 0 });
+    s = play(s);
+    s = applyAction(s, { type: 'choose', picks: [8002] });
+    expect(s.players[1].permanents.length).toBe(0);
+    expect(s.chain.length).toBe(0);
+    expect(s.phase).toBe('action');
+  });
+});

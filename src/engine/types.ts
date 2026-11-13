@@ -37,6 +37,8 @@ export interface PermanentState {
   counters?: number; // sandbox: generic counters
   suspense?: number; // suspense counters
   quelled?: boolean; // quell was used: destroyed at the beginning of the end phase
+  /** damage marked on an ally (it's destroyed when this reaches its life) */
+  damage?: number;
   /** stolen: goes back to this player at the end of the action phase */
   returnTo?: PlayerId;
 }
@@ -136,6 +138,8 @@ export interface ChainLink {
   /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
   wagers?: { tokens: string[]; winnerDraw?: number }[];
   noDefenseReactions?: boolean;
+  /** attacking an ally (its permanent uid) instead of the hero */
+  target?: number;
   unpreventable?: boolean;
 }
 
@@ -165,7 +169,7 @@ export interface LogEntry {
 /** A decision a player makes in the middle of an effect: which cards to keep on top (opt), what to reload, or yes/no. */
 export interface PendingChoice {
   player: PlayerId;
-  kind: 'opt' | 'reload' | 'yesno';
+  kind: 'opt' | 'reload' | 'yesno' | 'target';
   prompt: string;
   /** the cards involved (opt: the top of your deck; reload: your hand) */
   options: { uid: number; cardId: string }[];
@@ -173,7 +177,9 @@ export interface PendingChoice {
     | { type: 'opt' }
     | { type: 'reload' }
     | { type: 'wager'; tokens: string[]; winnerDraw?: number; link: number }
-    | { type: 'betsy'; link: number };
+    | { type: 'betsy'; link: number }
+    | { type: 'attackTarget'; link: number }
+    | { type: 'damageTarget'; amount: number; arcane: boolean; source: string };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }

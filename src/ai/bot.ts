@@ -557,6 +557,7 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
       const best = [...pc.options].sort((a, b) => cardPlayValue(C(b.cardId)) - cardPlayValue(C(a.cardId)))[0];
       return { action: { type: 'choose', picks: best ? [best.uid] : [] }, reason: 'Reload the strongest card.' };
     }
+    if (pc.kind === 'target') return { action: { type: 'choose', picks: [pc.options[0].uid] }, reason: 'Go for the hero.' };
     return { action: { type: 'choose', yes: true }, reason: 'Take the bet.' };
   }
   if (s.pendingTriggers) {
