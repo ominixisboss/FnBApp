@@ -1614,3 +1614,5 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 @keyframes pit-in { from { transform: scale(.7); opacity: 0; } }
 
 .bar-more .portrait-only { display: none; }
+.event-chip { position: absolute; z-index: 11; right: calc(10px + var(--sa-r)); top: calc(94px + var(--sa-t)); max-width: 46vw; padding: 4px 10px; border-radius: 999px; background: #1a1006e6; border: 1px solid #c9a24a88; color: #f1e4cc; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pit-in .35s var(--spring); }
+@media (max-width: 640px) and (orientation: portrait) { .event-chip { top: calc(40px + var(--sa-t)); right: 6px; font-size: .62rem; } }

@@ -94,7 +94,7 @@ export const online = {
     ws?.close();
     set({ status: 'offline', game: null, code: null, opponent: null });
   },
-  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number) => sendMsg({ t: 'host', deck, format, sandbox, size }),
+  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number, events?: boolean) => sendMsg({ t: 'host', deck, format, sandbox, size, events }),
   /** Ultimate Pit Fight: start now, with bots in the empty seats */
   fillBots: () => sendMsg({ t: 'fillBots' }),
   queue: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'queue', deck, format }),

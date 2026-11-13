@@ -799,6 +799,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         })}
       </div>
 
+      {state.lastEvent && (
+        <div className="event-chip" title={getDb().byId.get(state.lastEvent)?.text}>🎪 Event: <b>{getDb().byId.get(state.lastEvent)?.name}</b>{state.eventDeck ? <span className="muted"> · {state.eventDeck.length} left</span> : null}</div>
+      )}
       {state.players.length > 2 && (
         <div className="pit-strip" role="list" aria-label="Opponents">
           {state.players.filter((pl) => pl.id !== HUMAN).map((pl) => {

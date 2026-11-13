@@ -28,6 +28,8 @@ export interface HeroApi {
   ask(chooser: PlayerState, owner: PlayerState, key: string, prompt: string, botYes: boolean, data?: number[], cards?: string[]): void;
   /** ask `chooser` to pick one of `options` (heroes or cards); bots pick the first. Answered in `owner`'s onChoice with `picks` */
   pick(chooser: PlayerState, owner: PlayerState, key: string, prompt: string, options: CardInst[], data?: number[]): void;
+  /** look at the top 3 of the event deck and put them back in any order (Kox) */
+  orderEvents(p: PlayerState): void;
   /** equip an equipment card (replacing what is in its slot) */
   equip(p: PlayerState, cardId: string): void;
   /** the opponents this player may target (Ultimate Pit Fight: only the neighbours) */
@@ -1246,16 +1248,17 @@ HERO_ABILITIES.push(
   },
   {
     id: 'kox',
-    summary: 'Action, destroy a Gold: go again. There is no event deck in this simulator, so looking at it does nothing.',
+    summary: 'Action, destroy a Gold: look at the top 3 cards of the event deck and put them back in any order. Go again. (Games with Kox use the Smash Palace event deck.)',
     match: (t) => t.includes('Look at the top 3 cards of the event deck'),
     activations: [{
-      label: 'Destroy a Gold: look at the event deck', instant: false, oncePerTurn: true, goAgain: true,
+      label: 'Destroy a Gold: arrange the event deck', instant: false, oncePerTurn: true, goAgain: true,
       cost: () => 0,
-      canUse: ({ p }) => goldCount(p) > 0,
-      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.log(p, 'Fightmaster Kox looks at the event deck (none in this game).'); },
-      botValue: () => -1,
+      canUse: ({ s, p }) => goldCount(p) > 0 && (s.eventDeck?.length ?? 0) > 0,
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.orderEvents(p); },
+      botValue: () => 0.5,
     }],
   },
+
   {
     id: 'frankie',
     summary: 'Your equipment is banished instead of going to the graveyard. Action {r}{r}{r}: equip the best destroyed equipment from another hero’s graveyard (it replaces yours in that slot). Go again.',

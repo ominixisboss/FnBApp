@@ -40,6 +40,8 @@ interface Setup {
   clock?: number;
   /** Ultimate Pit Fight: how many bot opponents (2 or 3) */
   pitBots?: 2 | 3;
+  /** Smash Palace: reveal an event card at the start of every turn */
+  events?: boolean;
 }
 
 interface Opponent { heroId: string; name: string; deck: DeckList }
@@ -120,7 +122,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       { name: 'You', isBot: false, deck: withInventory(ctx.pool, pre.chosen) },
       { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
       ...(ctx.more ?? []).map((o) => ({ name: o.name, isBot: true, difficulty: setup.difficulty, deck: o.deck })),
-    ], Date.now() & 0x7fffffff, setup.format, first));
+    ], Date.now() & 0x7fffffff, setup.format, first, { events: setup.format === 'upf' && !!setup.events }));
     setPre(null);
   };
   const matchOver = match && (match.wins[0] >= 2 || match.wins[1] >= 2);
@@ -299,7 +301,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     <>
                       <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
                       <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked Pit Fight table</button>
-                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4, !!setup.events); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
                       <div className="small muted">The public table is ranked on its own Pit Fight ladder (your finishing place against the other players); rooms are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
                     </>
                   ) : (
@@ -345,6 +347,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
             <span className="lobby-label">Table</span>
             <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} heroes</button>)}</div>
             <span className="muted">Offline vs bots. You can attack the heroes on your left and right; last one standing wins.</span>
+            <label className="row small" title="Smash Palace: at the start of every turn, the turn player reveals the top card of a shared event deck and follows it. Games with Fightmaster Kox always use it."><input type="checkbox" checked={!!setup.events} onChange={(e) => setSetup({ ...setup, events: e.target.checked })} /> Event deck (Smash Palace)</label>
           </div>
         )}
         <div className="row small">

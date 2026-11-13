@@ -17,7 +17,7 @@ import { createPod, joinPod, leavePod, pick as podPick, podDeck, startPod, submi
 import type { PodView } from './pods';
 
 export type ClientMsg =
-  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number }
+  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number; events?: boolean }
   | { t: 'fillBots' }
   | { t: 'join'; code: string; deck: DeckList }
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
@@ -81,6 +81,8 @@ interface Room {
   seats: Seat[];
   /** players at the table: 2, or 3-4 in Ultimate Pit Fight */
   size: number;
+  /** Smash Palace event deck */
+  events?: boolean;
   /** Pit Fight queue: when the waiting players get bots and start */
   fillTimer?: ReturnType<typeof setTimeout>;
   /** a bot's next move is scheduled */
@@ -283,7 +285,7 @@ function finish(room: Room) {
 function start(room: Room) {
   if (room.fillTimer) clearTimeout(room.fillTimer);
   if (queues.get(queueKey(room.format)) === room) queues.delete(queueKey(room.format));
-  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format);
+  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format, undefined, { events: !!room.events });
   room.initial = room.state;
   room.actions = [];
   broadcast(room);
@@ -434,7 +436,7 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           return;
         }
       }
-      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox };
+      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox, events: msg.t === 'host' && format === 'upf' && !!(msg as { events?: boolean }).events };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       if (msg.t === 'queue') queues.set(queueKey(format), room);

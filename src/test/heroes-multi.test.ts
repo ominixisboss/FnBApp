@@ -114,3 +114,28 @@ describe('the last heroes', () => {
     expect(s.players[2].life).toBeLessThan(life0[2]);
   });
 });
+
+describe('Smash Palace event deck', () => {
+  it('the turn player reveals an event every turn; Kox games use it, and bot games with it play to the end', () => {
+    let s: GameState = createGame([{ name: 'Kox', isBot: true, deck: deck('Fightmaster Kox') }, { name: 'B', isBot: true, deck: deck('Dorinthea') }, { name: 'C', isBot: true, deck: deck('Dorinthea') }], 9, 'upf');
+    expect(s.eventDeck?.length).toBeGreaterThan(20);
+    expect(s.lastEvent).toBeTruthy(); // the first turn already revealed one
+    const seen = new Set<string>();
+    for (let i = 0; i < 4000 && s.phase !== 'gameOver'; i++) {
+      s = applyAction(s, chooseAction(s, s.pendingChoices?.[0]?.player ?? s.pendingTriggers?.player ?? s.priority).action);
+      if (s.lastEvent) seen.add(s.lastEvent);
+    }
+    expect(seen.size).toBeGreaterThan(3);
+  });
+
+  it('Hit the Jackpot makes a Gold and draws one card per Gold', () => {
+    let s: GameState = createGame([{ name: 'A', isBot: true, deck: deck('Dorinthea') }, { name: 'B', isBot: true, deck: deck('Dorinthea') }], 9, 'blitz', 0, { events: true });
+    s = structuredClone(s);
+    const jackpot = getDb().cards.find((c) => c.name === 'Hit the Jackpot')!.id;
+    s.eventDeck = [jackpot, ...s.eventDeck!.filter((x) => x !== jackpot)];
+    while (s.turnPlayer === 0) s = applyAction(s, chooseAction(s, s.pendingChoices?.[0]?.player ?? s.priority).action);
+    expect(s.lastEvent).toBe(jackpot);
+    expect(s.players[1].permanents.some((pm) => getDb().byId.get(pm.inst.cardId)!.name === 'Gold')).toBe(true);
+    expect(s.log.some((e) => /B draws 1 \(one per Gold\)/.test(e.text))).toBe(true);
+  });
+});
