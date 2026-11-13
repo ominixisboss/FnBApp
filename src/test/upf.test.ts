@@ -1,7 +1,7 @@
 // Ultimate Pit Fight: 3-4 heroes, attacks only to your left or right, last hero standing wins.
 import { describe, expect, it } from 'vitest';
 import './setup';
-import { applyAction, createGame, targetableOpponents } from '../engine/game';
+import { applyAction, concedeSeat, createGame, targetableOpponents } from '../engine/game';
 import { chooseAction } from '../ai/bot';
 import { autoBuildDeck, heroesFor, toDeckList } from '../deck/deck';
 import type { GameState, PlayerId } from '../engine/types';
@@ -38,4 +38,14 @@ describe('Ultimate Pit Fight', () => {
       }
     }
   }, 120_000);
+  it('a player who leaves is knocked out; the others play on, and whoever had priority keeps it', () => {
+    const s = pod(3, 5);
+    const other = ([0, 1, 2] as PlayerId[]).find((q) => q !== s.turnPlayer && q !== s.priority)!;
+    const t = concedeSeat(s, other);
+    expect(t.phase).not.toBe('gameOver');
+    expect(t.players[other].eliminated).toBe(true);
+    expect(t.priority).toBe(s.priority);
+    const u = concedeSeat(t, t.turnPlayer);
+    expect(u.phase).toBe('gameOver');
+  });
 });

@@ -23,7 +23,7 @@ let server: ChildProcess;
 
 beforeAll(async () => {
   server = spawn('npx', ['tsx', 'server/index.ts'], {
-    env: { ...process.env, PORT: String(PORT), DATA_DIR: mkdtempSync(join(tmpdir(), 'fab-')) },
+    env: { ...process.env, PORT: String(PORT), DATA_DIR: mkdtempSync(join(tmpdir(), 'fab-')), BOT_DELAY_MS: '0', PIT_FILL_MS: '300' },
     stdio: 'pipe',
   });
   for (let i = 0; i < 100; i++) {
@@ -128,6 +128,51 @@ describe('online play', () => {
     ca.ws.close();
     cb.ws.close();
   }, 60_000);
+
+  it('Ultimate Pit Fight online: three players and a server bot play to the last hero standing', async () => {
+    const names = ['pita', 'pitb', 'pitc'];
+    const cs = await Promise.all(names.map(async (n) => connect((await account(n)).token)));
+    const deck = (h: string, k: number) => toDeckList(autoBuildDeck(findCard(h)!.id, 'blitz', k));
+    cs[0].ws.send(JSON.stringify({ t: 'host', deck: deck('Dorinthea', 1), format: 'upf', size: 4 }));
+    await until(() => !!cs[0].waiting?.code);
+    const code = cs[0].waiting!.code!;
+    cs[1].ws.send(JSON.stringify({ t: 'join', code, deck: deck('Bravo', 2) }));
+    cs[2].ws.send(JSON.stringify({ t: 'join', code, deck: deck('Katsu', 3) }));
+    await until(() => (cs[0].waiting as { seats?: string[] } | null)?.seats?.length === 3);
+    expect(cs.every((c) => c.states.length === 0)).toBe(true); // a 4-seat room waits for a 4th player
+    cs[1].ws.send(JSON.stringify({ t: 'fillBots' })); // only the host may start it
+    await until(() => cs[1].errors.length > 0);
+    expect(cs[1].errors[0]).toMatch(/host/);
+    cs[1].errors.length = 0;
+    cs[0].ws.send(JSON.stringify({ t: 'fillBots' }));
+    await until(() => cs.every((c) => c.states.length > 0));
+    const first = cs.map((c) => c.states.at(-1)!);
+    expect(first.every((v) => v.players.length === 4)).toBe(true);
+    first.forEach((v, i) => expect(v.players[0].name).toBe(names[i])); // everyone sits at seat 0 of their own view
+    expect(first[0].players[1].name).toBe('pitb'); // and the table keeps its order
+    expect(first[0].players[1].hand.every((h) => h.cardId === '__hidden__')).toBe(true);
+
+    let steps = 0;
+    for (; steps < 6000; steps++) {
+      const sa = cs[0].states.at(-1)!;
+      if (sa.phase === 'gameOver' || cs.some((c) => c.states.at(-1)!.phase === 'gameOver')) break;
+      // whoever must act: a human moves with the AI from their own view; the server plays its bot
+      const moverIdx = cs.findIndex((c) => { const v = c.states.at(-1)!; return v.phase !== 'gameOver' && !v.players[0].eliminated && (v.pendingChoices?.[0]?.player ?? v.priority) === 0; });
+      if (moverIdx < 0) { await wait(5); continue; }
+      const mover = cs[moverIdx];
+      const before = mover.states.length;
+      mover.ws.send(JSON.stringify({ t: 'act', action: chooseAction(mover.states.at(-1)!, 0, 'normal').action }));
+      for (let i = 0; i < 200 && mover.states.length === before && mover.errors.length === 0; i++) await wait(5);
+      if (mover.errors.length) throw new Error(`server rejected a move: ${mover.errors.join('; ')}`);
+    }
+    await until(() => cs.every((c) => c.states.at(-1)!.phase === 'gameOver'), 3000);
+    const ends = cs.map((c) => c.states.at(-1)!);
+    expect(ends[0].phase).toBe('gameOver');
+    // the views agree on who won (each is rotated to its own seat)
+    const winnerSeat = (v: GameState, i: number) => (v.winner! + i) % 4;
+    expect(new Set(ends.map((v, i) => winnerSeat(v, i))).size).toBe(1);
+    cs.forEach((c) => c.ws.close());
+  }, 120_000);
 
   it('sandbox rooms allow manual moves of your own cards only; normal rooms refuse them', async () => {
     const a = await account('frank');

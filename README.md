@@ -118,7 +118,14 @@ Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, r
 
 Also automated: heave (from the arsenal at end of turn, making Seismic Surge), aim counters, rune gate, watery grave, fragment, quell, suspense, mirage, guardwell, spectra, scrap, beat chest, Evo upgrades and stealing. Attacks can target an ally or an attackable aura instead of the hero, and damage effects that say "any target" ask you to pick one.
 
-**Ultimate Pit Fight** (3 or 4 heroes, young hero, 40-card deck) is playable offline against 2 or 3 bots. You can attack only the heroes on your left and right: tap a seat at the top of the board to face them. The last hero standing wins. Priority in the reaction step goes round the table. Heroes with protect cards (Reya, Brevant, Chivalry) may defend an attack aimed at someone else. Everyone rolls a die for the first turn. Online UPF isn't supported yet. The bots play every card using its stats plus whatever text is automated.
+**Ultimate Pit Fight** (3 or 4 heroes, young hero, 40-card deck) is playable offline against 2 or 3 bots. You can attack only the heroes on your left and right: tap a seat at the top of the board to face them. The last hero standing wins. Priority in the reaction step goes round the table. Heroes with protect cards (Reya, Brevant, Chivalry) may defend an attack aimed at someone else. Everyone rolls a die for the first turn.
+
+**Online Pit Fight**: pick the Ultimate Pit Fight format on the Online tab.
+- **Find a Pit Fight table** seats 4. Once a second player joins, bots take the empty seats after 30 seconds.
+- **Create a Pit Fight room** seats 3 or 4. Share the code; the host can start any time with bots in the empty seats.
+- The server plays the bots, and every player sees the table from their own seat.
+- A player who leaves or disconnects for more than two minutes is knocked out, and the game goes on.
+- Pit Fight games are unranked, and friend challenges and friend cups stay one-on-one. The bots play every card using its stats plus whatever text is automated.
 
 ## Development
 

@@ -270,7 +270,14 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                       <div className="room-code">{net.code}</div>
                       <button className="small" onClick={() => navigator.clipboard?.writeText(net.code!)}>Copy code</button>
                     </>
-                  ) : <div className="searching">Searching for an opponent<span className="dots" /></div>}
+                  ) : <div className="searching">{net.table && net.table.size > 2 ? 'Finding a Pit Fight table' : 'Searching for an opponent'}<span className="dots" /></div>}
+                  {net.table && net.table.size > 2 && (
+                    <>
+                      <div className="pit-wait">{Array.from({ length: net.table.size }, (_, i) => <span key={i} className={net.table!.seats[i] ? 'in' : ''}>{net.table!.seats[i] ?? 'empty seat'}</span>)}</div>
+                      <div className="small muted">{net.code ? 'The game starts when every seat is taken.' : 'Bots take the empty seats 30 seconds after a second player joins.'}</div>
+                      {(net.table.host || !net.code) && <button className="primary" onClick={() => online.fillBots()}>Start now with bots in the empty seats</button>}
+                    </>
+                  )}
                   <button onClick={() => online.cancel()}>Cancel</button>
                 </div>
               ) : (
@@ -288,9 +295,19 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     </div>
                   )}
                   {rating && <div className="rank-line"><span className={`tier tier-${rating.tier.toLowerCase()}`}>{rating.tier}</span> <b>{rating.rating}</b> <span className="small muted">rating · {rating.games} ranked games</span></div>}
-                  {setup.format === 'upf' && <div className="small muted">Ultimate Pit Fight is offline only for now: play it against bots.</div>}
-                  <button className="play-big" disabled={!selectedHero || setup.format === 'upf'} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
-                  <button disabled={!selectedHero || setup.format === 'upf'} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                  {setup.format === 'upf' ? (
+                    <>
+                      <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
+                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Find a Pit Fight table</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
+                      <div className="small muted">Pit Fight games are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
+                    </>
+                  ) : (
+                    <>
+                      <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                    </>
+                  )}
                   <label className="row small" title="Both players can move cards by hand, like a tabletop (for cards the simulator doesn't automate). Every move shows in the log."><input type="checkbox" checked={roomSandbox} onChange={(e) => setRoomSandbox(e.target.checked)} /> Allow manual moves in my room</label>
                   <div className="row">
                     <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} style={{ flex: 1, letterSpacing: '.2em', textTransform: 'uppercase' }} />

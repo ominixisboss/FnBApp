@@ -2169,12 +2169,26 @@ function eliminate(s: GameState, p: PlayerState) {
   if (s.players.length === 2) { endGame(s, other(p.id)); return; }
   p.eliminated = true;
   log(s, p.id, `${p.name} is knocked out!`);
+  if (s.pendingChoices) { s.pendingChoices = s.pendingChoices.filter((c) => c.player !== p.id); if (!s.pendingChoices.length) s.pendingChoices = undefined; }
   const left = alivePlayers(s);
   if (left.length === 1) { endGame(s, left[0].id); return; }
   // an attack involving them ends; if it was their turn, play moves on
   if (s.chain.some((l) => l.attacker === p.id || defenderOf(l) === p.id)) { s.chain = []; s.chainOpen = false; s.phase = 'action'; s.priority = s.turnPlayer; }
   if (s.turnPlayer === p.id) { s.chain = []; s.chainOpen = false; delete s.stack; s.pendingChoices = undefined; s.turnPlayer = nextAlive(s, p.id); startTurn(s); }
   else if (s.players[s.priority].eliminated) s.priority = s.turnPlayer;
+}
+
+/** Player `i` concedes, whoever has priority (a player leaving an online game). In a Pit Fight
+ * game that goes on, priority and decisions that weren't theirs stay where they were. */
+export function concedeSeat(before: GameState, i: PlayerId): GameState {
+  const s = applyAction({ ...before, priority: i, pendingChoices: undefined, pendingTriggers: undefined }, { type: 'concede' });
+  if (s.phase !== 'gameOver' && s.turnPlayer === before.turnPlayer && s.phase === before.phase && s.chain.length === before.chain.length) {
+    if (before.priority !== i && !s.players[before.priority].eliminated) s.priority = before.priority;
+    const left = before.pendingChoices?.filter((c) => c.player !== i);
+    s.pendingChoices = left?.length ? left : undefined;
+    if (before.pendingTriggers && before.pendingTriggers.player !== i) s.pendingTriggers = before.pendingTriggers;
+  }
+  return s;
 }
 
 function endGame(s: GameState, winner: PlayerId) {
