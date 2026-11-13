@@ -98,6 +98,18 @@ function heroApi(s: GameState): HeroApi {
     startAttack: (p, inst) => startAttack(s, p, inst, false, false),
     mk: (cardId, owner) => mk(s, cardId, owner.id),
     shuffle: (arr) => shuffle(s, arr),
+    destroyNamed: (p, name) => {
+      const pm = p.permanents.find((x) => cardOf(x.inst).name === name);
+      if (!pm) return false;
+      removePermanent(s, p, pm.inst.uid);
+      return true;
+    },
+    discard: (p, inst) => {
+      if (!removeFrom(p.hand, inst.uid)) return;
+      p.graveyard.push(inst);
+      noteDiscard(s, p, inst);
+      log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
+    },
     intimidate: (t) => {
       s.players[other(t.id)].turn.intimidated = true;
       if (!t.hand.length) return;
@@ -763,6 +775,8 @@ function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
     if (ability(p)?.pitchToBanished) p.banished.push(inst);
     else p.pitch.push(inst);
     log(s, p.id, `${p.name} pitches ${c.name} (+${pitchOf(c)}).`);
+    if (c.types.includes('Chi')) p.turn.flags.chi = (p.turn.flags.chi ?? 0) + pitchOf(c);
+    ability(p)?.onPitch?.(heroCtx(s, p), c);
   }
   if (p.resources < cost) throw new Error(`Not enough resources (need ${cost}, have ${p.resources})`);
   p.resources -= cost;
@@ -881,6 +895,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
     if (sc.crank && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
       pm.steam = (pm.steam ?? 0) - 1;
       p.actionPoints += 1;
+      ability(p)?.onCrank?.(heroCtx(s, p));
       log(s, pid, `${c.name} cranks: a steam counter is removed and ${p.name} gains an action point.`, 'Crank: when this enters the arena, you may remove a steam counter from it. If you do, gain an action point.');
     }
   } else {
@@ -1249,7 +1264,7 @@ function doArsenal(s: GameState, uid: number | null) {
 function endTurn(s: GameState) {
   const p = s.players[s.turnPlayer];
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
-  const debt = p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
+  const debt = ability(p)?.skipBloodDebt?.(heroCtx(s, p)) ? 0 : p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
   if (debt > 0) { p.life -= debt; log(s, p.id, `Blood debt: ${p.name} loses ${debt} life (${p.life}).`); checkWin(s); if (s.phase === 'gameOver') return; }
   // end phase token triggers
   for (const pm of [...p.permanents]) {

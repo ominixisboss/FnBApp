@@ -79,3 +79,15 @@ describe('more keywords', () => {
     expect(getScript(named('Deadwood Dirge')).coverage).toBe('full');
   });
 });
+
+describe('more heroes', () => {
+  it('Hala sharpens her sword; Levia skips blood debt after banishing a big card', async () => {
+    const { getHeroAbility } = await import('../engine/heroes');
+    expect(getHeroAbility(named('Hala, Bladesaint of the Vow'))?.id).toBe('hala');
+    const levia = getHeroAbility(named('Levia, Shadowborn Abomination'))!;
+    const p = { banished: [] as { cardId: string; uid: number; owner: 0 }[], turn: { flags: { banStart: 0 } } } as unknown as GameState['players'][0];
+    expect(levia.skipBloodDebt!({ p } as never)).toBe(false);
+    p.banished.push({ cardId: id('Bare Fangs', 1), uid: 1, owner: 0 });
+    expect(levia.skipBloodDebt!({ p } as never)).toBe(true);
+  });
+});
