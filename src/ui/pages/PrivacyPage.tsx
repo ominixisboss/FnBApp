@@ -11,7 +11,8 @@ export default function PrivacyPage() {
       <ul>
         <li>your username and a salted, scrypt-hashed password (never the password itself);</li>
         <li>your profile (display name, avatar hero, equipped cosmetics), decks and match history;</li>
-        <li>for online play: ranked rating, friends list, and replays of online games (kept for 60 days, visible only to the two players).</li>
+        <li>for online play: ranked ratings (all-time and per season), friends list, friend cups, your pools and decks at draft/sealed tables (kept in memory for a day), and replays of online games (kept for 60 days, visible only to the two players);</li>
+        <li>if you turn on notifications: your browser’s push subscription, used only to tell you about friend challenges and friend cups. Turning notifications off deletes it.</li>
       </ul>
       <p>This data is used only to run the app’s features. It is not sold, shared with third parties, or used for advertising. The app has no ads and no analytics or tracking. Other players can see your display name, avatar and rating on the leaderboards, and your friends can see when you’re online.</p>
       <h3>Deleting your data</h3>
