@@ -12,6 +12,7 @@ import {
 import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
+import { chooseMythic } from './mythic';
 
 export interface BotDecision {
   action: Action;
@@ -165,6 +166,8 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+    case 'arsenalToBottom': choice = { accept: true }; cost = p.arsenal[0] ? cardPlayValue(cardOf(p.arsenal[0])) * 0.8 : 99; break;
+    case 'banishGraveMatch': case 'decompose': choice = { accept: true }; cost = 0.3; break;
     case 'reveal': {
       // fusing is free: the revealed card stays in hand
       const talent = oc.cost.talent;
@@ -537,6 +540,12 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
     const a: Action = s.phase === 'defend' ? { type: 'defend', uids: [] } : s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' };
     return { action: a, reason: 'Goldfish: does nothing.' };
   }
+  if (s.pendingTriggers) {
+    // order start-of-turn triggers: resources first (Vigor), then the rest as they are
+    const order = [...s.pendingTriggers.uids].sort((x, y) => Number(nameOfUid(s, y) === 'Vigor') - Number(nameOfUid(s, x) === 'Vigor'));
+    return { action: { type: 'orderTriggers', order }, reason: 'Resolve the start-of-turn triggers.' };
+  }
+  if (diff === 'mythic') return chooseMythic(s, pid);
   if (s.phase === 'action' && s.stack?.length) return planStackResponse(s, pid, diff);
   switch (s.phase) {
     case 'defend': return planDefense(s, pid, diff);
@@ -545,6 +554,11 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
     case 'action': return planAction(s, s.players[pid], diff);
     default: return { action: { type: 'pass' }, reason: '' };
   }
+}
+
+function nameOfUid(s: GameState, uid: number): string {
+  for (const p of s.players) { const pm = p.permanents.find((x) => x.inst.uid === uid); if (pm) return cardOf(pm.inst).name; }
+  return '';
 }
 
 function modeLabel(p: PlayerState, uid: number, mode: number): string | undefined {
@@ -565,6 +579,7 @@ export function describeAction(s: GameState, a: Action): string {
     case 'defend': return a.uids.length ? `Defend with ${a.uids.map(nameOf).join(', ')}` : 'Don’t defend';
     case 'arsenal': return a.uid === null ? 'Leave arsenal empty' : `Put ${nameOf(a.uid)} in arsenal`;
     case 'pass': return s.phase === 'action' ? 'End your turn' : 'Pass';
+    case 'orderTriggers': return `Resolve triggers: ${a.order.map((u) => nameOfUid(s, u)).join(', then ')}`;
     default: return a.type;
   }
 }

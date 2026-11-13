@@ -16,11 +16,13 @@ import CardView, { CardBack } from './CardView';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
+import { musicEnabled, setMusicEnabled, setMusicMood } from '../music';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
 import { computeProgress, progressDiff } from '../../stats/progress';
 import type { MatchStats, Progress } from '../../stats/progress';
 import { loadMatches } from '../../stats/matches';
+import { addDrill } from '../../learn/drills';
 import { HintArrows, MatchIntro, damageSource, themeOf, useVfx } from './Vfx';
 import type { Theme } from './Vfx';
 import type { ChainLink } from '../../engine/types';
@@ -235,6 +237,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [, setTick] = useState(0);
   useEffect(() => { const t = setTimeout(() => setTick((n) => n + 1), 3600); return () => clearTimeout(t); }, [myEmote, online?.emote]);
   const [sound, setSound] = useState(soundEnabled);
+  const [music, setMusic] = useState(musicEnabled);
+  useEffect(() => { setMusicMood('battle'); return () => setMusicMood('menu'); }, []);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
@@ -435,7 +439,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, []);
   // auto end turn when nothing can be played, and auto "no block" when nothing can block
   useEffect(() => {
-    if (!autoPass || !myTurn || pending) return;
+    if (!autoPass || !myTurn || pending || state.pendingTriggers) return;
     const nothingToPlay = state.phase === 'action' && options.length === 0;
     const nothingToBlock = state.phase === 'defend' && defOpts.length === 0;
     if (!nothingToPlay && !nothingToBlock) return;
@@ -712,6 +716,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
   return (
     <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
+      <div className="mat-ambient" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</div>
+      {/* screen readers hear each new line of the game log */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{state.log[state.log.length - 1]?.text}</div>
       <div className="arena-bar">
         <span className="arena-title">{formatName(state.format)} · Turn {state.turn}</span>
         <div className="grow" />
@@ -738,6 +745,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className={`icon-btn ${music ? 'on' : ''}`} title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span>Music</span></button>
           {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
           {canVibrate() && <button className={`icon-btn ${vibrate ? 'on' : ''}`} title="Vibration" onClick={() => { setHapticsEnabled(!vibrate); setVibrate(!vibrate); }}>📳<span>Vibration</span></button>}
@@ -940,6 +948,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           </div>
         );
       })()}
+      {state.pendingTriggers && state.pendingTriggers.player === HUMAN && (
+        <TriggerOrder uids={state.pendingTriggers.uids} me={me} onDone={(order) => act({ type: 'orderTriggers', order })} />
+      )}
       {ordering && (
         <div className="modal-bg">
           <div className="modal" style={{ maxWidth: 560 }}>
@@ -1122,7 +1133,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {equipSlot('legs', 'Legs', legs)}
       {weaponSlot('weapL', w1, w1 ? undefined : offHand)}
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
-      <Slot area="hero" label="Hero" filled className="hero-box">
+      <Slot area="hero" label="Hero" filled className={`hero-box hero-aura aura-${themeOf(cardOf(p.hero))}`}>
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
           className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
@@ -1449,7 +1460,8 @@ function ProgressGains({ before }: { before: Progress }) {
 
 /** Post-game review: the Hard bot re-checks each of your decisions and points out where it would have played differently. */
 function GameReview({ decisions, onClose }: { decisions: { before: GameState; action: Action }[]; onClose: () => void }) {
-  const [rows, setRows] = useState<{ turn: number; yours: string; better: string; why: string }[]>([]);
+  const [rows, setRows] = useState<{ turn: number; yours: string; better: string; why: string; before: GameState; a: Action; b: Action }[]>([]);
+  const [saved, setSaved] = useState(false);
   const [done, setDone] = useState(0);
   const list = useMemo(() => decisions.filter((d) => ['play', 'activate', 'defend', 'pass'].includes(d.action.type) && ['action', 'defend'].includes(d.before.phase)).slice(-60), [decisions]);
   useEffect(() => {
@@ -1463,7 +1475,7 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
         const same = a.type === b.type && (
           (a.type === 'play' || a.type === 'activate') ? a.uid === (b as typeof a).uid
             : a.type === 'defend' ? [...a.uids].sort().join() === [...(b as typeof a).uids].sort().join() : true);
-        if (!same) setRows((r) => [...r, { turn: d.before.turn, yours: describeAction(d.before, a), better: describeAction(d.before, b), why: sug.reason }]);
+        if (!same) setRows((r) => [...r, { turn: d.before.turn, yours: describeAction(d.before, a), better: describeAction(d.before, b), why: sug.reason, before: d.before, a, b }]);
         setDone((n) => n + 1);
       }
     })();
@@ -1479,6 +1491,12 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
           {done < list.length ? `Checking your decisions… ${done}/${list.length}` : `${matched} of ${list.length} decisions matched what the Hard bot would do.`} The bot isn’t perfect, so treat these as ideas rather than mistakes.
         </p>
         {rows.length === 0 && done === list.length && <p>🎯 No differences: you played this game like the Hard bot would.</p>}
+        {rows.length > 0 && done === list.length && (
+          <div className="row" style={{ marginBottom: '.6rem' }}>
+            <button className="primary" disabled={saved} onClick={() => { rows.forEach((r) => addDrill(r.before, r.a, r.b, r.why)); setSaved(true); }}>{saved ? '✓ Saved to the mistake trainer' : `Save ${rows.length} position${rows.length > 1 ? 's' : ''} to the mistake trainer`}</button>
+            {saved && <a className="btn-link small" href="#drills">Open the trainer</a>}
+          </div>
+        )}
         <div className="col" style={{ gap: '.5rem' }}>
           {rows.map((r, i) => (
             <div key={i} className="review-row">
@@ -1488,6 +1506,34 @@ function GameReview({ decisions, onClose }: { decisions: { before: GameState; ac
               {r.why && <div className="small muted">{r.why}</div>}
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Choose the order your start-of-turn triggers resolve in. */
+function TriggerOrder({ uids, me, onDone }: { uids: number[]; me: GameState['players'][0]; onDone: (order: number[]) => void }) {
+  const [order, setOrder] = useState<number[]>([]);
+  const items = uids.map((u) => me.permanents.find((pm) => pm.inst.uid === u)).filter((x): x is NonNullable<typeof x> => !!x);
+  return (
+    <div className="modal-bg">
+      <div className="modal" style={{ maxWidth: 560 }}>
+        <h2 style={{ marginBottom: '.2rem' }}>Order your triggers</h2>
+        <p className="small muted" style={{ marginTop: 0 }}>Several of your effects trigger at the start of your turn. Tap them in the order you want them to resolve.</p>
+        <div className="row" style={{ gap: '.6rem' }}>
+          {items.map((pm) => {
+            const n = order.indexOf(pm.inst.uid);
+            return (
+              <div key={pm.inst.uid} style={{ cursor: 'pointer' }} onClick={() => setOrder(n >= 0 ? order.filter((u) => u !== pm.inst.uid) : [...order, pm.inst.uid])}>
+                <CardView card={cardOf(pm.inst)} width={96} tilt={false} noPopout marker={n >= 0 ? String(n + 1) : undefined} className={n >= 0 ? 'hint-play' : ''} />
+              </div>
+            );
+          })}
+        </div>
+        <div className="row" style={{ marginTop: '1rem' }}>
+          <button className="primary" disabled={order.length !== items.length} onClick={() => onDone(order)}>Resolve in this order</button>
+          <button onClick={() => onDone(items.map((pm) => pm.inst.uid))}>Any order</button>
         </div>
       </div>
     </div>

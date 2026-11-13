@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { card, getDb } from '../../data/cardDb';
 import { createGame } from '../../engine/game';
 import type { Difficulty, GameState } from '../../engine/types';
+import { botDeck } from '../../deck/botDecks';
 import { autoBuildDeck, heroesFor, loadDecks, toDeckList } from '../../deck/deck';
 import { recordMatch } from '../../stats/matches';
 import { loadFeats, updateFeats } from '../../stats/progress';
@@ -40,7 +41,7 @@ export default function GauntletPage() {
     const opp = run.opponents[run.stage];
     setGame(createGame([
       { name: 'You', isBot: false, deck: mine },
-      { name: `${card(opp).name.split(',')[0]} (bot)`, isBot: true, difficulty: STAGES[run.stage], deck: toDeckList(autoBuildDeck(opp, 'blitz', (Date.now() + run.stage) & 0xffff)) },
+      { name: `${card(opp).name.split(',')[0]} (bot)`, isBot: true, difficulty: STAGES[run.stage], deck: botDeck(opp, 'blitz', (Date.now() + run.stage) & 0xffff) },
     ], Date.now() & 0x7fffffff, 'blitz'));
   };
 

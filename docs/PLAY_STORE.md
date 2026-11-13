@@ -34,13 +34,19 @@ your own Google account and a private signing key. Neither can be created for yo
 
   > FaB Trainer is a free, fan-made companion for learning and playing the Flesh and Blood trading card game.
   >
-  > • Play against Easy, Normal and Hard AI bots with every hero, using tuned starter decks or your own.
+  > • Play against Easy, Normal, Hard and Mythic AI bots with every hero. Bots play decks tuned by thousands of self-play games.
+  > • Real rules: the stack and priority, pitch order, trigger order, and hundreds of cards automated, with a sandbox for anything that isn't.
+  > • Real matches: die roll, sideboarding, best of 3, chess clock, and a Swiss tournament with a Top 4 cut.
+  > • Hero guides: how every hero wins, its key cards, and how to beat it.
+  > • Mistake trainer: positions from your own games where a stronger line existed, replayed as drills.
   > • Learn the game: short lessons, a keyword glossary, a guided practice game, and move hints that light up the cards to play, in order.
   > • Lethal puzzles: win-this-turn positions that even the bots can't solve.
   > • The Gauntlet: beat eight opponents in a row.
-  > • Sealed and Draft: open packs or draft against bots, build a deck and play it.
+  > • Sealed and Draft: open packs or draft against bots, or open a table and draft with your friends online.
   > • Deck builder with the full card database, legality checks, draw odds and decklist import/export.
-  > • Online play: ranked ladder, friends, challenges, emotes and replays.
+  > • Online play: monthly ranked seasons per format, friends, challenges, spectating, friend cups, emotes and replays.
+  > • Table tools for paper games: life counter, sample hands and a printable decklist.
+  > • Accessibility: colour-blind pitch markers, larger text and screen-reader support.
   > • Progression: XP, daily quests, achievements, card sleeves, playmats and avatar frames.
   > • Works offline against the bots.
   >
@@ -63,6 +69,8 @@ your own Google account and a private signing key. Neither can be created for yo
   - Purpose: app functionality and account management only. Not shared with third parties. Encrypted in transit
     (HTTPS). Players can ask for deletion (see the privacy page).
   - No location, contacts, photos, advertising ID or analytics.
+  - Push notifications (web app only, opt-in): the browser's push subscription is stored with the account and used
+    only to tell the player about friend challenges and friend cups.
 
 ## 4. Things to know before publishing
 

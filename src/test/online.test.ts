@@ -13,6 +13,9 @@ import { autoBuildDeck, toDeckList } from '../deck/deck';
 import { chooseAction } from '../ai/bot';
 import type { Action, GameState } from '../engine/types';
 import { applyAction } from '../engine/game';
+import type { PodView } from '../online/podTypes';
+import { autoBuildLimited, botPick, limitedDeckList, setHeroes } from '../deck/limited';
+import { eligibleForHero, getDb } from '../data/cardDb';
 
 const PORT = 18787 + Math.floor(Math.random() * 1000);
 const BASE = `http://localhost:${PORT}`;
@@ -37,23 +40,27 @@ async function account(name: string) {
   return (await r.json()) as { token: string };
 }
 
-interface Client { ws: WebSocket; states: GameState[]; errors: string[]; waiting: { code?: string } | null; spectated: GameState[] }
+interface Client { ws: WebSocket; states: GameState[]; errors: string[]; waiting: { code?: string } | null; spectated: GameState[]; pod: PodView | null; challenged: { code: string } | null }
 
 function connect(token: string): Promise<Client> {
   return new Promise((resolve) => {
-    const c: Client = { ws: new WebSocket(`ws://localhost:${PORT}/ws?token=${token}`), states: [], errors: [], waiting: null, spectated: [] };
+    const c: Client = { ws: new WebSocket(`ws://localhost:${PORT}/ws?token=${token}`), states: [], errors: [], waiting: null, spectated: [], pod: null, challenged: null };
     c.ws.on('message', (d) => {
       const m = JSON.parse(String(d));
       if (m.t === 'state') c.states.push(m.state);
       if (m.t === 'error') c.errors.push(m.message);
       if (m.t === 'waiting') c.waiting = m;
       if (m.t === 'spectate') c.spectated.push(m.state);
+      if (m.t === 'pod') c.pod = m.pod;
+      if (m.t === 'challenged') c.challenged = m;
     });
     c.ws.on('open', () => resolve(c));
   });
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** wait until a condition holds (or give up after a few seconds and let the assertions report it) */
+async function until(cond: () => boolean, ms = 5000) { for (let t = 0; t < ms && !cond(); t += 25) await wait(25); }
 
 describe('online play', () => {
   it('rejects bad credentials and requires auth for sync', async () => {
@@ -70,10 +77,10 @@ describe('online play', () => {
     const deckA = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
     const deckB = toDeckList(autoBuildDeck(findCard('Bravo')!.id, 'blitz', 2));
     ca.ws.send(JSON.stringify({ t: 'host', deck: deckA, format: 'blitz' }));
-    await wait(300);
+    await until(() => !!ca.waiting?.code);
     expect(ca.waiting?.code).toMatch(/^[A-Z0-9]{5}$/);
     cb.ws.send(JSON.stringify({ t: 'join', code: ca.waiting!.code, deck: deckB }));
-    await wait(300);
+    await until(() => ca.states.length > 0 && cb.states.length > 0);
     expect(ca.states.length).toBeGreaterThan(0);
 
     // hidden information never reaches the other player
@@ -201,6 +208,12 @@ describe('online play', () => {
     const byName = Object.fromEntries(lad.map((r: { username: string; rating: number }) => [r.username, r.rating]));
     expect(byName.dana).toBeGreaterThan(1000);
     expect(byName.eve).toBeLessThan(1000);
+    // the same game counts on this month's season ladder for its format, and in each player's season history
+    const season = await (await fetch(`${BASE}/api/ladder?format=blitz`)).json();
+    expect(season.map((r: { username: string }) => r.username).sort()).toEqual(['dana', 'eve']);
+    const me = await (await fetch(`${BASE}/api/me`, { headers: auth(a.token) })).json();
+    expect(me.seasons).toEqual([expect.objectContaining({ format: 'blitz', games: 1, peak: expect.any(Number) })]);
+    expect(me.season.id).toMatch(/^\d{4}-\d{2}$/);
     ca.ws.close();
     cb.ws.close();
   }, 30_000);
@@ -217,4 +230,110 @@ describe('online play', () => {
     r = await (await fetch(`${BASE}/api/decks`, { headers: auth })).json();
     expect(r.decks).toEqual([]);
   });
+
+  it('friends draft together at a table and the server keeps each pool', async () => {
+    const [a, b] = [await account('pia'), await account('quinn')];
+    const [ca, cb] = [await connect(a.token), await connect(b.token)];
+    ca.ws.send(JSON.stringify({ t: 'podCreate', mode: 'draft', set: 'WTR' }));
+    await wait(300);
+    const code = ca.pod!.code;
+    cb.ws.send(JSON.stringify({ t: 'podJoin', code }));
+    await wait(300);
+    expect(ca.pod!.players.map((p) => p.username)).toEqual(['pia', 'quinn']);
+    cb.ws.send(JSON.stringify({ t: 'podStart' })); // only the host may start
+    await wait(200);
+    expect(cb.errors.at(-1)).toMatch(/host/);
+    ca.ws.send(JSON.stringify({ t: 'podStart' }));
+    await wait(300);
+    expect(ca.pod!.phase).toBe('drafting');
+    expect(ca.pod!.players.length).toBe(8); // six bots fill the table
+    // each player drafts for a hero, taking the card a bot would (3 packs of 14)
+    const [ha, hb] = setHeroes('WTR');
+    const stamp = (c: Client) => `${c.pod!.round}:${c.pod!.you.pack.length}`;
+    for (let i = 0; i < 50 && ca.pod!.phase === 'drafting'; i++) {
+      const before = stamp(ca);
+      ca.ws.send(JSON.stringify({ t: 'podPick', index: botPick(ca.pod!.you.pack, ha) }));
+      cb.ws.send(JSON.stringify({ t: 'podPick', index: botPick(cb.pod!.you.pack, hb) }));
+      // wait for the packs to pass: both players see the next pack, not yet picked from
+      await until(() => ca.pod!.phase !== 'drafting' || (stamp(ca) !== before && stamp(cb) === stamp(ca) && !ca.pod!.you.picked && !cb.pod!.you.picked));
+    }
+    await until(() => ca.pod!.phase === 'building');
+    expect(ca.pod!.phase).toBe('building');
+    expect(ca.pod!.you.pool.length).toBe(42);
+    // a deck with a card that isn't in your pool is refused
+    const db = getDb();
+    const hero = setHeroes('WTR')[0];
+    const foreign = db.cards.find((c) => !ca.pod!.you.pool.includes(c.id) && c.types.includes('Action') && c.pitch === 1)!;
+    const deckA = limitedDeckList(hero, autoBuildLimited(ca.pod!.you.pool, hero));
+    ca.ws.send(JSON.stringify({ t: 'podDeck', deck: { ...deckA, cardIds: [...deckA.cardIds.slice(1), foreign.id] } }));
+    await wait(200);
+    expect(ca.errors.at(-1)).toMatch(/pool|can’t be used/);
+    // pad with any eligible pool cards if the auto-build came up short of 30
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
+
+  it('a sealed table: decks are checked against your own pool, and tablemates play each other with them', async () => {
+    const [a, b] = [await account('rui'), await account('sol')];
+    const [ca, cb] = [await connect(a.token), await connect(b.token)];
+    ca.ws.send(JSON.stringify({ t: 'podCreate', mode: 'sealed', set: 'WTR' }));
+    await until(() => !!ca.pod);
+    cb.ws.send(JSON.stringify({ t: 'podJoin', code: ca.pod!.code }));
+    await until(() => ca.pod!.players.length === 2 && !!cb.pod);
+    ca.ws.send(JSON.stringify({ t: 'podStart' }));
+    await until(() => ca.pod!.phase === 'building' && cb.pod!.phase === 'building');
+    expect(ca.pod!.phase).toBe('building');
+    expect(ca.pod!.you.pool.length).toBe(84); // six packs each
+    const db = getDb();
+    // each player builds for the set hero who can use the most of their pool
+    const build = (pool: string[]) => {
+      const h = setHeroes('WTR').map((x) => ({ x, n: pool.filter((id) => eligibleForHero(db.byId.get(id)!, x)).length })).sort((p, q) => q.n - p.n)[0].x;
+      return limitedDeckList(h, autoBuildLimited(pool, h, 32));
+    };
+    const okA = build(ca.pod!.you.pool), okB = build(cb.pod!.you.pool);
+    expect(okA.cardIds.length).toBeGreaterThanOrEqual(30);
+    // borrowing a card from the other player's pool is refused
+    const theirs = cb.pod!.you.pool.find((id) => !ca.pod!.you.pool.includes(id) && eligibleForHero(db.byId.get(id)!, db.byId.get(okA.heroId)!) && !db.byId.get(id)!.types.includes('Equipment') && !db.byId.get(id)!.types.includes('Weapon'));
+    if (theirs) {
+      const n = ca.errors.length;
+      ca.ws.send(JSON.stringify({ t: 'podDeck', deck: { ...okA, cardIds: [...okA.cardIds.slice(1), theirs] } }));
+      await until(() => ca.errors.length > n);
+      expect(ca.errors.at(-1)).toMatch(/pool/);
+    }
+    ca.ws.send(JSON.stringify({ t: 'podDeck', deck: okA }));
+    cb.ws.send(JSON.stringify({ t: 'podDeck', deck: okB }));
+    await until(() => !!cb.pod!.players.find((p) => p.username === 'rui')?.ready && !!ca.pod!.players.find((p) => p.username === 'sol')?.ready);
+    expect(cb.pod!.players.find((p) => p.username === 'rui')!.ready).toBe(true);
+    // rui challenges sol; sol accepts with a placeholder and the server uses sol's table deck
+    ca.ws.send(JSON.stringify({ t: 'podPlay', opponent: 'sol' }));
+    await until(() => !!cb.challenged);
+    expect(cb.challenged).toBeTruthy();
+    cb.ws.send(JSON.stringify({ t: 'join', code: cb.challenged!.code, deck: { heroId: '', weaponIds: [], equipmentIds: [], cardIds: [] } }));
+    await until(() => cb.states.length > 0);
+    expect(cb.states.length).toBeGreaterThan(0);
+    expect(cb.states.at(-1)!.players[0].hero.cardId).toBe(okB.heroId);
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
+
+  it('push: the server has a key, stores subscriptions, and an offline friend sees a challenge when they connect', async () => {
+    const key = await (await fetch(`${BASE}/api/push/key`)).json();
+    expect(key.key).toMatch(/^[A-Za-z0-9_-]{60,}$/);
+    const [a, b] = [await account('tess'), await account('ugo')];
+    const H = (t: string) => ({ 'content-type': 'application/json', authorization: `Bearer ${t}` });
+    expect((await fetch(`${BASE}/api/push`, { method: 'POST', headers: H(b.token), body: JSON.stringify({ subscription: { endpoint: 'not a url' } }) })).status).toBe(400);
+    const sub = { endpoint: 'https://push.invalid/abc', keys: { p256dh: 'BOr1', auth: 'x1' } };
+    expect((await fetch(`${BASE}/api/push`, { method: 'POST', headers: H(b.token), body: JSON.stringify({ subscription: sub }) })).status).toBe(200);
+    await fetch(`${BASE}/api/friends`, { method: 'POST', headers: H(a.token), body: JSON.stringify({ username: 'ugo' }) });
+    const ca = await connect(a.token);
+    ca.ws.send(JSON.stringify({ t: 'challenge', to: 'ugo', deck: toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1)), format: 'blitz' }));
+    await until(() => !!ca.waiting);
+    expect(ca.errors).toEqual([]); // ugo is offline, but the challenge still goes out
+    const cb = await connect(b.token);
+    await until(() => !!cb.challenged);
+    expect(cb.challenged).toEqual(expect.objectContaining({ username: 'tess' }));
+    ca.ws.close();
+    cb.ws.close();
+  }, 30_000);
 });
+

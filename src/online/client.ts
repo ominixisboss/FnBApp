@@ -4,6 +4,7 @@ import type { DeckList } from '../engine/game';
 import type { Action, GameState } from '../engine/types';
 import type { DeckFormat } from '../deck/deck';
 import { wsUrl } from '../ui/auth';
+import type { PodView } from './podTypes';
 
 export interface OnlineState {
   status: 'offline' | 'connecting' | 'idle' | 'waiting' | 'playing';
@@ -19,7 +20,9 @@ export interface OnlineState {
   /** a friend challenged you */
   challenge: { from: string; username: string; code: string; format: string } | null;
   /** rating change after a ranked game */
-  rated: { before: number; after: number } | null;
+  rated: { before: number; after: number; season?: string; format?: string } | null;
+  /** your draft/sealed table, if you're at one */
+  pod: PodView | null;
   /** info line (e.g. a friend declined) */
   notice: string | null;
   /** this room allows manual moves */
@@ -29,7 +32,7 @@ export interface OnlineState {
 }
 
 let ws: WebSocket | null = null;
-let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null, sandbox: false, spectating: null };
+let state: OnlineState = { status: 'offline', code: null, queue: false, format: null, game: null, matchId: null, opponent: null, error: null, emote: null, challenge: null, rated: null, notice: null, sandbox: false, spectating: null, pod: null };
 const subs = new Set<() => void>();
 const set = (p: Partial<OnlineState>) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
 let pending: object | null = null;
@@ -53,7 +56,8 @@ function connect() {
       case 'emote': set({ emote: { id: msg.id, at: Date.now() } }); break;
       case 'challenged': set({ challenge: { from: msg.from, username: msg.username, code: msg.code, format: msg.format } }); break;
       case 'declined': set({ notice: `${msg.by} declined your challenge.` }); break;
-      case 'rated': set({ rated: { before: msg.before, after: msg.after } }); break;
+      case 'pod': set({ pod: msg.pod }); break;
+      case 'rated': set({ rated: { before: msg.before, after: msg.after, season: msg.season, format: msg.format } }); break;
       case 'spectate': set({ spectating: { state: msg.state, names: msg.names, watching: msg.watching }, error: null }); break;
       case 'spectateEnd': set({ spectating: null }); break;
       case 'state': if (state.status !== 'playing') set({ rated: null, emote: null }); set({ status: 'playing', challenge: null, sandbox: !!msg.sandbox, game: msg.state, opponent: msg.opponent, matchId: msg.matchId, code: msg.code, error: null }); break;
@@ -95,6 +99,13 @@ export const online = {
   clearError: () => set({ error: null, notice: null }),
   emote: (id: string) => sendMsg({ t: 'emote', id }),
   challenge: (to: string, deck: DeckList, format: DeckFormat) => sendMsg({ t: 'challenge', to, deck, format }),
+  podCreate: (mode: 'draft' | 'sealed', setCode: string) => sendMsg({ t: 'podCreate', mode, set: setCode }),
+  podJoin: (code: string) => sendMsg({ t: 'podJoin', code }),
+  podStart: () => sendMsg({ t: 'podStart' }),
+  podPick: (index: number) => sendMsg({ t: 'podPick', index }),
+  podDeck: (deck: DeckList) => sendMsg({ t: 'podDeck', deck }),
+  podLeave: () => { sendMsg({ t: 'podLeave' }); set({ pod: null }); },
+  podPlay: (opponent: string) => sendMsg({ t: 'podPlay', opponent }),
   accept: (deck: DeckList) => { const c = state.challenge; if (c) { sendMsg({ t: 'join', code: c.code, deck }); set({ challenge: null }); } },
   spectate: (username: string) => sendMsg({ t: 'spectate', username }),
   unspectate: () => { sendMsg({ t: 'unspectate' }); set({ spectating: null }); },

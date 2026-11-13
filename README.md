@@ -7,7 +7,8 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Full card database**: all ~5,000 cards, including stats, rules text, legality (Blitz, CC, Silver Age, Commoner), sets and images. Search by name, text or keyword, and filter by class, talent, type, pitch and format.
 - **Learn**: nine short lessons (pitching, action points and go again, the combat chain, defending, arsenal, reactions, strategy) and a keyword glossary.
 - **Guided practice**: a game against an easy bot with move suggestions that explain the reasoning. With hints on (💡), the suggested cards glow on the board: gold numbers give the order to play them in, blue ⛀ marks the cards to pitch, 🛡 the blockers and A the card for your arsenal. You can undo any move.
-- **Play vs AI**: easy, normal and hard bots. The bots plan their whole turn (which cards to play, pitch or keep for blocking) and decide blocks and reactions by card value.
+- **Play vs AI**: easy, normal, hard and **mythic** bots. The bots plan their whole turn (which cards to play, pitch or keep for blocking) and decide blocks and reactions by card value. Mythic also plays out many possible futures before each big decision, with the hidden cards reshuffled each time so it can't cheat. In 160 test games it won 62% against Hard, where Hard won 50% against itself on the same matchups.
+- **Tuned bot decks**: each Blitz hero's bot deck was tuned by self-play (`scripts/tune-decks.mts`, output in `public/data/bot-decks.json`) and kept only when it also won more on games it wasn't tuned on. On a third set of held-out games the tuned lists won 54.8% against 43.7% for the original auto-built lists.
 - **Deck builder**:
   - Hero picker, with the card pool filtered to the hero's class and talents.
   - Live legality checks: deck size, copy limits, young/adult hero, bans, legendary cards, specializations.
@@ -23,16 +24,22 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Profile & stats**: display name and hero avatar. Stat tiles show games, record, win rate, streaks and average game length, plus recent form, win rate by your hero, by opponent hero, by opponent type and by format, and full match history.
 - **Accounts & cloud sync** (needs the server): username/password sign-in. Profile, decks and match history sync across devices; decks merge newest-wins and deletions carry over.
 - **Online play** (needs the server): quick match by format, or private rooms with a 5-letter code. The server runs the game with the same rules engine and validates every move. Each player only receives what they may see: the opponent's hand, both decks and face-down arsenal are hidden. Reconnecting resumes the game; a player who stays disconnected for 2 minutes forfeits. Results feed both players' stats and an online leaderboard.
-- **Hero abilities**: about 27 heroes are automated, including Dorinthea, Bravo, Benji, Arakni, Ira, Fai, Cindra/Fang, Rhinar, Kayo, Aurora, Oscilio, Terra, Vynnset, Kavdaen, Data Doll, Dash, Emperor, Lyath, Valda and Tuffnut. The card pop-out says what's automated for each hero.
+- **Hero abilities**: 40 of the 86 heroes are automated, including Hala, Prism, Levia, Azalea, Enigma, Dromai, Puffin, Marlynn, Gravy Bones, Dorinthea, Bravo, Benji, Arakni, Ira, Fai, Cindra/Fang, Rhinar, Kayo, Aurora, Oscilio, Terra, Vynnset, Kavdaen, Data Doll, Dash, Emperor, Lyath, Valda and Tuffnut. The card pop-out says what's automated for each hero.
 - **Hero-tuned decks**: bots and starter decks are built around each hero's archetype (Weapon Warrior, Guardian Crush, Ninja Combo, Brute Big Hits, Draconic Aggro, Stealth Assassin, Arcane Wizard, Runechant Runeblade, Mechanologist Boost) with signature cards.
 
 - **Progression:** XP for every game, levels with titles, three daily quests that change at midnight, 19 achievements, and unlockable card sleeves, playmats and avatar frames. Progress is calculated from your match history, so it syncs with your account.
-- **Lethal puzzles:** 11 "win this turn" positions, each checked by a brute-force solver to have a winning line that the bots miss. You can see the solution after a failed attempt.
+- **Lethal puzzles:** 20 "win this turn" positions, each checked by a brute-force solver to have a winning line that the bots miss. You can see the solution after a failed attempt.
 - **The Gauntlet:** eight bot heroes in a row, from Easy to Hard. One loss ends the run.
 - **Sealed & Draft:** open six packs from one of 15 sets, or draft three packs at a table of seven bots. Then pick a hero, build a deck of 30 or more cards (or auto-build one) and play it.
+- **Draft & Sealed with friends** (needs the server): open a table, share its code, and draft together. Empty seats get bots and there's a pick timer. The server keeps every pool, so decks are checked against what each player actually drafted. Then play anyone at the table.
+- **Hero guides** (`#guides`): how each hero wins, its key cards and how to beat it, with *Play as* and *Practice against* buttons.
+- **Mistake trainer** (`#drills`): save the positions from a game review where the Hard bot would have played differently, and drill them until you get each right twice in a row.
+- **Sound & looks:** a generated soundtrack (calm in menus, driving in games; turn it on in the top bar), living playmats (embers, snow, stars, candlelight, lightning) and a glow around each hero in its talent's colours.
+- **Accessibility:** colour-blind pitch markers (▲1 red, ■2 yellow, ●3 blue), larger text, card descriptions for screen readers and a live game log they read out.
 - **Game review:** after a game, the Hard bot re-checks your decisions and lists where it would have played differently, and why.
 - **Replays:** watch any recent game again, with play, step, scrub and speed controls. Games against the AI are stored in the browser; online games are stored on the server.
-- **Online extras:** a ranked ladder (Elo, Bronze to Mythic) for quick matches, friends with online status, direct challenges, and emotes.
+- **Online extras:** ranked quick matches with monthly seasons and a ladder per format (Elo, Bronze to Mythic; reaching Gold or Diamond in a season unlocks cosmetics), friends with online status, direct challenges (also to offline friends), and emotes.
+- **Notifications** (web and installed web app): opt in on your Profile to get a notification when a friend challenges you or adds you to a friend cup. The server makes its own push keys, so there's nothing to set up. Set `PUSH_CONTACT` (e.g. `mailto:you@example.com`) to give push services a contact. The Android app's WebView can't receive web push; real Android push would need a Firebase project.
 - **Deck tools:** pitch balance, average resources per hand, and per-card odds of drawing a card in your opening hand or by turn 2 or 3. Deck links from Fabrary, FaB DB and Talishar are recognised, with steps to copy the list as text.
 - **The stack and priority:** played cards and activations go on a stack. Your opponent gets priority to respond with instants (prevention, pumps, …) before anything resolves, just like at a real table. You choose the order of your pitched cards at the end of turn, and the log explains the rule behind each step (tap a 📖 tip).
 - **Sandbox mode:** move any card between any zones, shuffle, add counters, flip equipment, for effects the engine doesn't automate. Play against a 🐟 Goldfish (a dummy that never acts) to test a deck, or open a sandbox online room to play a tabletop-style game with a friend.
@@ -93,13 +100,15 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~940 |
-| Partly automated | ~1,650 |
-| Stats only (text not automated) | ~2,370 |
+| Fully automated | ~1,180 |
+| Partly automated | ~1,540 |
+| Stats only (text not automated) | ~2,240 |
 
-Hero abilities for about 27 heroes are automated; the rest (mostly ones built on wagers, the crowd, soul, chi or Gold tokens) aren't yet. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, create tokens, or (in sandbox mode) move any card between zones.
+Hero abilities for 40 of the 86 heroes are automated; most of the rest are built on wagers or the crowd, which aren't automated yet. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, create tokens, or (in sandbox mode) move any card between zones.
 
-Not yet supported: choosing the order of simultaneous triggers (they resolve in a fixed order) and multiplayer formats such as Ultimate Pit Fight. The bots play every card using its stats plus whatever text is automated.
+Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, reprise, decompose, chi, and choosing the order of your start-of-turn triggers. `src/test/rules.test.ts` checks rules scenarios (go again, dominate, blade break, temper, arcane barrier, intimidate, the chain closing, trigger order).
+
+Not yet supported: wagers, the crowd, heave, and multiplayer formats such as Ultimate Pit Fight (the engine is built for two players). The bots play every card using its stats plus whatever text is automated.
 
 ## Development
 

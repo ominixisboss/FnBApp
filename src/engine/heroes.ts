@@ -14,6 +14,9 @@ export interface HeroApi {
   mk(cardId: string, owner: PlayerState): CardInst;
   shuffle<T>(arr: T[]): T[];
   intimidate(target: PlayerState): void;
+  /** destroy a permanent you control with this name; false if there is none */
+  destroyNamed(p: PlayerState, name: string): boolean;
+  discard(p: PlayerState, inst: CardInst): void;
 }
 
 export interface HeroCtx {
@@ -53,6 +56,10 @@ export interface HeroAbility {
   /** card banished from deck by boost; return true if the ability moved it */
   onBoostBanish?(ctx: HeroCtx, inst: CardInst): boolean;
   activationCostMod?(ctx: HeroCtx, source: Card): number;
+  onPitch?(ctx: HeroCtx, c: Card): void;
+  onCrank?(ctx: HeroCtx): void;
+  /** Levia: skip blood debt this end phase */
+  skipBloodDebt?(ctx: HeroCtx): boolean;
   /** Lyath: halve base power / defense */
   halveStats?: boolean;
   pitchToBanished?: boolean;
@@ -405,6 +412,177 @@ export const HERO_ABILITIES: HeroAbility[] = [
     onPlayCard({ opp, api }, c) { if (c.types.includes('Ice')) api.createToken(opp, 'Frostbite', 1); },
   },
 ];
+
+// ---------------------------------------------------------------- tokens, soul, chi and Gold heroes
+
+const tokens = (p: PlayerState, name: string) => p.permanents.some((pm) => cardOf(pm.inst).name === name);
+const swordOf = (p: PlayerState) => p.weapons.find((w) => cardOf(w.inst).types.includes('Sword'));
+/** {c}: chi can only come from pitching a Chi card. Pitch one from hand if the pool is short. */
+const chiAvailable = (p: PlayerState) => (p.turn.flags.chi ?? 0) + p.hand.filter((h) => cardOf(h).types.includes('Chi')).reduce((a, h) => a + (cardOf(h).pitch ?? 0), 0);
+function spendChi(p: PlayerState, n: number, api: HeroApi) {
+  while ((p.turn.flags.chi ?? 0) < n) {
+    const i = p.hand.findIndex((h) => cardOf(h).types.includes('Chi'));
+    if (i < 0) throw new Error('Not enough chi.');
+    const [chi] = p.hand.splice(i, 1);
+    p.pitch.push(chi);
+    p.turn.flags.chi = (p.turn.flags.chi ?? 0) + (cardOf(chi).pitch ?? 0);
+    p.resources += cardOf(chi).pitch ?? 0;
+    api.log(p, `${p.name} pitches ${cardOf(chi).name} for chi.`);
+  }
+  // chi is also a resource: spending it uses up those resource points
+  p.turn.flags.chi -= n;
+  p.resources = Math.max(0, p.resources - n);
+}
+
+HERO_ABILITIES.push(
+  {
+    id: 'hala',
+    summary: 'Action {r}{r}{r}, tap: sharpen target sword you control (+1{p} counter). Go again.',
+    match: (t) => t.startsWith('Action - {r}{r}{r}, {t}: Sharpen target sword you control'),
+    activations: [{
+      label: 'Sharpen your sword', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 3,
+      canUse: ({ p }) => !!swordOf(p),
+      resolve: ({ p, api }) => { const w = swordOf(p)!; w.counters = (w.counters ?? 0) + 1; api.log(p, `${cardOf(w.inst).name} is sharpened (+1{p} counter).`); },
+      botValue: ({ p }) => (p.hand.length <= 2 ? 1.4 : 0.6),
+    }],
+  },
+  {
+    id: 'prism-shield',
+    summary: 'Once per turn Instant {r}{r}, banish a card from your soul: create a Spectral Shield token.',
+    match: (t) => t.startsWith('Once per Turn Instant - {r}{r}, banish a card from your soul: Create a Spectral Shield token'),
+    activations: [{
+      label: 'Spectral Shield (banish a soul card)', instant: true, oncePerTurn: true,
+      cost: () => 2,
+      canUse: ({ p }) => (p.soul?.length ?? 0) > 0,
+      resolve: ({ p, api }) => { p.banished.push(p.soul!.shift()!); api.createToken(p, 'Spectral Shield', 1); },
+      botValue: ({ p }) => ((p.soul?.length ?? 0) > 1 ? 1 : 0.2),
+    }],
+  },
+  {
+    id: 'kayo-armed',
+    summary: 'Attack action cards you own count +1{p} outside the combat chain; the first time you discard a card with 6+ {p} in your action phase each turn, create a Might token.',
+    partial: true,
+    match: (t) => t.includes('The first time you discard a card with 6 or more {p} during each of your action phases, create a Might token'),
+    onDiscard({ s, p, api }, c) {
+      const pw = Number(c.power ?? 0) + (has(c, 'Attack') && has(c, 'Action') ? 1 : 0);
+      if (pw < 6 || s.turnPlayer !== p.id || flag(p, 'kayoMight')) return;
+      setFlag(p, 'kayoMight');
+      api.createToken(p, 'Might', 1);
+    },
+  },
+  {
+    id: 'levia',
+    summary: 'If a card with 6+ {p} was put into your banished zone this turn, your cards lose blood debt during the end phase.',
+    match: (t) => t.startsWith('If a card with 6 or more {p} has been put into your banished zone this turn, cards you own lose blood debt'),
+    startOfTurn({ p }) { p.turn.flags.banStart = p.banished.length; },
+    skipBloodDebt({ p }) { return p.banished.slice(p.turn.flags.banStart ?? 0).some((b) => Number(cardOf(b).power ?? 0) >= 6); },
+  },
+  {
+    id: 'azalea-ace',
+    summary: 'Once per turn Action 0: put your arsenal card on the bottom; put the top card of your deck face-up into your arsenal (an arrow gets dominate). Go again.',
+    match: (t) => t.startsWith('Once per Turn Action - 0: Put a card from your arsenal on the bottom of your deck. If you do, put the top card of your deck face-up into your arsenal'),
+    activations: [{
+      label: 'Swap arsenal for the top card', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 0,
+      canUse: ({ p }) => p.arsenal.length > 0 && p.deck.length > 0,
+      resolve: ({ p, api }) => {
+        p.deck.push(p.arsenal.shift()!);
+        const top = p.deck.shift()!;
+        p.arsenal.push(top);
+        const arrow = cardOf(top).types.includes('Arrow');
+        if (arrow) p.turn.flags[`dominate${top.uid}`] = 1;
+        api.log(p, `${p.name} puts ${cardOf(top).name} face-up into the arsenal${arrow ? ' — the arrow gets dominate' : ''}.`);
+      },
+      botValue: ({ p }) => (p.arsenal[0] && cardOf(p.arsenal[0]).types.includes('Arrow') ? -5 : 0.8),
+    }],
+    onAttack({ p }, l) { if (p.turn.flags[`dominate${l.inst.uid}`]) l.dominate = true; },
+  },
+  {
+    id: 'enigma-ledger',
+    summary: 'Once per turn Instant {c}{c}{c} (chi from a pitched Chi card): create a Spectral Shield token with a +1{p} counter.',
+    partial: true,
+    match: (t) => t.includes('Once per Turn Instant - {c}{c}{c}: Create a Spectral Shield token with a +1{p} counter'),
+    activations: [{
+      label: 'Spectral Shield (3 chi)', instant: true, oncePerTurn: true,
+      cost: () => 0,
+      canUse: ({ p }) => chiAvailable(p) >= 3,
+      resolve: ({ p, api }) => { spendChi(p, 3, api); api.createToken(p, 'Spectral Shield', 1); const pm = p.permanents[p.permanents.length - 1]; pm.counters = (pm.counters ?? 0) + 1; },
+      botValue: () => 1,
+    }],
+  },
+  {
+    id: 'dromai',
+    summary: 'Whenever you pitch a red card, create an Ash token.',
+    partial: true,
+    match: (t) => t.startsWith('Whenever you pitch a red card, create an Ash token'),
+    onPitch({ p, api }, c) { if (c.pitch === 1) api.createToken(p, 'Ash', 1); },
+  },
+  {
+    id: 'aurora-emissary',
+    summary: 'Instant {r}{r}, tap, destroy a Lightning Flow: create an Embodiment of Lightning token.',
+    match: (t) => t.startsWith('Instant - {r}{r}, {t}, destroy a Lightning Flow you control: Create an Embodiment of Lightning token'),
+    activations: [{
+      label: 'Embodiment of Lightning (destroy a Lightning Flow)', instant: true, oncePerTurn: true,
+      cost: () => 2,
+      canUse: ({ p }) => tokens(p, 'Lightning Flow'),
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Lightning Flow'); api.createToken(p, 'Embodiment of Lightning', 1); },
+      botValue: () => 1.2,
+    }],
+  },
+  {
+    id: 'arakni-contract',
+    summary: 'Whenever you play a card with contract, look at the top card of the opponent’s deck and put it on the bottom if it’s a strong card.',
+    partial: true,
+    match: (t) => t.startsWith('Whenever you play a card with contract, you may look at the top card of target opponent'),
+    onPlayCard({ p, opp, api }, c) {
+      if (!/contract/i.test(c.text) || !opp.deck.length) return;
+      const top = cardOf(opp.deck[0]);
+      const strong = top.pitch === 1 || Number(top.power ?? 0) >= 5;
+      if (strong) opp.deck.push(opp.deck.shift()!);
+      api.log(p, `${p.name} looks at the top card of ${opp.name}'s deck${strong ? ' and puts it on the bottom' : ' and leaves it'}.`);
+    },
+  },
+  {
+    id: 'marlynn',
+    summary: 'Action, tap, destroy a Gold: create a Goldfin Harpoon in your hand. Go again.',
+    partial: true,
+    match: (t) => t.startsWith('Action - {t}, destroy a Gold you control: Create a Goldfin Harpoon in your hand'),
+    activations: [{
+      label: 'Goldfin Harpoon (destroy a Gold)', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 0,
+      canUse: ({ p }) => tokens(p, 'Gold'),
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); const h = findCard('Goldfin Harpoon'); if (h) { p.hand.push(api.mk(h.id, p)); api.log(p, `${p.name} creates Goldfin Harpoon in their hand.`); } },
+      botValue: () => 1,
+    }],
+  },
+  {
+    id: 'puffin',
+    summary: 'Action, tap, destroy a Gold: create a Golden Cog token. The second time you crank each turn, draw a card.',
+    match: (t) => t.startsWith('Action - {t}, destroy a Gold you control: Create a Golden Cog token'),
+    activations: [{
+      label: 'Golden Cog (destroy a Gold)', instant: false, oncePerTurn: true,
+      cost: () => 0,
+      canUse: ({ p }) => tokens(p, 'Gold'),
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.createToken(p, 'Golden Cog', 1); },
+      botValue: () => 0.5,
+    }],
+    onCrank({ p, api }) { p.turn.flags.cranks = (p.turn.flags.cranks ?? 0) + 1; if (p.turn.flags.cranks === 2) api.draw(p, 1); },
+  },
+  {
+    id: 'gravy-bones',
+    summary: 'Instant, tap, destroy a Gold: draw a card, then discard your least useful card.',
+    partial: true,
+    match: (t) => t.startsWith('Instant - {t}, destroy a Gold you control: Draw a card, then discard a card'),
+    activations: [{
+      label: 'Loot (destroy a Gold)', instant: true, oncePerTurn: true,
+      cost: () => 0,
+      canUse: ({ p }) => tokens(p, 'Gold'),
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.draw(p, 1); const d = lowestValue(p.hand); if (d) api.discard(p, d); },
+      botValue: () => 1,
+    }],
+  },
+);
 
 const cache = new Map<string, HeroAbility | null>();
 

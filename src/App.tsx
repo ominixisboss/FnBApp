@@ -4,9 +4,10 @@ import type { CardDb } from './data/cardDb';
 import HomePage from './ui/pages/HomePage';
 import CardsPage from './ui/pages/CardsPage';
 import DecksPage from './ui/pages/DecksPage';
-import PlayPage from './ui/pages/PlayPage';
+import PlayPage, { TABLE_DECK } from './ui/pages/PlayPage';
 import LearnPage from './ui/pages/LearnPage';
 import { animationsEnabled, setAnimations } from './ui/components/Fx';
+import { musicEnabled, setMusicEnabled, startMusic } from './ui/music';
 import { canLeave } from './ui/navGuard';
 import { HoverCardLayer } from './ui/components/HoverCard';
 import ProfilePage, { Avatar } from './ui/pages/ProfilePage';
@@ -23,6 +24,8 @@ import { loadMatches } from './stats/matches';
 import { online, useOnline } from './online/client';
 import ReplayPage from './ui/pages/ReplayPage';
 import PrivacyPage from './ui/pages/PrivacyPage';
+import GuidesPage from './ui/pages/GuidesPage';
+import DrillsPage from './ui/pages/DrillsPage';
 import { computeProgress } from './stats/progress';
 
 // [route, label, short label (phones), icon]
@@ -61,6 +64,13 @@ export default function App() {
     loadCardDb().then(setDb, (e) => setError(String(e)));
   }, []);
   useEffect(() => setAnimations(anim), [anim]);
+  const [music, setMusic] = useState(musicEnabled);
+  // browsers only start audio after a tap: begin the soundtrack on the first one if it's turned on
+  useEffect(() => {
+    const go = () => { startMusic(); window.removeEventListener('pointerdown', go); };
+    window.addEventListener('pointerdown', go);
+    return () => window.removeEventListener('pointerdown', go);
+  }, []);
   useEffect(() => { void checkServer(); }, []);
   const auth = useAuth();
   // stay connected while signed in, so friends see you online and challenges reach you on any page
@@ -103,6 +113,7 @@ export default function App() {
             <span className="anim-label">{auth.user ? profile.displayName : auth.available ? 'Sign in' : profile.displayName}</span>
           </a>
         )}
+        <button className="small" title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span className="anim-label"> Music {music ? 'on' : 'off'}</span></button>
         <button className="small" title="Toggle animations" onClick={() => setAnim(!anim)}>{anim ? '✨' : '◻'}<span className="anim-label"> Animations {anim ? 'on' : 'off'}</span></button>
       </header>
       <main className="page">
@@ -125,13 +136,17 @@ export default function App() {
             {route === 'cups' && <CupsPage />}
             {route === 'replay' && <ReplayPage id={rest[0]} />}
             {route === 'privacy' && <PrivacyPage />}
+            {route === 'guides' && <GuidesPage heroId={rest[0]} />}
+            {route === 'drills' && <DrillsPage />}
           </div>
         )}
       </main>
       {net.challenge && route !== 'play' && (
         <div className="challenge-toast" role="alert">
           <b>⚔ {net.challenge.from}</b> challenges you!
-          <a className="btn-link" href="#play/online">Open</a>
+          {/table/.test(net.challenge.format)
+            ? <a className="btn-link" href="#play/online" onClick={() => online.accept(TABLE_DECK)}>Accept</a>
+            : <a className="btn-link" href="#play/online">Open</a>}
           <button className="small" onClick={() => online.decline()}>Decline</button>
         </div>
       )}

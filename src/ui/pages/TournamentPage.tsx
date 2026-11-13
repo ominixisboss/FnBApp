@@ -5,6 +5,7 @@ import { getDb } from '../../data/cardDb';
 import { createGame } from '../../engine/game';
 import type { DeckList } from '../../engine/game';
 import type { Difficulty, GameState, PlayerId } from '../../engine/types';
+import { botDeck } from '../../deck/botDecks';
 import { autoBuildDeck, heroesFor, loadDecks, toDeckList } from '../../deck/deck';
 import { simulateGame } from '../../ai/simulate';
 import { recordMatch } from '../../stats/matches';
@@ -57,7 +58,7 @@ export default function TournamentPage() {
     const pool = heroesFor('blitz').filter((h) => h.id !== heroId);
     const bots: Entrant[] = Array.from({ length: 7 }, (_, i) => {
       const h = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-      return { id: i + 1, name: h.name, heroId: h.id, deck: toDeckList(autoBuildDeck(h.id, 'blitz', (Date.now() + i) & 0xffff)), difficulty: i < 3 ? 'normal' : 'hard', points: 0, wins: 0, losses: 0, opps: [] };
+      return { id: i + 1, name: h.name, heroId: h.id, deck: botDeck(h.id, 'blitz', (Date.now() + i) & 0xffff), difficulty: i < 3 ? 'normal' : 'hard', points: 0, wins: 0, losses: 0, opps: [] };
     });
     const t: Tour = { entrants: [{ id: 0, name: loadProfile().displayName || 'You', heroId, deck, difficulty: 'normal', you: true, points: 0, wins: 0, losses: 0, opps: [] }, ...bots], round: 1, stage: 'swiss', pairings: [], history: [] };
     t.pairings = pairSwiss(t);

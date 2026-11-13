@@ -2,7 +2,7 @@ import type { AttackFilter, Effect } from './cardScript';
 
 export type PlayerId = 0 | 1;
 /** 'goldfish' = an opponent that never acts (for testing decks in the sandbox) */
-export type Difficulty = 'easy' | 'normal' | 'hard' | 'goldfish';
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'mythic' | 'goldfish';
 
 export interface CardInst {
   uid: number;
@@ -34,6 +34,7 @@ export interface PermanentState {
 export type TurnEffect =
   | { kind: 'nextAttackPower'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
+  | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'preventNext'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string };
 
@@ -82,6 +83,10 @@ export interface TurnInfo {
   attackedTimes?: number; // attacks made against this player this turn
   /** order (uids) to put pitched cards on the bottom of the deck at end of turn, first = goes in first */
   pitchOrder?: number[];
+  charged?: boolean;
+  instantToGrave?: boolean;
+  arcaneTaken?: boolean;
+  clashesWon?: number;
 }
 
 export interface Defender {
@@ -152,6 +157,8 @@ export interface GameState {
   /** layers waiting to resolve, last = top (only used in the action phase) */
   stack?: Layer[];
   format: string;
+  /** start-of-turn triggers waiting for their controller to choose an order */
+  pendingTriggers?: { player: PlayerId; uids: number[] };
 }
 
 export type Action =
@@ -161,6 +168,7 @@ export type Action =
   | { type: 'defend'; uids: number[]; boosts?: number[]; pitch?: number[] }
   | { type: 'arsenal'; uid: number | null; pitchOrder?: number[] }
   | { type: 'concede' }
+  | { type: 'orderTriggers'; order: number[] }
   | ManualAction;
 
 export type ManualAction =

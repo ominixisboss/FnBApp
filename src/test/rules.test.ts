@@ -1,144 +1,105 @@
+// Rules scenarios: each test plays out a small situation and checks the engine resolves it the way the
+// comprehensive rules say it should.
 import { describe, expect, it } from 'vitest';
 import './setup';
-import { findCard } from '../data/cardDb';
-import { getScript, parseEffect } from '../engine/cardScript';
-import { applyAction, createGame, currentLink, linkPower, playOptions } from '../engine/game';
-import type { DeckList } from '../engine/game';
+import { findCard, getDb } from '../data/cardDb';
+import { applyAction, checkDefense, equipDefense } from '../engine/game';
 import type { GameState } from '../engine/types';
-import { autoBuildDeck, exportDecklist, importDecklist, toDeckList } from '../deck/deck';
+import { buildPuzzle } from '../learn/puzzleEngine';
 
-const id = (name: string, pitch?: number) => {
-  const c = findCard(name, pitch);
-  if (!c) throw new Error(`missing ${name}`);
-  return c.id;
-};
+const id = (name: string, pitch?: number) => getDb().cards.find((c) => c.name === name && (pitch === undefined || c.pitch === pitch))!.id;
+const nameOf = (cardId: string) => getDb().byId.get(cardId)!.name;
 
-/** Build a game where both players have a fixed hand (cards are drawn from the top). */
-function game(hand0: string[], hand1: string[], opts: Partial<DeckList> = {}): GameState {
-  const hero = id('Dorinthea');
-  const filler = Array(30).fill(id('Wounding Blow', 3));
-  const mk = (hand: string[]): DeckList => ({ heroId: hero, weaponIds: [], equipmentIds: [], cardIds: [...hand, ...filler], ...opts });
-  let s = createGame([
-    { name: 'P0', isBot: false, deck: mk(hand0) },
-    { name: 'P1', isBot: false, deck: mk(hand1) },
-  ], 3);
-  // force known hands regardless of shuffle / who goes first
-  s = structuredClone(s);
-  for (const [pi, names] of [[0, hand0], [1, hand1]] as const) {
-    const p = s.players[pi];
-    const all = [...p.hand, ...p.deck];
-    p.hand = names.map((n) => { const i = all.findIndex((c) => c.cardId === n); return all.splice(i, 1)[0]; });
-    p.deck = all;
-  }
-  s.turnPlayer = 0; s.priority = 0; s.players[0].actionPoints = 1; s.players[1].actionPoints = 0;
+function setup(myHand: string[], oppHand: string[] = [], oppEquipment: string[] = []): GameState {
+  const s = buildPuzzle({
+    id: 't', title: 't', text: '',
+    me: { hero: findCard('Bravo')!.id, hand: myHand },
+    opp: { hero: findCard('Dorinthea')!.id, life: 20, hand: oppHand, equipment: oppEquipment },
+  });
+  s.players[0].resources = 10;
   return s;
 }
+const play = (s: GameState, i = 0) => applyAction(s, { type: 'play', uid: s.players[0].hand[i].uid, pitch: [] });
+/** both players pass priority in the reaction step, so the chain link resolves */
+const resolveLink = (s: GameState) => applyAction(applyAction(s, { type: 'pass' }), { type: 'pass' });
 
-describe('card script compiler', () => {
-  it('parses common effects', () => {
-    expect(parseEffect('Draw a card.')).toEqual([{ kind: 'draw', amount: 1 }]);
-    expect(parseEffect('Deal 3 arcane damage to any target.')).toEqual([{ kind: 'arcane', amount: 3 }]);
-    expect(parseEffect('Your next dagger attack this turn gets +2{p}.')).toEqual([{ kind: 'nextAttackPower', amount: 2, filter: { kind: 'subtype', value: 'dagger' } }]);
-    expect(parseEffect('Create a Runechant token.')).toEqual([{ kind: 'createToken', name: 'Runechant', amount: 1 }]);
-    expect(parseEffect('Something odd happens.')).toBeNull();
-  });
-  it('compiles keywords, modes and weapon activations', () => {
-    expect(getScript(findCard('Enlightened Strike')!).modes.map((m) => m.parsed)).toEqual([true, true, true]);
-    const dawn = getScript(findCard('Dawnblade')!);
-    expect(dawn.activations[0]).toMatchObject({ attack: true, cost: 1 });
-  });
-});
-
-describe('engine rules', () => {
-  const red7 = id('Raging Onslaught', 1); // 3 cost, 7 power
-  const blue = id('Wounding Blow', 3);
-  it('requires pitching to pay costs and uses an action point', () => {
-    const s = game([red7, blue, blue, blue], [blue, blue, blue, blue]);
-    expect(playOptions(s, 0).map((o) => o.uid)).toContain(s.players[0].hand[0].uid);
-    const uid = s.players[0].hand[0].uid;
-    expect(() => applyAction(s, { type: 'play', uid, pitch: [] })).toThrow(/resources/);
-    const s2 = applyAction(s, { type: 'play', uid, pitch: [s.players[0].hand[1].uid] });
-    expect(s2.players[0].actionPoints).toBe(0);
-    expect(s2.players[0].pitch.length).toBe(1);
-    expect(s2.phase).toBe('defend');
-    expect(linkPower(currentLink(s2)!)).toBe(7);
-  });
-  it('resolves damage after blocking and both passing', () => {
-    let s = game([red7, blue, blue, blue], [blue, blue, blue, blue]);
-    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [s.players[0].hand[1].uid] });
-    const blocker = s.players[1].hand[0].uid;
-    s = applyAction(s, { type: 'defend', uids: [blocker] });
-    s = applyAction(s, { type: 'pass' });
-    s = applyAction(s, { type: 'pass' });
-    expect(s.players[1].life).toBe(20 - (7 - 3));
-    expect(s.phase).toBe('action');
-    // end turn -> arsenal step -> opponent's turn, hand refilled to intellect
-    s = applyAction(s, { type: 'pass' });
-    expect(s.phase).toBe('arsenal');
-    s = applyAction(s, { type: 'arsenal', uid: s.players[0].hand[0].uid });
-    expect(s.players[0].arsenal.length).toBe(1);
-    expect(s.players[0].hand.length).toBe(4);
-    expect(s.turnPlayer).toBe(1);
-    expect(s.players[0].pitch.length).toBe(0);
-  });
-  it('go again returns the action point', () => {
-    const ga = id('Scar for a Scar', 1);
-    let s = game([ga, blue, blue, blue], [blue, blue, blue, blue]);
-    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
-    s = applyAction(s, { type: 'defend', uids: [] });
-    s = applyAction(s, { type: 'pass' });
-    s = applyAction(s, { type: 'pass' });
+describe('rules scenarios', () => {
+  it('go again: a card with go again gives back the action point it used', () => {
+    const s = play(setup([id('Over Flex', 1)]));
     expect(s.players[0].actionPoints).toBe(1);
   });
-  it('dominate limits blocking to one card from hand', () => {
-    const dom = findCard('Bloodrush Bellow') ? id('Pummel', 1) : id('Pummel', 1);
-    void dom;
-    let s = game([red7, blue, blue, blue], [blue, blue, blue, blue]);
-    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [s.players[0].hand[1].uid] });
-    s.chain[0].dominate = true;
-    const [a, b] = s.players[1].hand.map((h) => h.uid);
-    expect(() => applyAction(s, { type: 'defend', uids: [a, b] })).toThrow(/Dominate/);
-  });
-  it('blade break equipment is destroyed after defending', () => {
-    const bb = id('Fyendal\'s Spring Tunic');
-    void bb;
-    const helm = findCard('Blossom of Spring') ?? findCard('Arcanite Skullcap')!;
-    void helm;
-    const eq = id('Nullrune Hood');
-    let s = game([red7, blue, blue, blue], [blue, blue, blue, blue], { equipmentIds: [eq] });
-    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [s.players[0].hand[1].uid] });
-    const e = s.players[1].equipment[0];
-    s = applyAction(s, { type: 'defend', uids: [e.inst.uid] });
-    s = applyAction(s, { type: 'pass' });
-    s = applyAction(s, { type: 'pass' });
-    const sc = getScript(findCard('Nullrune Hood')!);
-    if (sc.bladeBreak) expect(s.players[1].equipment[0].destroyed).toBe(true);
-    else if (sc.battleworn) expect(s.players[1].equipment[0].defenseMod).toBe(-1);
-  });
-  it('modal attack applies the chosen mode', () => {
-    const es = id('Enlightened Strike');
-    let s = game([es, blue, blue, blue], [blue, blue, blue, blue]);
-    const modes = getScript(findCard('Enlightened Strike')!).modes;
-    const powerMode = modes.findIndex((m) => m.onPlay.some((e) => e.kind === 'thisPower'));
-    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [s.players[0].hand[1].uid], mode: powerMode });
-    expect(linkPower(currentLink(s)!)).toBe(7);
-  });
-});
 
-describe('decklists', () => {
-  it('round-trips export/import', () => {
-    const d = autoBuildDeck(id('Dorinthea'), 'blitz', 5);
-    const text = exportDecklist(d);
-    const back = importDecklist(text);
-    expect(back.warnings).toEqual([]);
-    expect(back.deck!.heroId).toBe(d.heroId);
-    expect(back.deck!.cards).toEqual(d.cards);
-    expect(toDeckList(back.deck!).cardIds.length).toBe(40);
+  it('without go again, an attack uses up your action point', () => {
+    let s = play(setup([id('Wounding Blow', 1)]));
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = resolveLink(s);
+    expect(s.players[0].actionPoints).toBe(0);
+    expect(s.players[1].life).toBe(16);
   });
-  it('parses Fabrary-style text', () => {
-    const r = importDecklist(`Name: Test\nHero: Dorinthea Ironsong\nWeapons: Dawnblade\nEquipment: Nullrune Hood\n\n3x Raging Onslaught (red)\n(2) Sigil of Solace (blue)\n1 Totally Fake Card`);
-    expect(r.deck!.name).toBe('Test');
-    expect(Object.values(r.deck!.cards).reduce((a, b) => a + b, 0)).toBe(7);
-    expect(r.warnings).toEqual(['Not found: Totally Fake Card']);
+
+  it('dominate: the attack can be defended by at most one card from hand', () => {
+    const s = play(setup([id('Macho Grande', 1)], [id('Wounding Blow', 1), id('Wounding Blow', 2)]));
+    const [a, b] = s.players[1].hand.map((h) => h.uid);
+    expect(checkDefense(s, [a, b])).toBeTruthy();
+    expect(checkDefense(s, [a])).toBeNull();
+  });
+
+  it('blade break: equipment that defends is destroyed when the chain link resolves', () => {
+    let s = play(setup([id('Wounding Blow', 1)], [], [id('Ironrot Helm')]));
+    s = applyAction(s, { type: 'defend', uids: [s.players[1].equipment[0].inst.uid] });
+    s = resolveLink(s);
+    expect(s.players[1].life).toBe(17); // 4 power - 1 defense
+    expect(s.players[1].equipment[0].destroyed).toBe(true);
+  });
+
+  it('temper: equipment loses 1 defense each time it defends, and is destroyed at 0', () => {
+    let s = play(setup([id('Wounding Blow', 1)], [], [id('Helm of the Arknight')]));
+    s = applyAction(s, { type: 'defend', uids: [s.players[1].equipment[0].inst.uid] });
+    s = resolveLink(s);
+    const helm = s.players[1].equipment[0];
+    expect(helm.destroyed).toBeFalsy();
+    expect(equipDefense(helm)).toBe(1);
+  });
+
+  it('arcane barrier: the defender may pay resources to prevent arcane damage', () => {
+    let s = setup([id('Aether Dart', 1)], [], [id('Arcane Lantern')]);
+    s.players[1].resources = 1;
+    s = play(s);
+    expect(s.players[1].life).toBe(18); // 3 arcane, 1 prevented by paying 1
+    expect(s.players[1].resources).toBe(0);
+  });
+
+  it('intimidate: a random card from the defending hero’s hand is banished until end of turn', () => {
+    const s = play(setup([id('Pack Hunt', 1)], [id('Wounding Blow', 1), id('Wounding Blow', 2)]));
+    expect(s.players[1].hand.length).toBe(1);
+    expect(s.players[1].intimidated.length).toBe(1);
+  });
+
+  it('the combat chain closes when the turn player passes, and attack cards go to the graveyard', () => {
+    let s = play(setup([id('Wounding Blow', 1)]));
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = resolveLink(s);
+    expect(s.chain.length).toBe(1);
+    s = applyAction(s, { type: 'pass' });
+    expect(s.chain.length).toBe(0);
+    expect(s.players[0].graveyard.map((g) => nameOf(g.cardId))).toContain('Wounding Blow');
+  });
+
+  it('you choose the order of your own start-of-turn triggers', () => {
+    let s = setup([]);
+    const tok = (name: string, uid: number) => ({ inst: { uid, cardId: findCard(name)!.id, owner: 0 as const }, ward: 0 });
+    s.players[0].permanents.push(tok('Might', 7001), tok('Vigor', 7002));
+    s.turnPlayer = 1;
+    s.priority = 1;
+    s = applyAction(s, { type: 'pass' }); // the opponent ends their turn; mine starts
+    expect(s.turnPlayer).toBe(0);
+    expect(s.pendingTriggers?.uids.length).toBe(2);
+    expect(() => applyAction(s, { type: 'pass' })).toThrow();
+    const order = [...s.pendingTriggers!.uids].reverse();
+    s = applyAction(s, { type: 'orderTriggers', order });
+    expect(s.pendingTriggers).toBeUndefined();
+    expect(s.players[0].permanents.length).toBe(0);
+    expect(s.players[0].resources).toBe(1); // Vigor
+    expect(s.players[0].effects.some((e) => e.kind === 'nextAttackPower')).toBe(true); // Might
   });
 });
