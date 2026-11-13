@@ -96,6 +96,9 @@ export type Effect =
   | { kind: 'runechantsPerNonAttack'; goAgainAt?: number }
   /** this defending equipment is destroyed when the combat chain closes */
   | { kind: 'destroyAtChainClose' }
+  | { kind: 'gainAP'; amount: number }
+  /** put a card from your arsenal on the bottom of your deck; if you do, draw a card */
+  | { kind: 'arsenalCycle' }
   /** banish a card defending this chain link (the best one) */
   | { kind: 'banishDefender' }
   /** destroy a card of theirs that intimidate banished */
@@ -332,6 +335,7 @@ export function parseEffect(raw: string): Effect[] | null {
   const s = raw.trim().replace(/\.$/, '').trim();
   let m: RegExpMatchArray | null;
   if (!s) return [];
+  if (/^put a card from your arsenal on the bottom of your deck\. if you do, draw a card$/i.test(s)) return [{ kind: 'arsenalCycle' }];
   // compound "X and Y" / "X, then Y"
   // "wager with the defending hero. The winner draws a card" is one effect, not two
   const wm = s.match(/^(you may )?wager with (?:them|the defending hero)\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token)$/i);
@@ -406,6 +410,8 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:they|the defending hero|target hero|target opposing hero|each opposing hero) discards? (a|two|\d+) (?:random )?cards?$/i)))
     return [{ kind: 'oppDiscardRandom', amount: toNum(m[1].toLowerCase()) }];
   if (/^intimidate(?: them| the defending hero| target hero)?$/i.test(s)) return [{ kind: 'intimidate' }];
+  if ((m = s.match(/^gain (a|an|one|two|\d+) action points?$/i))) return [{ kind: 'gainAP', amount: toNum(m[1].toLowerCase()) }];
+  if ((m = s.match(/^the next attack action card you play this turn costs ((?:\{r\})+) less to play$/i))) return [{ kind: 'costLess', amount: m[1].length / 3, filter: { kind: 'attackAction' } }];
   if ((m = s.match(/^banish the top card of their deck and a defending card$/i))) return [{ kind: 'banishTopOpp', amount: 1 }, { kind: 'banishDefender' }];
   if (/^destroy an intimidated card they own$/i.test(s)) return [{ kind: 'destroyIntimidated' }];
   if ((m = s.match(/^it gets \+(\d+)\{d\} and "when the combat chain closes, destroy this\.?"$/i))) return [{ kind: 'thisDefense', amount: +m[1] }, { kind: 'destroyAtChainClose' }];
@@ -920,6 +926,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   }
   if (/^at the beginning of your end phase, put a -1\{d\} counter on this\.?$/i.test(sent)) { sc.endPhaseWear = true; return; }
   if (/^at the beginning of your end phase, destroy this\.?$/i.test(sent)) { sc.destroyAtEnd = true; return; }
+  if (/^you may equip this\.?$/i.test(sent)) return; // event equipment: the event deck offers to equip it
   if ((m = sent.match(/^when this enters the arena, (.+)$/i)) && isPermanentLike) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onPlay.push(...e);

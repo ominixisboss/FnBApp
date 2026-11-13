@@ -327,7 +327,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
   for (const p of s.players) ability(p)?.setup?.(heroCtx(s, p));
   // Smash Palace: a shared event deck (Fightmaster Kox can arrange it)
   if (opts.events || s.players.some((p) => ability(p)?.id === 'kox')) {
-    s.eventDeck = shuffle(s, getDb().cards.filter((c) => c.types.includes('Event') && !c.types.includes('Hero')).map((c) => c.id));
+    s.eventDeck = shuffle(s, eventDeckList());
     s.eventDiscard = [];
   }
   const roll = rand(s); // always drawn, so the rest of the game is the same whoever goes first
@@ -769,6 +769,19 @@ function cleanseName(s: GameState, p: PlayerState, t: PlayerState, n: number, na
 
 // ---------------------------------------------------------------- Smash Palace event deck
 
+/** The 40-card Smash Palace event deck. The copy counts aren't published; this mix follows the set's price tiers
+ *  (SMP007–013 and the Bloodied equipment once each, SMP019–032 twice each), which adds up to exactly 40. */
+const EVENT_SINGLES = ['Air of a Comeback', 'Benefactor of Bloodworth Goldmane', 'Big Hits, Big Applause', 'Code of Conduct: Kill or Be Killed', 'Hit the Jackpot', 'Random Events Unfold', "Visit the 'Winner Takes All'"];
+export function eventDeckList(): string[] {
+  const events = getDb().cards.filter((c) => c.types.includes('Event') && !c.types.includes('Hero'));
+  const seen = new Set<string>();
+  return events.flatMap((c) => {
+    if (seen.has(c.name)) return [];
+    seen.add(c.name);
+    return EVENT_SINGLES.includes(c.name) || c.types.includes('Equipment') ? [c.id] : [c.id, c.id];
+  });
+}
+
 /** At the start of each turn, the turn player reveals the top card of the event deck and follows it. */
 function flipEvent(s: GameState, p: PlayerState) {
   if (!s.eventDeck) return;
@@ -840,12 +853,17 @@ function resolveEvent(s: GameState, p: PlayerState, id: string): boolean {
       break;
     }
     case "Lion's Pounce":
-      // it attacks every other hero; each blocks with their best equipment
+      // a 3{p} attack on every other hero: each chooses their own blockers (hand cards and equipment)
       for (const q of others) {
-        const eq = q.equipment.filter((e) => !e.destroyed).sort((a, b) => equipDefense(b) - equipDefense(a))[0];
-        const block = eq ? equipDefense(eq) : 0;
-        log(s, q.id, `Lion's Pounce attacks ${q.name}${eq ? `, who blocks with ${cardOf(eq.inst).name} (${block})` : ''}.`);
-        if (3 - block > 0) dealDamage(s, q.id, 3 - block, false, "Lion's Pounce");
+        const opts = [...q.hand.filter((h) => (defenseOf(cardOf(h)) ?? 0) > 0), ...q.equipment.filter((e) => !e.destroyed && equipDefense(e) > 0).map((e) => e.inst)];
+        if (!q.isBot && opts.length) {
+          ask(s, { player: q.id, kind: 'pick', multi: true, skippable: true, confirm: 'Block with these', prompt: `Lion's Pounce attacks you for 3. Choose cards to block with, or skip and take it.`, options: pickOpts(opts), resume: { type: 'event', key: 'pounce', data: [p.id] } });
+          continue;
+        }
+        // bots: block with equipment, and with a hand card too when the damage would hurt
+        const eq = q.equipment.filter((e) => !e.destroyed && equipDefense(e) > 0).sort((a, b) => equipDefense(b) - equipDefense(a))[0];
+        const handBlock = q.life <= 8 ? [...q.hand].filter((h) => (defenseOf(cardOf(h)) ?? 0) >= 2).sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0] : undefined;
+        pounce(s, p, q, [...(eq ? [eq.inst.uid] : []), ...(handBlock ? [handBlock.uid] : [])]);
         if (s.phase === 'gameOver') break;
       }
       break;
@@ -880,6 +898,26 @@ function resolveEvent(s: GameState, p: PlayerState, id: string): boolean {
     }
   }
   return false;
+}
+
+/** Lion's Pounce hits `q`, who blocks with `uids` (hand cards go to the graveyard, equipment wears like a block). */
+function pounce(s: GameState, p: PlayerState, q: PlayerState, uids: number[]) {
+  let block = 0;
+  const names: string[] = [];
+  for (const uid of uids) {
+    const h = removeFrom(q.hand, uid);
+    if (h) { block += defenseOf(cardOf(h)) ?? 0; names.push(cardOf(h).name); toGraveyard(q, h); continue; }
+    const e = q.equipment.find((x) => x.inst.uid === uid && !x.destroyed);
+    if (!e) continue;
+    block += equipDefense(e);
+    names.push(cardOf(e.inst).name);
+    const esc = getScript(cardOf(e.inst));
+    if (esc.bladeBreak) e.destroyed = true; else if (esc.battleworn || esc.temper) e.defenseMod -= 1;
+    if (esc.temper && equipDefense(e) <= 0) e.destroyed = true;
+  }
+  log(s, q.id, `Lion's Pounce attacks ${q.name}${names.length ? `, who blocks with ${names.join(', ')} (${block})` : ''}.`);
+  if (3 - block > 0) dealDamage(s, q.id, 3 - block, false, "Lion's Pounce");
+  void p;
 }
 
 function comeback(s: GameState, p: PlayerState, inst: CardInst) {
@@ -926,6 +964,7 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
     case 'purse': { const q = hero(); if (q) { createToken(s, p, 'Gold', 1); createToken(s, q, 'Gold', 1); } break; }
     case 'drink': { const q = hero(); if (q) drink(s, p, q); break; }
     case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
+    case 'pounce': pounce(s, s.players[_data![0]], p, picks); break;
     case 'payOrWeaken': {
       const [li, amount, cost] = _data!;
       const l = s.chain[li];
@@ -2456,6 +2495,15 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         const t = l ? s.players[defenderOf(l)] : opp;
         const x = t.intimidated.shift();
         if (x) { toGraveyard(t, x); log(s, p.id, `${srcName}: ${cardOf(x).name} (intimidated) is destroyed.`); }
+        break;
+      }
+      case 'gainAP': p.actionPoints += e.amount; log(s, p.id, `${p.name} gains ${e.amount} action point${e.amount > 1 ? 's' : ''}.`); break;
+      case 'arsenalCycle': {
+        const a0 = p.arsenal.shift();
+        if (!a0) break;
+        p.deck.push(a0);
+        log(s, p.id, `${p.name} puts their arsenal card on the bottom of their deck and draws a card.`);
+        draw(s, p, 1);
         break;
       }
       case 'destroyAtChainClose': { const eq = p.equipment.find((x) => x.inst.uid === src.uid); if (eq) { p.turn.flags[`closeDestroy${src.uid}`] = 1; log(s, p.id, `${srcName} will be destroyed when the combat chain closes.`); } break; }

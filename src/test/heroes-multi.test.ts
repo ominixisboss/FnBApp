@@ -138,4 +138,24 @@ describe('Smash Palace event deck', () => {
     expect(s.players[1].permanents.some((pm) => getDb().byId.get(pm.inst.cardId)!.name === 'Gold')).toBe(true);
     expect(s.log.some((e) => /B draws 1 \(one per Gold\)/.test(e.text))).toBe(true);
   });
+  it('the event deck has 40 cards, the Bloodied equipment works, and Lion\'s Pounce lets you choose your block', async () => {
+    const { eventDeckList } = await import('../engine/game');
+    const { getScript } = await import('../engine/cardScript');
+    expect(eventDeckList().length).toBe(40);
+    for (const n of ['Bloodied Boots', 'Bloodied Helm', 'Bloodied Strapping', 'Bloodied Gauntlet', 'Bloodied Shield']) expect([n, getScript(getDb().cards.find((c) => c.name === n)!).coverage]).toEqual([n, 'full']);
+    // I go first; the bot's first turn reveals Lion's Pounce and I'm asked how to block
+    let s: GameState = createGame([{ name: 'Me', isBot: false, deck: deck('Dorinthea') }, { name: 'A', isBot: true, deck: deck('Dorinthea') }], 9, 'blitz', 0, { events: true });
+    s = structuredClone(s);
+    const pounceId = getDb().cards.find((c) => c.name === "Lion's Pounce")!.id;
+    s.eventDeck = [pounceId, ...s.eventDeck!.filter((x) => x !== pounceId)];
+    s.pendingChoices = undefined;
+    for (let i = 0; i < 50 && s.turnPlayer === 0; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    const pc = s.pendingChoices![0];
+    expect(s.lastEvent).toBe(pounceId);
+    expect(pc.player).toBe(0);
+    expect(pc.multi).toBe(true);
+    const life = s.players[0].life;
+    s = applyAction(s, { type: 'choose', picks: [] }); // take it
+    expect(s.players[0].life).toBe(life - 3);
+  });
 });
