@@ -38,6 +38,8 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
   s.turnPlayer = r(s.turnPlayer);
   s.priority = r(s.priority);
   if (s.pendingTriggers) s.pendingTriggers = { ...s.pendingTriggers, player: r(s.pendingTriggers.player) };
+  // decisions: the other player only sees that one is being made, not the cards involved
+  if (s.pendingChoices) s.pendingChoices = s.pendingChoices.map((c) => ({ ...c, player: r(c.player), options: c.player === viewer ? c.options : c.options.map((o) => ({ ...o, cardId: '__hidden__' })) }));
   if (s.winner !== null) s.winner = r(s.winner);
   s.log = s.log.map((e) => ({ ...e, player: e.player === null ? null : r(e.player) }));
   return s;

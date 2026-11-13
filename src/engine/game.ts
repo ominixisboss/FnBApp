@@ -7,7 +7,7 @@ import type { HeroApi, HeroCtx } from './heroes';
 import type { AttackFilter, Condition, Effect, Mode, OptionalCost } from './cardScript';
 import type { Layer, PermanentState } from './types';
 import type {
-  Action, CardInst, ChainLink, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState, TurnEffect,
+  Action, CardInst, ChainLink, Difficulty, GameState, OptionalChoice, PendingChoice, PlayerId, PlayerState, TurnEffect,
 } from './types';
 
 export interface DeckList {
@@ -53,6 +53,8 @@ function log(s: GameState, player: PlayerId | null, text: string, rule?: string)
 
 /** Short rule explanations attached to log lines, so players learn why things happen. */
 export const RULES = {
+  wager: 'Wager: when this chain link resolves, if the attack hit, its attacker wins the wager; otherwise the defending hero does. The winner gets what was wagered.',
+  crowd: 'The crowd cheering or booing does nothing by itself, but some cards and heroes react to it.',
   triggerOrder: 'When several of your effects trigger at the same time, you choose the order they resolve in.',
   stack: 'Cards and abilities go on the stack. Both players may respond with instants; when both pass in a row, the top one resolves (last in, first out).',
   goAgain: 'Go again: when this resolves, you gain an action point, so you can keep acting this turn.',
@@ -105,6 +107,7 @@ function heroApi(s: GameState): HeroApi {
       removePermanent(s, p, pm.inst.uid);
       return true;
     },
+    crowd: (p, cheer) => crowd(s, p, cheer),
     discard: (p, inst) => {
       if (!removeFrom(p.hand, inst.uid)) return;
       p.graveyard.push(inst);
@@ -349,6 +352,107 @@ function removePermanent(s: GameState, p: PlayerState, uid: number) {
   if (onDestroy.length) resolveEffects(s, p, onDestroy, pm.inst);
 }
 
+// ---------------------------------------------------------------- decisions, wagers and the crowd
+
+/** Queue a decision for a (human) player; everything else waits until they answer. */
+function ask(s: GameState, c: PendingChoice) {
+  (s.pendingChoices ??= []).push(c);
+}
+
+/** Park the remaining effects on the newest unanswered choice made during this effect. */
+function deferFrom(s: GameState, p: PlayerState, src: CardInst, rest: Effect[]) {
+  const c = s.pendingChoices![s.pendingChoices!.length - 1];
+  (c.then ??= []).push({ player: p.id, src, effects: rest });
+}
+
+function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
+  const c = s.pendingChoices?.[0];
+  if (!c) throw new Error('There is nothing to choose.');
+  const p = s.players[c.player];
+  const picks = (a.picks ?? []).filter((u, i, all) => all.indexOf(u) === i && c.options.some((o) => o.uid === u));
+  s.pendingChoices = s.pendingChoices!.slice(1);
+  if (!s.pendingChoices.length) s.pendingChoices = undefined;
+  switch (c.resume.type) {
+    case 'opt': {
+      const uids = c.options.map((o) => o.uid);
+      const top = p.deck.filter((d) => uids.includes(d.uid));
+      p.deck = p.deck.filter((d) => !uids.includes(d.uid));
+      const keep = picks.map((u) => top.find((t) => t.uid === u)!).filter(Boolean);
+      const bottom = top.filter((t) => !picks.includes(t.uid));
+      p.deck.unshift(...keep);
+      p.deck.push(...bottom);
+      log(s, p.id, `${p.name} opts ${uids.length}: ${keep.length} on top, ${bottom.length} to the bottom.`, 'Opt: look at the top cards of your deck and put any of them on the bottom, the rest back on top in any order.');
+      break;
+    }
+    case 'reload': {
+      const uid = picks[0];
+      if (uid === undefined || p.arsenal.length) { log(s, p.id, `${p.name} doesn't reload.`); break; }
+      const inst = removeFrom(p.hand, uid);
+      if (inst) { p.arsenal.push(inst); log(s, p.id, `${p.name} reloads: a card from hand goes face down into the arsenal.`, 'Reload: if you have no card in your arsenal, you may put a card from your hand face down into your arsenal.'); }
+      break;
+    }
+    case 'wager':
+      if (a.yes) addWager(s, p, c.resume.link, c.resume.tokens, c.resume.winnerDraw);
+      else log(s, p.id, `${p.name} doesn't wager.`);
+      break;
+    case 'betsy': {
+      const l = s.chain[c.resume.link];
+      if (a.yes && l && availableResources(p) >= 2) {
+        pay(s, p, 2, autoPitch(p, Math.max(0, 2 - p.resources)) ?? []);
+        l.powerMod += 1; l.overpower = true;
+        log(s, p.id, `${p.name} pays 2: ${cardOf(l.inst).name} gets +1 power and overpower.`);
+      }
+      break;
+    }
+  }
+  // finish the effect that asked
+  for (const t of c.then ?? []) resolveEffects(s, s.players[t.player], t.effects, t.src);
+}
+
+/** An attack wagers: it's settled when its chain link resolves (see settleWagers). */
+function addWager(s: GameState, p: PlayerState, li: number, tokens: string[], winnerDraw?: number) {
+  const l = s.chain[li];
+  if (!l) return;
+  (l.wagers ??= []).push({ tokens, winnerDraw });
+  log(s, p.id, `${p.name} wagers${tokens.length ? ` ${tokens.join(', ')}` : ''} on ${cardOf(l.inst).name}.`, RULES.wager);
+  p.effects = p.effects.filter((e) => {
+    if (e.kind !== 'nextWagerPower') return true;
+    l.powerMod += e.amount;
+    if (e.overpower) l.overpower = true;
+    log(s, p.id, `${cardOf(l.inst).name} wagers: +${e.amount} power${e.overpower ? ' and overpower' : ''} (${e.source}).`);
+    return false;
+  });
+  const ab = ability(p);
+  if (ab?.id === 'betsy' && availableResources(p) >= 2) {
+    if (p.isBot) { pay(s, p, 2, autoPitch(p, Math.max(0, 2 - p.resources)) ?? []); l.powerMod += 1; l.overpower = true; log(s, p.id, `Betsy pays 2: ${cardOf(l.inst).name} gets +1 power and overpower.`); }
+    else ask(s, { player: p.id, kind: 'yesno', prompt: `Betsy: pay 2 resources to give ${cardOf(l.inst).name} +1 power and overpower?`, options: [], resume: { type: 'betsy', link: li } });
+  }
+}
+
+function settleWagers(s: GameState, l: ChainLink) {
+  if (!l.wagers?.length) return;
+  const winner = s.players[l.hit ? l.attacker : other(l.attacker)];
+  for (const w of l.wagers) {
+    log(s, winner.id, `${winner.name} wins the wager.`);
+    for (const t of w.tokens) createToken(s, winner, t, 1);
+    if (w.winnerDraw) draw(s, winner, w.winnerDraw);
+    ability(winner)?.onWagerWin?.(heroCtx(s, winner), l);
+  }
+}
+
+/** The crowd cheers or boos a hero: nothing happens by itself, but cards and heroes react to it. */
+export function crowd(s: GameState, p: PlayerState, cheer: boolean) {
+  if (cheer) p.turn.cheers = (p.turn.cheers ?? 0) + 1; else p.turn.boos = (p.turn.boos ?? 0) + 1;
+  log(s, p.id, `The crowd ${cheer ? 'cheers' : 'boos'} ${p.name}!`, RULES.crowd);
+  for (const pm of [...p.permanents]) {
+    const sc = getScript(cardOf(pm.inst));
+    const fx = cheer ? sc.onCheer : sc.onBoo;
+    if (fx.length) resolveEffects(s, p, fx, pm.inst);
+  }
+  const ab = ability(p);
+  if (cheer) ab?.onCheer?.(heroCtx(s, p)); else ab?.onBoo?.(heroCtx(s, p));
+}
+
 /** Put a card into its owner's graveyard; ephemeral cards cease to exist instead. */
 function toGraveyard(p: PlayerState, inst: CardInst) {
   if (getScript(cardOf(inst)).ephemeral) return;
@@ -411,6 +515,11 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'defendedByAttackAction': { const l = link ?? currentLink(s); return !!l && l.defenders.some((d) => has(cardOf(d.inst), 'Attack') && has(cardOf(d.inst), 'Action')); }
     case 'chainLinkAtLeast': return s.chain.length >= cond.n;
     case 'arcaneTaken': return !!p.turn.arcaneTaken;
+    case 'moreLife': return p.life > opp.life;
+    case 'oppTalent': return cardOf(opp.hero).types.includes(cond.talent);
+    case 'wageredThisLink': { const l = link ?? currentLink(s); return !!l && (l.wagers?.length ?? 0) > 0; }
+    case 'cheered': return (p.turn.cheers ?? 0) > 0;
+    case 'booed': return (p.turn.boos ?? 0) > 0;
   }
 }
 
@@ -645,6 +754,7 @@ function reactionTargetsOk(s: GameState, c: Card): boolean {
 
 /** Can player `pid` play card `c` right now (timing-wise), ignoring cost? */
 function timingOk(s: GameState, pid: PlayerId, c: Card): boolean {
+  if (has(c, 'Defense Reaction') && currentLink(s)?.noDefenseReactions) return false;
   if (s.phase === 'gameOver' || s.priority !== pid) return false;
   const p = s.players[pid];
   const isInstant = has(c, 'Instant');
@@ -676,7 +786,7 @@ export const HAND_INDEX = 2000;
 export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const p = s.players[pid];
   const out: PlayOption[] = [];
-  if (s.priority !== pid || !['action', 'reaction'].includes(s.phase) || s.pendingTriggers) return out;
+  if (s.priority !== pid || !['action', 'reaction'].includes(s.phase) || s.pendingTriggers || s.pendingChoices?.length) return out;
   const fromBanished = p.banished.filter((b) => { const fb = getScript(cardOf(b)).fromBanished; return !!fb && (!fb.cond || evalCondition(s, p, fb.cond)); });
   for (const inst of [...p.hand, ...p.arsenal, ...fromBanished]) {
     const c = cardOf(inst);
@@ -687,6 +797,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     if (extra > 0 && p.hand.filter((h) => h.uid !== inst.uid).length < extra) continue;
     if ((sc.additionalCost.banishGraveyard ?? 0) > p.graveyard.length) continue;
     if (sc.playIf && !evalCondition(s, p, sc.playIf)) continue;
+    if (sc.noFromHand && p.hand.some((h) => h.uid === inst.uid)) continue;
     if (availableResources(p, [inst.uid]) < cost) continue;
     out.push({ uid: inst.uid, kind: 'card', index: 0, cost, label: c.name });
   }
@@ -779,11 +890,13 @@ export function applyAction(prev: GameState, action: Action): GameState {
   const s: GameState = structuredClone(prev);
   if (s.phase === 'gameOver' && action.type !== 'manual') return s;
   if (s.pendingTriggers && !['orderTriggers', 'concede', 'manual'].includes(action.type)) throw new Error('Choose the order of your start-of-turn triggers first.');
+  if (s.pendingChoices?.length && !['choose', 'concede', 'manual'].includes(action.type)) throw new Error('Make your choice first.');
   switch (action.type) {
     case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0, action.optional); break;
     case 'activate': doActivate(s, action.uid, action.index, action.pitch); break;
     case 'pass': doPass(s, action.pitchOrder); break;
     case 'orderTriggers': doOrderTriggers(s, action.order); break;
+    case 'choose': doChoose(s, action); break;
     case 'defend': doDefend(s, action.uids, action.boosts ?? [], action.pitch ?? []); break;
     case 'arsenal': if (action.pitchOrder) s.players[s.turnPlayer].turn.pitchOrder = action.pitchOrder; doArsenal(s, action.uid); break;
     case 'concede': {
@@ -1065,6 +1178,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     goAgain: sc.goAgain, dominate: sc.dominate, overpower: sc.overpower, piercing: sc.piercing,
     defenders: [], reactions: [], damage: null, hit: false, extraOnHit: mode?.onHit ?? [],
     noEquipDefense: sc.noEquipDefense || undefined,
+    unpreventable: sc.unpreventable || undefined,
   };
   s.chain.push(link);
   s.chainOpen = true;
@@ -1073,10 +1187,12 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   const target = s.players[other(p.id)];
   target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;
   // pending "next attack" effects
+  const grantedOnAttack: Effect[] = [];
   p.effects = p.effects.filter((e) => {
     if (e.kind === 'nextAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return false; }
     if (e.kind === 'nextAttackGoAgain' && matchesFilter(e.filter, link)) { link.goAgain = true; return false; }
     if (e.kind === 'nextAttackOnHit' && matchesFilter(e.filter, link)) { link.extraOnHit = [...link.extraOnHit, ...e.effects]; return false; }
+    if (e.kind === 'nextAttackOnAttack' && matchesFilter(e.filter, link)) { grantedOnAttack.push(...e.effects); return false; }
     return true;
   });
   // token triggers
@@ -1101,7 +1217,6 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     }
     if (fromArsenal) for (const cnd of sc.conditional) if (cnd.when === 'fromArsenal') resolveEffects(s, p, cnd.effects, inst);
     if (p.turn.flags[`banishedPlay${inst.uid}`]) for (const cnd of sc.conditional) if (cnd.when === 'fromBanished') resolveEffects(s, p, cnd.effects, inst);
-    resolveConditionals(s, p, c, inst, 'if');
     applyAdditionalPayoff(s, p, c, inst);
     if (optional && optional.oc.timing === 'play') optionalPayoff(s, p, optional.oc, optional.used, inst);
     if (sc.boost && p.deck.length > 0) {
@@ -1115,6 +1230,9 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   }
   if (sc.intimidateOnAttack) resolveEffects(s, p, [{ kind: 'intimidate' }], inst);
   resolveEffects(s, p, sc.onAttack, inst);
+  if (grantedOnAttack.length) resolveEffects(s, p, grantedOnAttack, inst);
+  // "If ..., this gets ..." is checked once the attack's own triggers (cheers, wagers, ...) have happened
+  if (!fromWeapon) resolveConditionals(s, p, c, inst, 'if');
   if (mode) resolveEffects(s, p, mode.onAttack, inst);
   if (optional && optional.oc.timing === 'attack') optionalPayoff(s, p, optional.oc, optional.used, inst);
   ability(p)?.onAttack?.(heroCtx(s, p), link);
@@ -1144,6 +1262,16 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     if (!e) throw new Error('Invalid defending card');
     l.defenders.push({ kind: 'equipment', inst: e.inst, defense: defenseFor(d, cardOf(e.inst), equipDefense(e)) });
     names.push(cardOf(e.inst).name);
+  }
+  // lasting defense bonuses
+  const grants = d.permanents.map((pm) => getScript(cardOf(pm.inst)).grantDefend).filter((g): g is NonNullable<typeof g> => !!g);
+  for (const x of l.defenders) {
+    const c = cardOf(x.inst);
+    const db = getScript(c).defendBonus;
+    if (db?.when === 'weaponAttack' && l.fromWeapon) { x.defense += db.amount; log(s, d.id, `${c.name} gets +${db.amount} defense against a weapon attack.`); }
+    if (x.kind !== 'equipment' && has(c, 'Action')) for (const g of grants) {
+      if ((g.cards === 'attackAction') === has(c, 'Attack')) { x.defense += g.amount; log(s, d.id, `${c.name} gets +${g.amount} defense.`); }
+    }
   }
   // Unity: "when this defends together with a card from hand, this gets +N{d}"
   const fromHand = l.defenders.filter((x) => x.kind === 'hand').length;
@@ -1227,10 +1355,14 @@ function resolveDamage(s: GameState) {
   const defender = s.players[other(l.attacker)];
   // "If this is defended by an action card / has N or more power / ... this chain link, ..."
   if (!l.fromWeapon) resolveConditionals(s, attacker, cardOf(l.inst), l.inst, 'ifLink', l);
+  for (const x of l.defenders) {
+    const db = getScript(cardOf(x.inst)).defendBonus;
+    if (db?.when === 'reactionThisLink' && (l.reactionCount ?? 0) > 0) { x.defense += db.amount; log(s, defender.id, `${cardOf(x.inst).name} gets +${db.amount} defense.`); }
+  }
   const power = linkPower(l);
   const def = linkDefense(l);
   const raw = Math.max(0, power - def);
-  const dealt = raw > 0 ? dealDamage(s, defender.id, raw, false, cardOf(l.inst).name) : 0;
+  const dealt = raw > 0 ? dealDamage(s, defender.id, raw, false, cardOf(l.inst).name, l.unpreventable) : 0;
   l.hit = dealt > 0;
   if (raw === 0) log(s, null, `${cardOf(l.inst).name} is fully blocked.`);
   if (l.hit && s.phase !== 'gameOver') {
@@ -1245,6 +1377,7 @@ function resolveDamage(s: GameState) {
     if (defender.marked) { defender.marked = false; log(s, defender.id, `${defender.name} is no longer marked.`); }
   }
   l.damage = dealt;
+  settleWagers(s, l);
   // equipment wear
   for (const d of l.defenders) {
     if (d.kind === 'equipment') {
@@ -1342,9 +1475,15 @@ function endTurn(s: GameState) {
 // ---------------------------------------------------------------- effects
 
 /** Deal damage to a hero, applying prevention. Returns damage actually dealt. */
-export function dealDamage(s: GameState, target: PlayerId, amount: number, arcane: boolean, source: string): number {
+export function dealDamage(s: GameState, target: PlayerId, amount: number, arcane: boolean, source: string, unpreventable = false): number {
   const p = s.players[target];
   let dmg = amount;
+  if (unpreventable) {
+    p.life -= dmg;
+    log(s, target, `${source} deals ${dmg} damage to ${p.name} — it can't be prevented (${p.life} life).`);
+    checkWin(s);
+    return dmg;
+  }
   if (arcane) {
     // spellvoid / arcane barrier (automatic)
     for (const e of p.equipment) {
@@ -1396,8 +1535,12 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
 function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: CardInst) {
   const opp = s.players[other(p.id)];
   const srcName = cardOf(src).name;
-  for (const e of effects) {
+  const askedBefore = s.pendingChoices?.length ?? 0;
+  for (let ei = 0; ei < effects.length; ei++) {
+    const e = effects[ei];
     if (s.phase === 'gameOver') return;
+    // an effect asked a player to choose: the rest of this effect waits for the answer
+    if ((s.pendingChoices?.length ?? 0) > askedBefore) { deferFrom(s, p, src, effects.slice(ei)); return; }
     const l = currentLink(s);
     switch (e.kind) {
       case 'arcane': {
@@ -1464,7 +1607,12 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         }
         break;
       case 'opt': {
-        // simplified opt: blue cards stay on top, others go to the bottom
+        if (!p.isBot && p.deck.length) {
+          const top = p.deck.slice(0, e.amount);
+          ask(s, { player: p.id, kind: 'opt', prompt: `Opt ${e.amount}: tap the cards to keep on top, in the order you want to draw them. The rest go to the bottom of your deck.`, options: top.map((t) => ({ uid: t.uid, cardId: t.cardId })), resume: { type: 'opt' } });
+          break;
+        }
+        // bots: blue cards (and defense reactions) stay on top, the rest go to the bottom
         const top = p.deck.splice(0, e.amount);
         const keep = top.filter((t) => pitchOf(cardOf(t)) !== 3 || has(cardOf(t), 'Defense Reaction'));
         const bottom = top.filter((t) => !keep.includes(t));
@@ -1494,6 +1642,38 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         resolveEffects(s, p, e.then, src);
         break;
       }
+      case 'wager': {
+        const li = e.target ? s.chain.length - 1 : s.chain.findIndex((x) => x.inst.uid === src.uid);
+        const link = s.chain[li];
+        if (!link || link.attacker !== p.id) break;
+        if (e.optional && !p.isBot) {
+          ask(s, { player: p.id, kind: 'yesno', prompt: `Wager ${e.tokens.length ? e.tokens.map((t) => `a ${t} token`).join(', ') : ''} with ${opp.name}? If ${cardOf(link.inst).name} hits, you create ${e.tokens.length > 1 ? 'them' : 'it'}; otherwise ${opp.name} does.`, options: [], resume: { type: 'wager', tokens: e.tokens, winnerDraw: e.winnerDraw, link: li } });
+          break;
+        }
+        addWager(s, p, li, e.tokens, e.winnerDraw);
+        break;
+      }
+      case 'crowd': {
+        const targets = e.who === 'self' ? [p] : e.who === 'opp' ? [opp]
+          : s.players.filter((pl) => cardOf(pl.hero).types.includes(e.who === 'revered' ? 'Revered' : 'Reviled'));
+        for (const t of targets) crowd(s, t, e.cheer);
+        break;
+      }
+      case 'ifCond': if (evalCondition(s, p, e.cond)) resolveEffects(s, p, e.effects, src); break;
+      case 'noDefenseReactions':
+        if (l) { l.noDefenseReactions = true; log(s, p.id, `Defense reactions can't be played this chain link.`); }
+        break;
+      case 'buffDefender': {
+        const d = l?.defenders.find((x) => {
+          if (x.inst.owner !== p.id || x.kind === 'equipment') return false;
+          const c = cardOf(x.inst);
+          return e.cards === 'any' || (has(c, 'Action') && (e.cards === 'action' || has(c, 'Attack')));
+        });
+        if (d) { d.defense += e.amount; log(s, p.id, `${cardOf(d.inst).name} gets +${e.amount} defense.`); }
+        break;
+      }
+      case 'nextWagerPower': p.effects.push({ kind: 'nextWagerPower', amount: e.amount, overpower: e.overpower, source: srcName }); break;
+      case 'nextAttackOnAttack': p.effects.push({ kind: 'nextAttackOnAttack', filter: e.filter, effects: e.effects, source: srcName }); break;
       case 'banishTopSelf':
         for (let i = 0; i < e.amount; i++) { const t = p.deck.shift(); if (t) { p.banished.push(t); log(s, p.id, `${p.name} banishes ${cardOf(t).name} from the top of their deck.`); } }
         break;
@@ -1505,6 +1685,10 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'nextAttackOnHit': p.effects.push({ kind: 'nextAttackOnHit', filter: e.filter, effects: e.effects, source: srcName }); break;
       case 'reload': {
         if (p.arsenal.length > 0 || p.hand.length === 0) break;
+        if (!p.isBot) {
+          ask(s, { player: p.id, kind: 'reload', prompt: 'Reload: choose a card from your hand to put face down into your arsenal, or skip.', options: p.hand.map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'reload' } });
+          break;
+        }
         const pick = [...p.hand].sort((a, b) => cardPlayValue(cardOf(b)) - cardPlayValue(cardOf(a)))[0];
         removeFrom(p.hand, pick.uid);
         p.arsenal.push(pick);
@@ -1600,6 +1784,8 @@ export function pendingEffectsText(p: PlayerState): string[] {
     if (e.kind === 'nextAttackPower') return `Next ${describeFilter(e.filter)} +${e.amount} power (${e.source})`;
     if (e.kind === 'nextAttackGoAgain') return `Next ${describeFilter(e.filter)} gets go again (${e.source})`;
     if (e.kind === 'ampArcane') return `Next arcane damage +${e.amount} (${e.source})`;
+    if (e.kind === 'nextAttackOnAttack') return `Next ${describeFilter(e.filter)} gets an on-attack effect (${e.source})`;
+    if (e.kind === 'nextWagerPower') return `Next attack that wagers +${e.amount} power (${e.source})`;
     if (e.kind === 'nextAttackOnHit') return `Next ${describeFilter(e.filter)} gets an on-hit effect (${e.source})`;
     return `Prevent next ${e.amount} damage (${e.source})`;
   });

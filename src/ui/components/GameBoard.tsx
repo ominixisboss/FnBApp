@@ -409,6 +409,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   // bot turns
   useEffect(() => {
     if (state.phase === 'gameOver') return;
+    if (state.pendingChoices?.length) return; // a player is making a choice
     const p = state.players[state.priority];
     if (!p.isBot) return;
     // think in the background while the "thinking" pause plays, then apply the move
@@ -443,7 +444,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   }, []);
   // auto end turn when nothing can be played, and auto "no block" when nothing can block
   useEffect(() => {
-    if (!autoPass || !myTurn || pending || state.pendingTriggers) return;
+    if (!autoPass || !myTurn || pending || state.pendingTriggers || state.pendingChoices?.length) return;
     const nothingToPlay = state.phase === 'action' && options.length === 0;
     const nothingToBlock = state.phase === 'defend' && defOpts.length === 0;
     if (!nothingToPlay && !nothingToBlock) return;
@@ -1001,6 +1002,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           </div>
         );
       })()}
+      {state.pendingChoices?.[0]?.player === HUMAN && <ChoicePrompt choice={state.pendingChoices[0]} onDone={(a) => act(a)} />}
       {state.pendingTriggers && state.pendingTriggers.player === HUMAN && (
         <TriggerOrder uids={state.pendingTriggers.uids} me={me} onDone={(order) => act({ type: 'orderTriggers', order })} />
       )}
@@ -1592,3 +1594,47 @@ function TriggerOrder({ uids, me, onDone }: { uids: number[]; me: GameState['pla
     </div>
   );
 }
+
+/** A decision in the middle of an effect: opt (keep cards on top, in order), reload (pick a card) or yes / no. */
+function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendingChoices']>[0]; onDone: (a: Action) => void }) {
+  const [picks, setPicks] = useState<number[]>([]);
+  const C = (id: string) => getDb().byId.get(id)!;
+  const toggle = (u: number) => setPicks(choice.kind === 'reload' ? (picks[0] === u ? [] : [u]) : picks.includes(u) ? picks.filter((x) => x !== u) : [...picks, u]);
+  return (
+    <div className="modal-bg">
+      <div className="modal choice-modal" style={{ maxWidth: 620 }}>
+        <h2 style={{ marginBottom: '.3rem' }}>{choice.kind === 'opt' ? 'Opt' : choice.kind === 'reload' ? 'Reload' : 'Your call'}</h2>
+        <p className="small" style={{ marginTop: 0 }}>{choice.prompt}</p>
+        {choice.options.length > 0 && (
+          <div className="choice-cards">
+            {choice.options.map((o) => {
+              const n = picks.indexOf(o.uid);
+              return (
+                <div key={o.uid} className={`choice-card ${n >= 0 ? 'on' : ''}`} onClick={() => toggle(o.uid)}>
+                  <CardView card={C(o.cardId)} width="100%" tilt={false} noPopout marker={n >= 0 ? (choice.kind === 'opt' ? String(n + 1) : '✓') : undefined} className={n >= 0 ? 'hint-play' : ''} />
+                  {choice.kind === 'opt' && <span className="small">{n >= 0 ? (n === 0 ? 'top' : `${n + 1}${['', '', 'nd', 'rd'][n + 1] ?? 'th'} from top`) : 'bottom'}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="row" style={{ marginTop: '.9rem', justifyContent: 'flex-end' }}>
+          {choice.kind === 'yesno' ? (
+            <>
+              <button onClick={() => onDone({ type: 'choose', yes: false })}>No</button>
+              <button className="primary" onClick={() => onDone({ type: 'choose', yes: true })}>Yes</button>
+            </>
+          ) : choice.kind === 'reload' ? (
+            <>
+              <button onClick={() => onDone({ type: 'choose', picks: [] })}>Skip</button>
+              <button className="primary" disabled={!picks.length} onClick={() => onDone({ type: 'choose', picks })}>Put it in my arsenal</button>
+            </>
+          ) : (
+            <button className="primary" onClick={() => onDone({ type: 'choose', picks })}>Done{picks.length < choice.options.length ? ` (${choice.options.length - picks.length} to the bottom)` : ''}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+

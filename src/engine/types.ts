@@ -36,7 +36,9 @@ export type TurnEffect =
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
   | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'preventNext'; amount: number; source: string }
-  | { kind: 'ampArcane'; amount: number; source: string };
+  | { kind: 'ampArcane'; amount: number; source: string }
+  | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
+  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string };
 
 export interface PlayerState {
   id: PlayerId;
@@ -87,6 +89,8 @@ export interface TurnInfo {
   instantToGrave?: boolean;
   arcaneTaken?: boolean;
   clashesWon?: number;
+  cheers?: number;
+  boos?: number;
 }
 
 export interface Defender {
@@ -116,6 +120,10 @@ export interface ChainLink {
   instants?: number; // instants the attacker played on this link
   reactionCount?: number; // attack reactions played on this link
   destination?: 'soul' | 'deckBottom';
+  /** wagers on this attack: when the link resolves, the attacker wins if it hit, otherwise the defender */
+  wagers?: { tokens: string[]; winnerDraw?: number }[];
+  noDefenseReactions?: boolean;
+  unpreventable?: boolean;
 }
 
 export type Phase = 'action' | 'defend' | 'reaction' | 'arsenal' | 'gameOver';
@@ -141,6 +149,22 @@ export interface LogEntry {
   rule?: string;
 }
 
+/** A decision a player makes in the middle of an effect: which cards to keep on top (opt), what to reload, or yes/no. */
+export interface PendingChoice {
+  player: PlayerId;
+  kind: 'opt' | 'reload' | 'yesno';
+  prompt: string;
+  /** the cards involved (opt: the top of your deck; reload: your hand) */
+  options: { uid: number; cardId: string }[];
+  resume:
+    | { type: 'opt' }
+    | { type: 'reload' }
+    | { type: 'wager'; tokens: string[]; winnerDraw?: number; link: number }
+    | { type: 'betsy'; link: number };
+  /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
+  then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
+}
+
 export interface GameState {
   seed: number;
   nextUid: number;
@@ -157,6 +181,8 @@ export interface GameState {
   /** layers waiting to resolve, last = top (only used in the action phase) */
   stack?: Layer[];
   format: string;
+  /** decisions the game is waiting for (the first one is asked now) */
+  pendingChoices?: PendingChoice[];
   /** start-of-turn triggers waiting for their controller to choose an order */
   pendingTriggers?: { player: PlayerId; uids: number[] };
 }
@@ -169,6 +195,7 @@ export type Action =
   | { type: 'arsenal'; uid: number | null; pitchOrder?: number[] }
   | { type: 'concede' }
   | { type: 'orderTriggers'; order: number[] }
+  | { type: 'choose'; picks?: number[]; yes?: boolean }
   | ManualAction;
 
 export type ManualAction =

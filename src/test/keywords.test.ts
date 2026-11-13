@@ -61,6 +61,9 @@ describe('more keywords', () => {
   it('reload puts a card from hand into an empty arsenal', () => {
     let s = setup([id('Over Flex', 1), id('Lava Burst', 1)]);
     s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    // you choose which card to reload
+    expect(s.pendingChoices?.[0].kind).toBe('reload');
+    s = applyAction(s, { type: 'choose', picks: [s.players[0].hand[0].uid] });
     expect(s.players[0].arsenal.length).toBe(1);
     expect(s.players[0].hand.length).toBe(0);
   });
@@ -89,5 +92,48 @@ describe('more heroes', () => {
     expect(levia.skipBloodDebt!({ p } as never)).toBe(false);
     p.banished.push({ cardId: id('Bare Fangs', 1), uid: 1, owner: 0 });
     expect(levia.skipBloodDebt!({ p } as never)).toBe(true);
+  });
+});
+
+describe('choices, wagers and the crowd', () => {
+  it('opt: you choose which cards stay on top and in what order', () => {
+    let s = setup([id('Blood Tribute', 1)]);
+    const top3 = s.players[0].deck.slice(0, 3).map((d) => d.uid);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    expect(s.pendingChoices?.[0].kind).toBe('opt');
+    expect(() => applyAction(s, { type: 'pass' })).toThrow();
+    s = applyAction(s, { type: 'choose', picks: [top3[2], top3[0]] });
+    // the two kept are on top in the chosen order (Blood Tribute then banishes the new top card)
+    expect(s.players[0].banished.at(-1)!.uid).toBe(top3[2]);
+    expect(s.players[0].deck[0].uid).toBe(top3[0]);
+    expect(s.players[0].deck.at(-1)!.uid).toBe(top3[1]);
+  });
+
+  it('wager: the attacker wins if the attack hits, otherwise the defender', () => {
+    for (const block of [false, true]) {
+      let s = setup([id('Wage Gold', 1)], [id('Wounding Blow', 1), id('Wounding Blow', 1), id('Wounding Blow', 1)]);
+      s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+      expect(s.pendingChoices?.[0].kind).toBe('yesno');
+      s = applyAction(s, { type: 'choose', yes: true });
+      s = applyAction(s, { type: 'defend', uids: block ? s.players[1].hand.map((h) => h.uid) : [] });
+      s = applyAction(applyAction(s, { type: 'pass' }), { type: 'pass' });
+      const gold = (p: 0 | 1) => s.players[p].permanents.filter((pm) => getDb().byId.get(pm.inst.cardId)!.name === 'Gold').length;
+      expect([gold(0), gold(1)]).toEqual(block ? [0, 1] : [1, 0]);
+    }
+  });
+
+  it('the crowd cheers you, and "if you\'ve been cheered" sees it', () => {
+    let s = setup([id('Jaws of Victory', 1)]);
+    s.players[0].life = 10; // less life than the opponent
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    expect(s.players[0].turn.cheers).toBe(1);
+    expect(s.chain.at(-1)!.goAgain).toBe(true);
+  });
+
+  it('parses wager grants, winner effects and crowd triggers', () => {
+    expect(getScript(named('Big Slick')).coverage).toBe('full');
+    expect(getScript(named('Big Blinder')).coverage).toBe('full');
+    expect(getScript(named('Money Where Ya Mouth Is')).coverage).toBe('full');
+    expect(getScript(named('Bet Big')).onAttack[0]).toEqual({ kind: 'wager', tokens: ['Gold', 'Might', 'Vigor'], optional: true });
   });
 });

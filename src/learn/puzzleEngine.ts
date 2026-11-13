@@ -51,6 +51,14 @@ export const puzzleFailed = (s: GameState, start: GameState) => (s.phase === 'ga
 /** Every action the player could take here (plays with each sensible way to pay, activations, pass). */
 export function candidateActions(s: GameState): Action[] {
   const p = s.players[0];
+  // a decision in the middle of an effect: try each sensible answer
+  const pc = s.pendingChoices?.[0];
+  if (pc) {
+    if (pc.player !== 0) return [];
+    if (pc.kind === 'yesno') return [{ type: 'choose', yes: true }, { type: 'choose', yes: false }];
+    if (pc.kind === 'reload') return [...pc.options.map((o) => ({ type: 'choose' as const, picks: [o.uid] })), { type: 'choose', picks: [] }];
+    return [{ type: 'choose', picks: pc.options.map((o) => o.uid) }, { type: 'choose', picks: [] }];
+  }
   if (s.priority !== 0) return [];
   if (s.phase === 'arsenal') return [{ type: 'arsenal', uid: null }];
   if (s.phase === 'defend') return [{ type: 'defend', uids: [] }];
@@ -83,7 +91,7 @@ export function candidateActions(s: GameState): Action[] {
 
 /** Let the opponent (and the engine) act until it's the player's decision again. */
 export function settle(s: GameState): GameState {
-  for (let i = 0; i < 50 && s.phase !== 'gameOver' && s.priority === 1; i++) s = applyAction(s, chooseAction(s, 1, 'hard').action);
+  for (let i = 0; i < 50 && s.phase !== 'gameOver' && s.priority === 1 && !s.pendingChoices?.length; i++) s = applyAction(s, chooseAction(s, 1, 'hard').action);
   return s;
 }
 
