@@ -151,6 +151,7 @@ function heroApi(s: GameState): HeroApi {
     clash: (p) => { const w = clash(s); void p; return w === null ? null : s.players[w]; },
     ask: (chooser, owner, key, prompt, botYes, data, cards) => ask(s, { player: chooser.id, kind: 'yesno', prompt, options: (cards ?? []).map((cid, i) => ({ uid: -1 - i, cardId: cid })), resume: { type: 'hero', owner: owner.id, key, data, botYes } }),
     equip: (p, cid) => equipCard(s, p, cid),
+    pick: (chooser, owner, key, prompt, options, data) => ask(s, { player: chooser.id, kind: 'target', prompt, options: options.map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'hero', owner: owner.id, key, data, botYes: true } }),
     targets: (p) => targetableOpponents(s, p.id).map((q) => s.players[q]),
     pay: (p, amount) => {
       if (availableResources(p, []) < amount) return false;
@@ -432,7 +433,7 @@ function offerProtect(s: GameState, l: ChainLink) {
     const best = [...opts].sort((a, b) => (defenseOf(cardOf(b)) ?? 0) - (defenseOf(cardOf(a)) ?? 0) || (pitchOf(cardOf(b)) - pitchOf(cardOf(a))))[0];
     // bots protect when their hero profits from it, or when the attacker is their neighbour too
     const botYes = protectWorthIt(s, q, l, best);
-    ask(s, { player: q.id, kind: 'yesno', prompt: `Protect ${s.players[defenderOf(l)].name} from ${cardOf(l.inst).name} with ${cardOf(best).name}?`, options: [{ uid: best.uid, cardId: best.cardId }], resume: { type: 'hero', owner: q.id, key: 'protect', data: [li, best.uid], botYes } });
+    ask(s, { player: q.id, kind: 'pick', prompt: `Protect ${s.players[defenderOf(l)].name} from ${cardOf(l.inst).name} (${linkPower(l)} power)? Pick the card to defend with, or skip.`, confirm: 'Protect with this', skippable: true, botPick: botYes ? best.uid : null, options: [best, ...opts.filter((o) => o !== best)].map((o) => ({ uid: o.uid, cardId: o.cardId })), resume: { type: 'protect', link: li } });
   }
 }
 
@@ -569,8 +570,40 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
     }
     case 'hero': {
       const owner = s.players[c.resume.owner];
-      if (c.resume.key === 'protect') { if (a.yes) doProtect(s, owner, c.resume.data![0], c.resume.data![1]); break; }
-      ability(owner)?.onChoice?.(heroCtx(s, owner), c.resume.key, !!a.yes, c.resume.data);
+      ability(owner)?.onChoice?.(heroCtx(s, owner), c.resume.key, !!a.yes, c.resume.data, picks);
+      break;
+    }
+    case 'protect': if (picks[0] !== undefined) doProtect(s, p, c.resume.link, picks[0]); else log(s, p.id, `${p.name} doesn't protect.`); break;
+    case 'handToBottom': {
+      const inst = (picks[0] !== undefined && removeFrom(p.hand, picks[0])) || p.hand.shift();
+      if (inst) { p.deck.push(inst); log(s, p.id, `${p.name} puts a card from their hand on the bottom of their deck.`); }
+      break;
+    }
+    case 'defendCost': {
+      const l = currentLink(s);
+      const duid = c.resume.uid;
+      const x = l?.defenders.find((d) => d.inst.uid === duid) ?? l?.also?.defenders.find((d) => d.inst.uid === duid);
+      const oc = x && getScript(cardOf(x.inst)).optional;
+      if (picks[0] === undefined || !x || !oc) { log(s, p.id, `${p.name} doesn't use ${x ? cardOf(x.inst).name : 'the card'}'s ability.`); break; }
+      const inst = removeFrom(p.hand, picks[0]) ?? removeFrom(p.arsenal, picks[0]);
+      if (!inst) break;
+      p.deck.push(inst);
+      log(s, p.id, `${cardOf(x.inst).name}: ${p.name} puts a card on the bottom of their deck and ${oc.effectText}.`);
+      optionalPayoff(s, p, oc, cardOf(inst), x.inst);
+      break;
+    }
+    case 'cleanse': {
+      const t = s.players[c.resume.target];
+      const name = picks[0] !== undefined ? cardOf(t.deck.find((d) => d.uid === picks[0]) ?? t.deck[0]).name : null;
+      if (name) cleanseName(s, p, t, c.resume.n, name, 'Righteous Cleansing');
+      break;
+    }
+    case 'eventOrder': {
+      const top = (s.eventDeck ?? []).splice(0, c.options.length);
+      const keep = picks.map((u) => c.options.findIndex((o) => o.uid === u)).filter((i) => i >= 0).map((i) => top[i]);
+      const rest = top.filter((_, i) => !picks.includes(c.options[i].uid));
+      s.eventDeck = [...keep, ...rest, ...(s.eventDeck ?? [])];
+      log(s, p.id, `${p.name} puts the top ${top.length} cards of the event deck back in the order they want.`);
       break;
     }
     case 'wager':
@@ -692,6 +725,15 @@ function damageAlly(s: GameState, owner: PlayerState, uid: number, amount: numbe
     destroyedBy(s, s.turnPlayer, owner.id);
   }
   return amount;
+}
+
+/** Banish the cards named `name` from the top `n` of `t`'s deck (Righteous Cleansing). */
+function cleanseName(s: GameState, p: PlayerState, t: PlayerState, n: number, name: string, src: string) {
+  const top = t.deck.slice(0, n);
+  const gone = top.filter((x) => cardOf(x).name === name);
+  t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !gone.includes(x)));
+  t.banished.push(...gone);
+  log(s, p.id, `${src}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${gone.length} ${name}.`);
 }
 
 /** A hero destroyed a card someone else controls: Theryon may punish it. */
@@ -1316,7 +1358,12 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   }
   for (let i = 0; i < (sc.additionalCost.handToBottom ?? 0); i++) {
     // the player picks the card (optional.uid); otherwise the least useful one: the lowest pitch-and-power card
-    const pick = p.hand.find((h) => h.uid === optional?.uid) ?? [...p.hand].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
+    const chosen = p.hand.find((h) => h.uid === optional?.uid);
+    if (!chosen && !p.isBot && p.hand.length > 1) {
+      ask(s, { player: pid, kind: 'pick', prompt: `${c.name}: as an additional cost, put a card from your hand on the bottom of your deck.`, confirm: 'Put it on the bottom', options: p.hand.map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'handToBottom' } });
+      continue;
+    }
+    const pick = chosen ?? [...p.hand].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
     if (pick) { removeFrom(p.hand, pick.uid); p.deck.push(pick); log(s, pid, `${p.name} puts a card from their hand on the bottom of their deck.`); }
   }
   for (let i = 0; i < (sc.additionalCost.banishRandomHand ?? 0); i++) {
@@ -1705,6 +1752,10 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     const oc = getScript(cardOf(x.inst)).optional;
     if (!oc || oc.timing !== 'defend') throw new Error(`${cardOf(x.inst).name} has no defend option.`);
     let used: Card | null = null;
+    if ((oc.cost.kind === 'handToBottom') && !d.isBot && d.hand.length + d.arsenal.length > 0) {
+      ask(s, { player: d.id, kind: 'pick', prompt: `${cardOf(x.inst).name}: put a card from your hand or arsenal on the bottom of your deck to ${oc.effectText}? Pick one, or skip.`, confirm: 'Put it on the bottom', skippable: true, options: [...d.hand, ...d.arsenal].map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'defendCost', uid: x.inst.uid } });
+      continue;
+    }
     if (oc.cost.kind !== 'pay') {
       if (!optionalPayable(d, oc, x.inst.uid)) { log(s, d.id, `${cardOf(x.inst).name}: nothing left to pay with, so its ability isn't used.`); continue; }
       used = payOptional(s, d, oc, { accept: true }, x.inst.uid);
@@ -2124,9 +2175,11 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         for (const x of top) { const k = cardOf(x).name; groups.set(k, [...(groups.get(k) ?? []), x]); }
         const best = [...groups.values()].sort((a, b) => b.length - a.length || powerOf(cardOf(b[0])) - powerOf(cardOf(a[0])))[0];
         if (!best) break;
-        t.deck.splice(0, t.deck.length, ...t.deck.filter((x) => !best.includes(x)));
-        t.banished.push(...best);
-        log(s, p.id, `${srcName}: ${p.name} looks at the top ${top.length} cards of ${t.name}'s deck and banishes ${best.length} ${cardOf(best[0]).name}.`);
+        if (!p.isBot) {
+          ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length} cards of ${t.name}'s deck. Pick a card: every card with its name is banished, the rest stay on top.`, confirm: 'Banish these', options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'cleanse', target: t.id, n: e.n } });
+          break;
+        }
+        cleanseName(s, p, t, e.n, cardOf(best[0]).name, srcName);
         break;
       }
       case 'oppDraw': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); break; }

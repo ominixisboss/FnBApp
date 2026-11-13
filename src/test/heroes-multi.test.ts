@@ -30,7 +30,8 @@ describe('protect (Ultimate Pit Fight)', () => {
     s = applyAction(s, { type: 'defend', uids: [] });
     const pc = s.pendingChoices?.[0];
     expect(pc?.player).toBe(2);
-    s = applyAction(s, { type: 'choose', yes: true });
+    expect(pc?.kind).toBe('pick'); // she picks which card protects
+    s = applyAction(s, { type: 'choose', picks: [pc!.options[0].uid] });
     expect(s.chain[0].defenders.some((d) => d.inst.owner === 2)).toBe(true);
     expect(s.players[2].permanents.some((pm) => getDb().byId.get(pm.inst.cardId)!.name === 'Gold')).toBe(true);
   });

@@ -26,6 +26,8 @@ export interface HeroApi {
   clash(p: PlayerState): PlayerState | null;
   /** ask `chooser` a yes/no question that `owner`'s hero ability answers in onChoice */
   ask(chooser: PlayerState, owner: PlayerState, key: string, prompt: string, botYes: boolean, data?: number[], cards?: string[]): void;
+  /** ask `chooser` to pick one of `options` (heroes or cards); bots pick the first. Answered in `owner`'s onChoice with `picks` */
+  pick(chooser: PlayerState, owner: PlayerState, key: string, prompt: string, options: CardInst[], data?: number[]): void;
   /** equip an equipment card (replacing what is in its slot) */
   equip(p: PlayerState, cardId: string): void;
   /** the opponents this player may target (Ultimate Pit Fight: only the neighbours) */
@@ -109,7 +111,7 @@ export interface HeroAbility {
   pitchToBanished?: boolean;
   activations?: HeroActivation[];
   /** the answer to a question this ability asked with api.ask */
-  onChoice?(ctx: HeroCtx, key: string, yes: boolean, data?: number[]): void;
+  onChoice?(ctx: HeroCtx, key: string, yes: boolean, data?: number[], picks?: number[]): void;
   /** at the start of each opposing hero's turn (Squizzy) */
   opponentStartOfTurn?(ctx: HeroCtx, opp: PlayerState): void;
   /** whenever this player protects another hero (defends an attack that targets them) */
@@ -1209,12 +1211,21 @@ HERO_ABILITIES.push(
     summary: 'Bolfar can’t equip weapons. Action {r}{r}{r}: your next crush attack this turn also attacks another hero you can attack (the one with the least life). They defend it separately and take its damage. Go again.',
     noWeapons: true,
     match: (t) => t.includes('The next attack action card with crush you play this turn may attack an additional hero'),
-    onAttack: ({ p, api }, l) => {
+    onAttack: ({ s, p, api }, l) => {
       if (l.attacker !== p.id || !flag(p, 'bolfarExtra') || l.fromWeapon || !isCrush(cardOf(l.inst))) return;
       p.turn.flags.bolfarExtra = 0;
       const extra = api.targets(p).filter((q) => q.id !== l.defender);
       if (!extra.length) return;
+      if (!p.isBot && extra.length > 1) { api.pick(p, p, 'bolfar', `Bolfar: which other hero does ${cardOf(l.inst).name} attack?`, extra.map((q) => q.hero), [s.chain.indexOf(l)]); return; }
       const q = lowestLife(extra);
+      l.also = { defender: q.id, defenders: [], stage: 'pending' };
+      api.log(p, `${cardOf(l.inst).name} also attacks ${q.name} (Bolfar).`);
+    },
+    onChoice: ({ s, p, api }, key, _yes, data, picks) => {
+      if (key !== 'bolfar') return;
+      const l = s.chain[data![0]];
+      const q = s.players.find((x) => x.hero.uid === picks?.[0]);
+      if (!l || !q || l.damage !== null) return;
       l.also = { defender: q.id, defenders: [], stage: 'pending' };
       api.log(p, `${cardOf(l.inst).name} also attacks ${q.name} (Bolfar).`);
     },
@@ -1310,9 +1321,19 @@ HERO_ABILITIES.push(
       const others = s.players.filter((q) => !q.eliminated && q.id !== l.attacker && q.id !== def.id && api.targets(s.players[l.attacker]).includes(q));
       if (!others.length) return;
       const to = others.find((q) => q.id !== p.id) ?? others[0];
+      if (!p.isBot && others.length > 1) {
+        api.pick(p, p, 'taipanisTo', `Taipanis: ${cardOf(l.inst).name} would knock out ${def.name}. Discard ${cardOf(red).name} to send it at another hero? Pick the new target, or ${def.name} to leave it.`, [...others.map((q) => q.hero), def.hero], [s.chain.indexOf(l), red.uid]);
+        return;
+      }
       api.ask(p, p, 'taipanis', `Taipanis: discard ${cardOf(red).name} to send ${cardOf(l.inst).name} at ${to.name} instead of ${def.name}?`, to.id !== p.id, [s.chain.indexOf(l), to.id, red.uid], [red.cardId]);
     },
-    onChoice: ({ s, p, api }, key, yes, data) => {
+    onChoice: ({ s, p, api }, key, yes, data, picks) => {
+      if (key === 'taipanisTo') {
+        const q = s.players.find((x) => x.hero.uid === picks?.[0]);
+        const l0 = s.chain[data![0]];
+        if (!q || !l0 || q.id === l0.defender) return;
+        return void HERO_ABILITIES.find((h) => h.id === 'taipanis')!.onChoice!({ s, p, opp: p, api }, 'taipanis', true, [data![0], q.id, data![1]]);
+      }
       if (key !== 'taipanis' || !yes) return;
       const [li, to, uid] = data!;
       const l = s.chain[li];

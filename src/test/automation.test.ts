@@ -135,3 +135,18 @@ describe('most-played cards', () => {
     expect(defendOptions(s, 1).some((o) => o.uid === s.players[1].equipment[0].inst.uid)).toBe(false);
   });
 });
+
+describe('your own choices', () => {
+  it('Enlightened Strike asks which card goes to the bottom of your deck', () => {
+    let s = game([findCard('Enlightened Strike')!.id, filler(), findCard('Sigil of Solace', 1)?.id ?? filler()]);
+    const keep = s.players[0].hand[1].uid;
+    const away = s.players[0].hand[2].uid;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [], mode: 0 });
+    const pc = s.pendingChoices?.[0];
+    expect(pc?.kind).toBe('pick');
+    expect(pc!.options.map((o) => o.uid).sort()).toEqual([keep, away].sort());
+    s = applyAction(s, { type: 'choose', picks: [away] });
+    expect(s.players[0].deck.at(-1)!.uid).toBe(away);
+    expect(s.players[0].hand.some((h) => h.uid === keep)).toBe(true);
+  });
+});

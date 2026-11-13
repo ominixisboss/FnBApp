@@ -563,6 +563,10 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
       return { action: { type: 'choose', picks: best ? [best.uid] : [] }, reason: 'Reload the strongest card.' };
     }
     if (pc.kind === 'target') return { action: { type: 'choose', picks: [pc.options[0].uid] }, reason: 'Go for the hero.' };
+    if (pc.kind === 'pick') {
+      const pick = pc.botPick !== undefined ? pc.botPick : pc.skippable ? null : [...pc.options].sort((a, b) => cardPlayValue(C(a.cardId)) - cardPlayValue(C(b.cardId)))[0]?.uid ?? null;
+      return { action: { type: 'choose', picks: pick === null ? [] : [pick] }, reason: pick === null ? 'Not worth it.' : 'The least useful card.' };
+    }
     if (pc.resume.type === 'hero') return { action: { type: 'choose', yes: pc.resume.botYes }, reason: pc.resume.botYes ? 'Worth it.' : 'Not worth it.' };
     return { action: { type: 'choose', yes: true }, reason: 'Take the bet.' };
   }

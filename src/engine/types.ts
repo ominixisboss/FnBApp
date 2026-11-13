@@ -194,7 +194,11 @@ export interface LogEntry {
 /** A decision a player makes in the middle of an effect: which cards to keep on top (opt), what to reload, or yes/no. */
 export interface PendingChoice {
   player: PlayerId;
-  kind: 'opt' | 'reload' | 'yesno' | 'target';
+  kind: 'opt' | 'reload' | 'yesno' | 'target' | 'pick';
+  /** pick: the confirm button's label, whether it can be skipped, and what a bot picks (null: skip) */
+  confirm?: string;
+  skippable?: boolean;
+  botPick?: number | null;
   prompt: string;
   /** the cards involved (opt: the top of your deck; reload: your hand) */
   options: { uid: number; cardId: string }[];
@@ -206,7 +210,17 @@ export interface PendingChoice {
     | { type: 'attackTarget'; link: number }
     | { type: 'damageTarget'; amount: number; arcane: boolean; source: string }
     /** a hero ability's "you may": answered by `owner`'s ability (onChoice); bots answer `botYes` */
-    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean };
+    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean }
+    /** "put a card from your hand on the bottom of your deck" as an additional cost (Enlightened Strike) */
+    | { type: 'handToBottom' }
+    /** a defending card's "you may put a card ... on the bottom. If you do, ..." (Crown of Providence) */
+    | { type: 'defendCost'; uid: number }
+    /** Righteous Cleansing: banish the cards named like the pick from the top of `target`'s deck */
+    | { type: 'cleanse'; target: PlayerId; n: number }
+    /** protect `link` with the picked card (skip: don't) */
+    | { type: 'protect'; link: number }
+    /** Kox: the top of the event deck in the order picked (unpicked ones after) */
+    | { type: 'eventOrder' };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
@@ -216,6 +230,11 @@ export interface GameState {
   sharedZones?: boolean;
   /** Pit Fight: the order heroes were knocked out (first out first) */
   knockedOut?: PlayerId[];
+  /** Smash Palace event deck (card ids): the turn player reveals the top card at the start of each turn */
+  eventDeck?: string[];
+  eventDiscard?: string[];
+  /** the event revealed this turn */
+  lastEvent?: string;
   seed: number;
   nextUid: number;
   turn: number;

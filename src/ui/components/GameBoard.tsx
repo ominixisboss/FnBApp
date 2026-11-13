@@ -1623,12 +1623,12 @@ function TriggerOrder({ uids, me, onDone }: { uids: number[]; me: GameState['pla
 function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendingChoices']>[0]; onDone: (a: Action) => void }) {
   const [picks, setPicks] = useState<number[]>([]);
   const C = (id: string) => getDb().byId.get(id)!;
-  const single = choice.kind === 'reload' || choice.kind === 'target';
+  const single = choice.kind === 'reload' || choice.kind === 'target' || choice.kind === 'pick';
   const toggle = (u: number) => setPicks(single ? (picks[0] === u ? [] : [u]) : picks.includes(u) ? picks.filter((x) => x !== u) : [...picks, u]);
   return (
     <div className="modal-bg">
       <div className="modal choice-modal" style={{ maxWidth: 620 }}>
-        <h2 style={{ marginBottom: '.3rem' }}>{choice.kind === 'opt' ? 'Opt' : choice.kind === 'reload' ? 'Reload' : choice.kind === 'target' ? 'Choose a target' : 'Your call'}</h2>
+        <h2 style={{ marginBottom: '.3rem' }}>{choice.kind === 'opt' ? 'Opt' : choice.kind === 'reload' ? 'Reload' : choice.kind === 'target' ? 'Choose a target' : choice.kind === 'pick' ? 'Choose a card' : 'Your call'}</h2>
         <p className="small" style={{ marginTop: 0 }}>{choice.prompt}</p>
         {choice.options.length > 0 && (
           <div className="choice-cards">
@@ -1651,6 +1651,11 @@ function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendi
             </>
           ) : choice.kind === 'target' ? (
             <button className="primary" disabled={!picks.length} onClick={() => onDone({ type: 'choose', picks })}>Target this</button>
+          ) : choice.kind === 'pick' ? (
+            <>
+              {choice.skippable && <button onClick={() => onDone({ type: 'choose', picks: [] })}>Skip</button>}
+              <button className="primary" disabled={!picks.length} onClick={() => onDone({ type: 'choose', picks })}>{choice.confirm ?? 'Choose'}</button>
+            </>
           ) : choice.kind === 'reload' ? (
             <>
               <button onClick={() => onDone({ type: 'choose', picks: [] })}>Skip</button>
