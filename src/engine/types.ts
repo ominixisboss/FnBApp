@@ -214,6 +214,8 @@ export interface PendingChoice {
 export interface GameState {
   /** Yorick: every hero shares one deck and one graveyard (the players' arrays are the same objects) */
   sharedZones?: boolean;
+  /** Pit Fight: the order heroes were knocked out (first out first) */
+  knockedOut?: PlayerId[];
   seed: number;
   nextUid: number;
   turn: number;

@@ -2379,6 +2379,7 @@ function checkWin(s: GameState) {
 function eliminate(s: GameState, p: PlayerState) {
   if (s.players.length === 2) { endGame(s, other(p.id)); return; }
   p.eliminated = true;
+  (s.knockedOut ??= []).push(p.id);
   log(s, p.id, `${p.name} is knocked out!`);
   if (s.pendingChoices) { s.pendingChoices = s.pendingChoices.filter((c) => c.player !== p.id); if (!s.pendingChoices.length) s.pendingChoices = undefined; }
   const left = alivePlayers(s);
@@ -2400,6 +2401,13 @@ export function concedeSeat(before: GameState, i: PlayerId): GameState {
     if (before.pendingTriggers && before.pendingTriggers.player !== i) s.pendingTriggers = before.pendingTriggers;
   }
   return s;
+}
+
+/** Pit Fight finishing order, best first: the winner, then heroes still standing (most life first), then the knocked out (last out first). */
+export function placements(s: GameState): PlayerId[] {
+  const out = [...(s.knockedOut ?? [])].reverse();
+  const standing = s.players.filter((p) => !p.eliminated && p.id !== s.winner).sort((a, b) => b.life - a.life).map((p) => p.id);
+  return [...(s.winner !== null ? [s.winner] : []), ...standing, ...out.filter((id) => id !== s.winner)];
 }
 
 function endGame(s: GameState, winner: PlayerId) {

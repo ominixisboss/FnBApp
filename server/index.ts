@@ -50,7 +50,8 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 
 const bearer = (req: IncomingMessage) => (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '') || null;
 
-// simple per-IP rate limit for login/register
+// simple per-IP rate limit for login/register (attempts per minute)
+const AUTH_LIMIT = Number(process.env.AUTH_RATE_LIMIT ?? 20);
 const attempts = new Map<string, { n: number; reset: number }>();
 function rateLimited(req: IncomingMessage): boolean {
   const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim() ?? req.socket.remoteAddress ?? '?';
@@ -58,7 +59,7 @@ function rateLimited(req: IncomingMessage): boolean {
   const a = attempts.get(ip);
   if (!a || a.reset < now) { attempts.set(ip, { n: 1, reset: now + 60_000 }); return false; }
   a.n++;
-  return a.n > 20;
+  return a.n > AUTH_LIMIT;
 }
 
 const publicUser = (u: UserRow) => ({ id: u.id, username: u.username, createdAt: u.created_at });

@@ -102,11 +102,13 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,440 |
-| Partly automated | ~1,470 |
-| Stats only (text not automated) | ~1,910 |
+| Fully automated | ~1,560 |
+| Partly automated | ~1,430 |
+| Stats only (text not automated) | ~1,830 |
 
-Hero abilities for all 86 heroes are automated. A few are approximations, and their card pop-out says so: Bolfar's extra hero takes the same damage without defending, Theryon only triggers when an ally is destroyed, Yorick deals the shared deck back out (graveyards stay separate), and Fightmaster Kox has no event deck to look at. Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
+The cards people actually play come first: 92% of the card copies in the bots' meta decklists are fully automated (including Guardian crush payoffs, Frontline and Adversity equipment, Ninja combo grants and Enlightened Strike).
+
+Hero abilities for all 86 heroes are automated. Bolfar's extra hero defends the crush attack with its own block; Yorick's heroes share one deck and one graveyard; Theryon triggers on every automated "destroy a card you don't control". Fightmaster Kox's event deck doesn't exist in this simulator (event formats aren't simulated), so looking at it does nothing. Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
 
 Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, reprise, decompose, chi, and choosing the order of your start-of-turn triggers. `src/test/rules.test.ts` checks rules scenarios (go again, dominate, blade break, temper, arcane barrier, intimidate, the chain closing, trigger order).
 
@@ -121,11 +123,14 @@ Also automated: heave (from the arsenal at end of turn, making Seismic Surge), a
 **Ultimate Pit Fight** (3 or 4 heroes, young hero, 40-card deck) is playable offline against 2 or 3 bots. You can attack only the heroes on your left and right: tap a seat at the top of the board to face them. The last hero standing wins. Priority in the reaction step goes round the table. Heroes with protect cards (Reya, Brevant, Chivalry) may defend an attack aimed at someone else. Everyone rolls a die for the first turn.
 
 **Online Pit Fight**: pick the Ultimate Pit Fight format on the Online tab.
-- **Find a Pit Fight table** seats 4. Once a second player joins, bots take the empty seats after 30 seconds.
+- **Ranked Pit Fight table** seats 4. Once a second player joins, bots take the empty seats after 30 seconds.
 - **Create a Pit Fight room** seats 3 or 4. Share the code; the host can start any time with bots in the empty seats.
 - The server plays the bots, and every player sees the table from their own seat.
 - A player who leaves or disconnects for more than two minutes is knocked out, and the game goes on.
-- Pit Fight games are unranked, and friend challenges and friend cups stay one-on-one. The bots play every card using its stats plus whatever text is automated.
+- The public table is ranked on its own monthly Pit Fight ladder: your finishing place counts as a win against everyone below you and a loss to everyone above (bots don't count). It doesn't change your one-on-one rating. Rooms are unranked, and friend challenges and friend cups stay one-on-one.
+- Pit Fight bots pick targets by threat: a hero they can knock out, a hero on low life, the table leader, or whoever keeps attacking them. They protect a hero when losing them would leave the bot alone with the attacker.
+
+The bots play every card using its stats plus whatever text is automated.
 
 ## Development
 
