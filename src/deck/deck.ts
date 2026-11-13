@@ -92,6 +92,7 @@ export function validateDeck(d: Deck): string[] {
     if (isWeapon(c)) weapons += cnt;
   }
   for (const [key, cnt] of byName) {
+    if (key.startsWith('Chivalry|') && hero.name.startsWith('Brevant')) continue; // "You may have any number of Chivalry in your deck"
     if (cnt > r.copies) errs.push(`${key.split('|')[0]}: ${cnt} copies (max ${r.copies}).`);
   }
   if (weapons === 0) errs.push('No weapon included (allowed, but most heroes want one).');

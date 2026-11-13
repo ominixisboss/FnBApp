@@ -557,6 +557,7 @@ export function chooseAction(s: GameState, pid: PlayerId, difficulty?: Difficult
       return { action: { type: 'choose', picks: best ? [best.uid] : [] }, reason: 'Reload the strongest card.' };
     }
     if (pc.kind === 'target') return { action: { type: 'choose', picks: [pc.options[0].uid] }, reason: 'Go for the hero.' };
+    if (pc.resume.type === 'hero') return { action: { type: 'choose', yes: pc.resume.botYes }, reason: pc.resume.botYes ? 'Worth it.' : 'Not worth it.' };
     return { action: { type: 'choose', yes: true }, reason: 'Take the bet.' };
   }
   if (s.pendingTriggers) {

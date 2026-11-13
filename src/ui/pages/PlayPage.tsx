@@ -44,6 +44,14 @@ interface Setup {
 
 interface Opponent { heroId: string; name: string; deck: DeckList }
 
+/** The pool cards left out of the chosen loadout are the inventory (Taylor's equipment, The Librarian's Tomes). */
+function withInventory(pool: DeckList, chosen?: DeckList): DeckList {
+  if (!chosen) return pool;
+  const left = [...pool.equipmentIds, ...pool.cardIds];
+  for (const id of [...chosen.equipmentIds, ...chosen.cardIds]) { const i = left.indexOf(id); if (i >= 0) left.splice(i, 1); }
+  return { ...chosen, inventoryIds: left.filter((id) => { const c = card(id); return c.types.includes('Equipment') || c.name.includes('Tome'); }) };
+}
+
 /** Games from a draft/sealed table use the deck the server holds for you; this placeholder is replaced there. */
 export const TABLE_DECK = { heroId: '', weaponIds: [], equipmentIds: [], cardIds: [] };
 
@@ -83,6 +91,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const [ctx, setCtx] = useState<{ pool: DeckList; opp: Opponent; more?: Opponent[] } | null>(null);
   const [match, setMatch] = useState<{ wins: [number, number]; lastLoser?: PlayerId } | null>(null);
   const [pre, setPre] = useState<{ step: 'loadout' | 'dice'; chosen?: DeckList; chooser?: PlayerId } | null>(null);
+  const diceNames = useMemo(() => (ctx ? ['You', ctx.opp.name, ...(ctx.more ?? []).map((o) => o.name)] : []), [ctx]);
   const rules = FORMAT_RULES[setup.format === 'casual' ? 'blitz' : setup.format];
   const start = () => {
     const fmt = setup.format;
@@ -108,7 +117,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   const begin = (first: PlayerId) => {
     if (!ctx || !pre) return;
     setGame(createGame([
-      { name: 'You', isBot: false, deck: pre.chosen ?? ctx.pool },
+      { name: 'You', isBot: false, deck: withInventory(ctx.pool, pre.chosen) },
       { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
       ...(ctx.more ?? []).map((o) => ({ name: o.name, isBot: true, difficulty: setup.difficulty, deck: o.deck })),
     ], Date.now() & 0x7fffffff, setup.format, first));
@@ -178,7 +187,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
   if (pre && ctx) {
     return pre.step === 'loadout'
       ? <Loadout pool={ctx.pool} minDeck={rules.minDeck} maxDeck={rules.maxDeck} title={match && (match.wins[0] + match.wins[1] > 0) ? `Sideboarding · game ${match.wins[0] + match.wins[1] + 1}` : 'Your loadout'} onDone={(d) => setPre({ ...pre, chosen: d, step: 'dice' })} />
-      : <DiceRoll names={['You', ctx.opp.name]} chooser={pre.chooser} onDone={begin} />;
+      : <DiceRoll names={diceNames} chooser={pre.chooser} onDone={begin} />;
   }
   if (game) {
     const practice = setup.sandbox || setup.difficulty === 'goldfish';

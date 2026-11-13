@@ -102,29 +102,30 @@ export function Loadout({ pool, minDeck, maxDeck, title, onDone }: { pool: DeckL
 
 const FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
-/** Roll a die each; the winner chooses to go first or second. `chooser` skips the roll (the loser of the last game chooses). */
-export function DiceRoll({ names, chooser, onDone }: { names: [string, string]; chooser?: PlayerId; onDone: (first: PlayerId) => void }) {
-  const [rolls, setRolls] = useState<[number, number] | null>(null);
+/** Roll a die each (2 to 4 players); the highest roll chooses to go first or second. `chooser` skips the roll (the loser of the last game chooses). */
+export function DiceRoll({ names, chooser, onDone }: { names: string[]; chooser?: PlayerId; onDone: (first: PlayerId) => void }) {
+  const [rolls, setRolls] = useState<number[] | null>(null);
   const [spinning, setSpinning] = useState(chooser === undefined);
-  const [face, setFace] = useState<[number, number]>([0, 0]);
+  const [face, setFace] = useState<number[]>(() => names.map(() => 0));
   useEffect(() => {
     if (chooser !== undefined) return;
-    const spin = setInterval(() => setFace([Math.floor(Math.random() * 6), Math.floor(Math.random() * 6)]), 70);
+    const spin = setInterval(() => setFace(names.map(() => Math.floor(Math.random() * 6))), 70);
     const stop = setTimeout(() => {
       clearInterval(spin);
-      let a = 0, b = 0;
-      while (a === b) { a = 1 + Math.floor(Math.random() * 6); b = 1 + Math.floor(Math.random() * 6); } // ties are re-rolled
-      setRolls([a, b]);
-      setFace([a - 1, b - 1]);
+      let r: number[];
+      do r = names.map(() => 1 + Math.floor(Math.random() * 6)); // a tie for the highest roll is re-rolled
+      while (r.filter((x) => x === Math.max(...r)).length > 1);
+      setRolls(r);
+      setFace(r.map((x) => x - 1));
       setSpinning(false);
     }, 1100);
     return () => { clearInterval(spin); clearTimeout(stop); };
-  }, [chooser]);
-  const winner: PlayerId | null = chooser ?? (rolls ? (rolls[0] > rolls[1] ? 0 : 1) : null);
-  // the bot always chooses to go first
+  }, [chooser, names]);
+  const winner: PlayerId | null = chooser ?? (rolls ? (rolls.indexOf(Math.max(...rolls)) as PlayerId) : null);
+  // a bot always chooses to go first
   useEffect(() => {
-    if (winner !== 1) return;
-    const t = setTimeout(() => onDone(1), 1300);
+    if (winner === null || winner === 0) return;
+    const t = setTimeout(() => onDone(winner), 1300);
     return () => clearTimeout(t);
   }, [winner, onDone]);
   return (
@@ -133,20 +134,19 @@ export function DiceRoll({ names, chooser, onDone }: { names: [string, string]; 
         <h2 style={{ marginBottom: '.4rem' }}>{chooser === undefined ? 'Roll for first turn' : 'Next game'}</h2>
         {chooser === undefined && (
           <div className="dice-row">
-            <div><div className={`die ${spinning ? 'spin' : ''}`}>{FACES[face[0]]}</div><span className="small">{names[0]}</span></div>
-            <div><div className={`die ${spinning ? 'spin' : ''}`}>{FACES[face[1]]}</div><span className="small">{names[1]}</span></div>
+            {names.map((nm, i) => <div key={i}><div className={`die ${spinning ? 'spin' : ''}`}>{FACES[face[i] ?? 0]}</div><span className="small">{nm}</span></div>)}
           </div>
         )}
         {winner === 0 && (
           <>
-            <p>{chooser === undefined ? 'You rolled higher!' : 'You lost the last game, so you choose.'} Go first or second?</p>
+            <p>{chooser === undefined ? 'You rolled highest!' : 'You lost the last game, so you choose.'} Go first or second?</p>
             <div className="row" style={{ justifyContent: 'center' }}>
               <button className="primary" onClick={() => onDone(0)}>Go first</button>
               <button onClick={() => onDone(1)}>Go second</button>
             </div>
           </>
         )}
-        {winner === 1 && <p>{names[1]} {chooser === undefined ? 'rolled higher' : 'lost the last game'} and chooses to go first.</p>}
+        {winner !== null && winner !== 0 && <p>{names[winner]} {chooser === undefined ? 'rolled highest' : 'lost the last game'} and chooses to go first.</p>}
       </div>
     </div>
   );

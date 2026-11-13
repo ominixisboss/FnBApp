@@ -24,6 +24,16 @@ export interface HeroApi {
   askReload(p: PlayerState): void;
   /** put an effect on the player's list of "next ..." effects */
   clash(p: PlayerState): PlayerState | null;
+  /** ask `chooser` a yes/no question that `owner`'s hero ability answers in onChoice */
+  ask(chooser: PlayerState, owner: PlayerState, key: string, prompt: string, botYes: boolean, data?: number[], cards?: string[]): void;
+  /** equip an equipment card (replacing what is in its slot) */
+  equip(p: PlayerState, cardId: string): void;
+  /** the opponents this player may target (Ultimate Pit Fight: only the neighbours) */
+  targets(p: PlayerState): PlayerState[];
+  /** pay N resources (pitching from hand as needed); false if they can't */
+  pay(p: PlayerState, amount: number): boolean;
+  /** banish an equipment this player controls */
+  removeEquipment(p: PlayerState, uid: number): CardInst | null;
 }
 
 export interface HeroCtx {
@@ -98,6 +108,22 @@ export interface HeroAbility {
   halveStats?: boolean;
   pitchToBanished?: boolean;
   activations?: HeroActivation[];
+  /** the answer to a question this ability asked with api.ask */
+  onChoice?(ctx: HeroCtx, key: string, yes: boolean, data?: number[]): void;
+  /** at the start of each opposing hero's turn (Squizzy) */
+  opponentStartOfTurn?(ctx: HeroCtx, opp: PlayerState): void;
+  /** whenever this player protects another hero (defends an attack that targets them) */
+  onProtect?(ctx: HeroCtx): void;
+  /** Reya: every card she owns with defense, and equipment with 1+ defense, has protect */
+  protectAll?: boolean;
+  /** an attack targeting another hero was declared (Taipanis) */
+  onOtherAttack?(ctx: HeroCtx, link: ChainLink): void;
+  /** another hero destroyed a card they don't control (Theryon) */
+  onOtherDestroys?(ctx: HeroCtx, by: PlayerState): void;
+  /** equipment you control is banished instead of going to the graveyard (Frankie) */
+  banishOwnEquipment?: boolean;
+  /** you can't equip weapons (Bolfar) */
+  noWeapons?: boolean;
 }
 
 const cardOf = (i: CardInst) => card(i.cardId);
@@ -1170,3 +1196,250 @@ export function heroAutomation(hero: Card): { level: 'full' | 'partial' | 'none'
   if (!a) return { level: 'none', summary: 'Hero ability not automated yet. Use the Manual tools.' };
   return { level: a.partial ? 'partial' : 'full', summary: a.summary };
 }
+
+// ---------------------------------------------------------------- multiplayer, inventory and joke heroes
+
+const isCrush = (c: Card) => /\bcrush\b/i.test(c.text);
+const slotOf = (c: Card) => ['Head', 'Chest', 'Arms', 'Legs', 'Off-Hand'].find((t) => c.types.includes(t));
+const lowestLife = (list: PlayerState[]) => [...list].sort((a, b) => a.life - b.life)[0];
+
+HERO_ABILITIES.push(
+  {
+    id: 'bolfar',
+    summary: 'Bolfar can’t equip weapons. Action {r}{r}{r}: your next crush attack this turn also hits another hero you can attack, for the same damage (they don’t get to defend it separately). Go again.',
+    partial: true,
+    noWeapons: true,
+    match: (t) => t.includes('The next attack action card with crush you play this turn may attack an additional hero'),
+    onLinkResolve: ({ p, api }, l) => {
+      if (l.attacker !== p.id || !flag(p, 'bolfarExtra') || !isCrush(cardOf(l.inst))) return;
+      p.turn.flags.bolfarExtra = 0;
+      const extra = api.targets(p).filter((q) => q.id !== (l.defender ?? -1));
+      if (!l.hit || !l.damage || !extra.length) return;
+      const q = lowestLife(extra);
+      api.log(p, `${cardOf(l.inst).name} also attacks ${q.name} (Bolfar).`);
+      api.dealDamage(q, l.damage, false, cardOf(l.inst).name);
+    },
+    activations: [{
+      label: 'Next crush attack hits an additional hero', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 3,
+      canUse: ({ p }) => p.hand.some((h) => isCrush(cardOf(h))),
+      resolve: ({ p, api }) => { setFlag(p, 'bolfarExtra'); api.log(p, 'Bolfar: the next crush attack this turn may attack an additional hero.'); },
+      botValue: ({ s }) => (s.players.length > 2 ? 1 : 0),
+    }],
+  },
+  {
+    id: 'brevant',
+    summary: 'Any number of Chivalry in the deck. Whenever you protect another hero (Ultimate Pit Fight), create a Might token.',
+    match: (t) => t.includes('You may have any number of Chivalry in your deck'),
+    onProtect: ({ p, api }) => api.createToken(p, 'Might', 1),
+  },
+  {
+    id: 'kox',
+    summary: 'Action, destroy a Gold: go again. There is no event deck in this simulator, so looking at it does nothing.',
+    match: (t) => t.includes('Look at the top 3 cards of the event deck'),
+    activations: [{
+      label: 'Destroy a Gold: look at the event deck', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 0,
+      canUse: ({ p }) => goldCount(p) > 0,
+      resolve: ({ p, api }) => { api.destroyNamed(p, 'Gold'); api.log(p, 'Fightmaster Kox looks at the event deck (none in this game).'); },
+      botValue: () => -1,
+    }],
+  },
+  {
+    id: 'frankie',
+    summary: 'Your equipment is banished instead of going to the graveyard. Action {r}{r}{r}: equip the best destroyed equipment from another hero’s graveyard (it replaces yours in that slot). Go again.',
+    banishOwnEquipment: true,
+    match: (t) => t.includes('Whenever an equipment you control would be put into a graveyard, instead banish it'),
+    activations: [{
+      label: 'Equip an equipment from a graveyard', instant: false, oncePerTurn: false, goAgain: true,
+      cost: () => 3,
+      canUse: ({ s, p }) => !!graveEquipment(s, p),
+      resolve: ({ s, p, api }) => {
+        const g = graveEquipment(s, p);
+        if (!g) return;
+        g.owner.equipment = g.owner.equipment.filter((e) => e !== g.e);
+        api.equip(p, g.e.inst.cardId);
+      },
+      botValue: ({ s, p }) => { const g = graveEquipment(s, p); return g ? (card(g.e.inst.cardId).defense as number ?? 0) - 1 : 0; },
+    }],
+  },
+  {
+    id: 'reya',
+    summary: 'Your blocks and equipment with 1+{d} have protect: in Ultimate Pit Fight you may defend attacks on other heroes. Whenever you protect another hero, create a Gold token.',
+    protectAll: true,
+    match: (t) => t.includes('Blocks you own and equipment you control with 1 or greater {d} get protect'),
+    onProtect: ({ p, api }) => api.createToken(p, 'Gold', 1),
+  },
+  {
+    id: 'ruudi',
+    summary: 'Once per turn Action {r}: reveal the top card. No card in this simulator is graded Gem Mint 10, so each opponent draws a card. Go again.',
+    match: (t) => t.includes('If it\'s graded Gem Mint 10, put it into your hand'),
+    activations: [{
+      label: 'Reveal the top card (Gem Mint 10?)', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 1,
+      canUse: ({ p }) => p.deck.length > 0,
+      resolve: ({ s, p, api }) => {
+        api.log(p, `Ruu'di reveals ${cardOf(p.deck[0]).name}: not graded Gem Mint 10.`);
+        for (const q of s.players) if (q.id !== p.id && !q.eliminated) api.draw(q, 1);
+      },
+      botValue: () => -1,
+    }],
+  },
+  {
+    id: 'squizzy',
+    summary: 'At the start of each opposing hero’s turn, they may create a Cracked Bauble in their hand. If they do, you create a Gold token.',
+    match: (t) => t.includes('they may create a Cracked Bauble in their hand'),
+    opponentStartOfTurn: ({ p, api }, opp) => api.ask(opp, p, 'squizzy', `Squizzy & Floof: create a Cracked Bauble in your hand? (${p.name} gets a Gold token.)`, true, [opp.id], [baubleId()]),
+    onChoice: ({ s, p, api }, key, yes, data) => {
+      if (key !== 'squizzy' || !yes) return;
+      const opp = s.players[data![0]];
+      opp.hand.push(api.mk(baubleId(), opp));
+      api.log(opp, `${opp.name} creates a Cracked Bauble in their hand.`);
+      api.createToken(p, 'Gold', 1);
+    },
+  },
+  {
+    id: 'taipanis',
+    summary: 'The first time each turn another hero is attacked for lethal damage, you may discard a red card to send the attack at another hero the attacker can attack (Ultimate Pit Fight).',
+    match: (t) => t.includes('becomes the target of a source that would deal lethal damage'),
+    onOtherAttack: ({ s, p, api }, l) => {
+      if (flag(p, 'taipanis')) return;
+      const def = s.players[l.defender ?? -1];
+      const red = p.hand.find((h) => cardOf(h).pitch === 1);
+      if (!def || !red || l.basePower + l.powerMod < def.life) return;
+      const others = s.players.filter((q) => !q.eliminated && q.id !== l.attacker && q.id !== def.id && api.targets(s.players[l.attacker]).includes(q));
+      if (!others.length) return;
+      const to = others.find((q) => q.id !== p.id) ?? others[0];
+      api.ask(p, p, 'taipanis', `Taipanis: discard ${cardOf(red).name} to send ${cardOf(l.inst).name} at ${to.name} instead of ${def.name}?`, to.id !== p.id, [s.chain.indexOf(l), to.id, red.uid], [red.cardId]);
+    },
+    onChoice: ({ s, p, api }, key, yes, data) => {
+      if (key !== 'taipanis' || !yes) return;
+      const [li, to, uid] = data!;
+      const l = s.chain[li];
+      const red = p.hand.find((h) => h.uid === uid);
+      if (!l || l.damage !== null || !red) return;
+      setFlag(p, 'taipanis');
+      api.discard(p, red);
+      l.defender = to as ChainLink['defender'];
+      if (s.phase === 'defend') s.priority = to as GameState['priority'];
+      api.log(p, `Taipanis sends ${cardOf(l.inst).name} at ${s.players[to].name}.`);
+    },
+  },
+  {
+    id: 'taylor',
+    summary: 'At the start of your turn, you may banish an equipment you control to equip one of the same type from your inventory (the Classic Constructed pool you didn’t pick, or extra equipment in the deck list).',
+    match: (t) => t.includes('If you do, equip a card of the same subtype from your inventory'),
+    startOfTurn: ({ p, api }) => {
+      const swap = taylorSwap(p);
+      if (!swap) return;
+      api.ask(p, p, 'taylor', `Taylor: banish ${cardOf(swap.e.inst).name} and equip ${card(swap.cid).name}?`, swap.gain > 0, [swap.e.inst.uid, swap.idx], [swap.e.inst.cardId, swap.cid]);
+    },
+    onChoice: ({ p, api }, key, yes, data) => {
+      if (key !== 'taylor' || !yes) return;
+      const [uid, idx] = data!;
+      const cid = p.inventory?.[idx];
+      const old = api.removeEquipment(p, uid);
+      if (!cid || !old) return;
+      p.inventory!.splice(idx, 1);
+      p.banished.push(old);
+      api.log(p, `Taylor banishes ${cardOf(old).name}.`);
+      api.equip(p, cid);
+    },
+  },
+  {
+    id: 'librarian',
+    summary: 'Action, reveal a Tome from your inventory: put it into your hand; another hero (the one with the least life) gets +1 intellect until the end of their next turn. Go again.',
+    match: (t) => t.includes('reveal a card with Tome in its name from your inventory'),
+    activations: [{
+      label: 'Fetch a Tome from your inventory', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 0,
+      canUse: ({ p }) => (p.inventory ?? []).some((id) => card(id).name.includes('Tome')),
+      resolve: ({ s, p, api }) => {
+        const i = (p.inventory ?? []).findIndex((id) => card(id).name.includes('Tome'));
+        if (i < 0) return;
+        const [cid] = p.inventory!.splice(i, 1);
+        p.hand.push(api.mk(cid, p));
+        const q = lowestLife(s.players.filter((x) => x.id !== p.id && !x.eliminated));
+        api.log(p, `The Librarian puts ${card(cid).name} into their hand.`);
+        if (q) { q.intellect += 1; q.bonusIntellect = (q.bonusIntellect ?? 0) + 1; api.log(q, `${q.name} gets +1 intellect until the end of their next turn.`); }
+      },
+      botValue: () => 2,
+    }],
+  },
+  {
+    id: 'theryon',
+    summary: 'The first time each turn another hero destroys a card they don’t control (an ally killed by their damage), you may pay {r}{r}: they destroy a non-hero permanent they control.',
+    partial: true,
+    match: (t) => t.includes('another hero destroys a card they don\'t control'),
+    onOtherDestroys: ({ p, api }, by) => {
+      if (flag(p, 'theryon')) return;
+      setFlag(p, 'theryon');
+      api.ask(p, p, 'theryon', `Theryon: pay 2 to make ${by.name} destroy a permanent they control?`, by.permanents.length > 0 || by.equipment.some((e) => !e.destroyed), [by.id]);
+    },
+    onChoice: ({ s, p, api }, key, yes, data) => {
+      if (key !== 'theryon' || !yes || !api.pay(p, 2)) return;
+      const by = s.players[data![0]];
+      const pm = by.permanents[0];
+      if (pm) { api.destroyNamed(by, cardOf(pm.inst).name); return; }
+      const e = by.equipment.find((x) => !x.destroyed);
+      if (e) { e.destroyed = true; api.log(by, `${cardOf(e.inst).name} is destroyed.`); }
+    },
+  },
+  {
+    id: 'yoji',
+    summary: 'Once per turn Instant {r}{r}{r}: the next time another hero (the one being attacked, else the one you face) would be dealt damage this turn, Yoji takes it instead and 1 of it is prevented.',
+    match: (t) => t.includes('instead that damage is dealt to Yoji'),
+    activations: [{
+      label: 'Take the next damage for another hero', instant: true, oncePerTurn: true,
+      cost: () => 3,
+      canUse: ({ s, p }) => s.players.some((q) => q.id !== p.id && !q.eliminated),
+      resolve: ({ s, p, opp, api }) => {
+        const l = s.chain[s.chain.length - 1];
+        const q = l && l.damage === null && l.defender !== undefined && l.defender !== p.id ? s.players[l.defender] : opp;
+        q.redirectTo = p.id;
+        api.log(p, `Yoji will take the next damage dealt to ${q.name} this turn.`);
+      },
+      botValue: () => -1,
+    }],
+  },
+  {
+    id: 'yorick',
+    summary: 'At the start of the game, every hero’s deck is shuffled together and dealt back out evenly. (The shared graveyard isn’t simulated: each hero keeps their own.)',
+    partial: true,
+    match: (t) => t.includes('all heroes shuffle their starting decks together'),
+    setup: ({ s, api }) => {
+      const all = api.shuffle(s.players.flatMap((q) => q.deck));
+      const n = s.players.length;
+      s.players.forEach((q, i) => { q.deck = all.filter((_, j) => j % n === i); });
+      api.log(null, 'Yorick: every hero’s deck is shuffled together and shared out.');
+    },
+  },
+);
+
+function graveEquipment(s: GameState, p: PlayerState) {
+  let best: { owner: PlayerState; e: PlayerState['equipment'][number] } | null = null;
+  for (const owner of s.players) {
+    if (owner.id === p.id || getHeroAbility(cardOf(owner.hero))?.banishOwnEquipment) continue;
+    for (const e of owner.equipment) {
+      if (!e.destroyed) continue;
+      if (!best || (card(e.inst.cardId).defense as number ?? 0) > (card(best.e.inst.cardId).defense as number ?? 0)) best = { owner, e };
+    }
+  }
+  return best;
+}
+
+function taylorSwap(p: PlayerState) {
+  let best: { e: PlayerState['equipment'][number]; cid: string; idx: number; gain: number } | null = null;
+  (p.inventory ?? []).forEach((cid, idx) => {
+    const c = card(cid);
+    const slot = slotOf(c);
+    if (!slot || c.types.includes('Weapon')) return;
+    const e = p.equipment.find((x) => !x.destroyed && cardOf(x.inst).types.includes(slot));
+    if (!e) return;
+    const gain = (typeof c.defense === 'number' ? c.defense : 0) - ((cardOf(e.inst).defense as number ?? 0) + e.defenseMod);
+    if (!best || gain > best.gain) best = { e, cid, idx, gain };
+  });
+  return best as { e: PlayerState['equipment'][number]; cid: string; idx: number; gain: number } | null;
+}
+
+const baubleId = () => findCard('Cracked Bauble')!.id;

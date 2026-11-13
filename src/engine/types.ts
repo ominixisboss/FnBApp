@@ -80,6 +80,12 @@ export interface PlayerState {
   focus?: PlayerId;
   /** Shiyana: the hero she is copying until the start of her next turn */
   copyOf?: string;
+  /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */
+  inventory?: string[];
+  /** Yoji: the next damage to this hero this turn is dealt to that player instead (1 of it prevented) */
+  redirectTo?: PlayerId;
+  /** extra intellect until the end of this player's next turn (The Librarian) */
+  bonusIntellect?: number;
   weapons: WeaponState[];
   equipment: EquipState[];
   permanents: PermanentState[]; // auras, items, allies, tokens
@@ -192,7 +198,9 @@ export interface PendingChoice {
     | { type: 'wager'; tokens: string[]; winnerDraw?: number; link: number }
     | { type: 'betsy'; link: number }
     | { type: 'attackTarget'; link: number }
-    | { type: 'damageTarget'; amount: number; arcane: boolean; source: string };
+    | { type: 'damageTarget'; amount: number; arcane: boolean; source: string }
+    /** a hero ability's "you may": answered by `owner`'s ability (onChoice); bots answer `botYes` */
+    | { type: 'hero'; owner: PlayerId; key: string; data?: number[]; botYes: boolean };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
