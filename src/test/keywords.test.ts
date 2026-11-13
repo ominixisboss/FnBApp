@@ -137,3 +137,40 @@ describe('choices, wagers and the crowd', () => {
     expect(getScript(named('Bet Big')).onAttack[0]).toEqual({ kind: 'wager', tokens: ['Gold', 'Might', 'Vigor'], optional: true });
   });
 });
+
+describe('more keywords (rules 8.3)', () => {
+  it('parses heave, quell, suspense, fragment, rune gate, watery grave, scrap, beat chest, guardwell, mirage, evo', () => {
+    expect(getScript(named('Overswing')).heave).toBe(2);
+    expect(getScript(named('mBrio Base Walkers')).quell).toBe(1);
+    expect(getScript(named('Act of Glory')).suspense).toBe(true);
+    expect(getScript(named('Clear Conscience')).fragment).toBe(true);
+    expect(getScript(named('Deathly Delight')).runeGate).toBe(true);
+    expect(getScript(named('Hydraulic Press')).optional?.cost).toEqual({ kind: 'banishGraveMatch', types: ['Item', 'Equipment'] });
+    expect(getScript(named('Bare Swing')).optional?.cost).toEqual({ kind: 'discard', power: 6 });
+    expect(getScript(named('Balance of Justice')).guardwell).toBe(true);
+    expect(getScript(named('Flicker Trick')).mirage).toBe(true);
+    expect(getScript(named('Evo Battery Pack')).evoSlot).toBe('Chest');
+    expect(getScript(named('Falcon Wing')).conditional[0].cond).toEqual({ kind: 'hasAim' });
+  });
+
+  it('fragment: each defending card with 2+ defense takes 2 power off the attack', () => {
+    let s = setup([id('Clear Conscience', 1)], [id('Wounding Blow', 1), id('Wounding Blow', 1)]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    const base = linkPower(currentLink(s)!);
+    s = applyAction(s, { type: 'defend', uids: s.players[1].hand.map((h) => h.uid) });
+    expect(linkPower(currentLink(s)!)).toBe(base - 4);
+  });
+
+  it('heave: pay at the end of your turn to put the card face-up into your arsenal and get Seismic Surge tokens', async () => {
+    const { heaveOptions } = await import('../engine/game');
+    let s = setup([id('Overswing', 1), id('Wounding Blow', 3)]);
+    s.players[0].resources = 0;
+    s = applyAction(s, { type: 'pass' }); // end the action phase
+    expect(s.phase).toBe('arsenal');
+    const opt = heaveOptions(s, 0)[0];
+    expect(opt.cost).toBe(2);
+    s = applyAction(s, { type: 'heave', uid: opt.uid, pitch: [s.players[0].hand.find((h) => h.uid !== opt.uid)!.uid] });
+    expect(s.players[0].arsenal.map((a) => getDb().byId.get(a.cardId)!.name)).toEqual(['Overswing']);
+    expect(s.players[0].permanents.filter((pm) => getDb().byId.get(pm.inst.cardId)!.name === 'Seismic Surge').length).toBe(2);
+  });
+});

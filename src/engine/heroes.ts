@@ -62,6 +62,7 @@ export interface HeroAbility {
   onCheer?(ctx: HeroCtx): void;
   onBoo?(ctx: HeroCtx): void;
   onWagerWin?(ctx: HeroCtx, link: ChainLink): void;
+  onSteal?(ctx: HeroCtx, c: Card): void;
   /** Levia: skip blood debt this end phase */
   skipBloodDebt?(ctx: HeroCtx): boolean;
   /** Lyath: halve base power / defense */
@@ -630,9 +631,10 @@ HERO_ABILITIES.push(
   },
   {
     id: 'killjoy',
-    summary: 'The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}.',
-    partial: true, // stealing Gold isn't automated
+    summary: 'Whenever you steal a Gold, the crowd boos you. The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}.',
+    partial: true, // attacking any opposing hero only matters with more than one opponent
     match: (t) => t.includes('The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}'),
+    onSteal: ({ p, api }, c) => { if (c.name === 'Gold') api.crowd(p, false); },
     onBoo: ({ s, p, api }) => {
       if (flag(p, 'kjBoo')) return;
       setFlag(p, 'kjBoo');

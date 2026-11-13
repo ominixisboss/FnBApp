@@ -202,6 +202,8 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
     case 'class': return c.types.includes(f.value);
     case 'anyClass': return f.values.some((v) => c.types.includes(v));
     case 'boosted': return !l.fromWeapon && getScript(c).boost;
+    case 'runeGated': return !l.fromWeapon && !!(l as { runeGated?: boolean }).runeGated;
+    case 'classAttackAction': return !l.fromWeapon && c.types.includes(f.value) && has(c, 'Attack') && has(c, 'Action');
   }
 }
 
@@ -306,7 +308,7 @@ function isStartTrigger(inst: CardInst): boolean {
   const c = cardOf(inst);
   if (START_TOKENS.includes(c.name)) return true;
   const sc = getScript(c);
-  return !!sc.destroyAt || sc.steamUpkeep;
+  return !!sc.destroyAt || sc.steamUpkeep || !!sc.suspense;
 }
 
 function runStartTrigger(s: GameState, p: PlayerState, uid: number) {
@@ -314,8 +316,15 @@ function runStartTrigger(s: GameState, p: PlayerState, uid: number) {
   if (!pm) return;
   const name = cardOf(pm.inst).name;
   const destroy = () => removePermanent(s, p, pm.inst.uid);
+  const scr = getScript(cardOf(pm.inst));
+  if (scr.suspense && !scr.destroyAt) {
+    pm.suspense = Math.max(0, (pm.suspense ?? 2) - 1);
+    log(s, p.id, `${name}: a suspense counter is removed (${pm.suspense} left).`, 'Suspense: enters with 2 suspense counters; remove one at the start of your turn; destroyed when it has none.');
+    if (pm.suspense === 0) destroy();
+    return;
+  }
   // tokens whose printed text says what they do (Might, Vigor, Agility, ...) resolve through that text when destroyed
-  if (getScript(cardOf(pm.inst)).onDestroy.length) { destroy(); return; }
+  if (scr.onDestroy.length) { destroy(); return; }
   if (name === 'Agility') { destroy(); p.effects.push({ kind: 'nextAttackGoAgain', filter: { kind: 'any' }, source: name }); }
   else if (name === 'Might') { destroy(); p.effects.push({ kind: 'nextAttackPower', amount: 1, filter: { kind: 'any' }, source: name }); }
   else if (name === 'Vigor') { destroy(); p.resources += 1; }
@@ -345,7 +354,7 @@ function removePermanent(s: GameState, p: PlayerState, uid: number) {
   if (i < 0) return;
   const [pm] = p.permanents.splice(i, 1);
   const c = cardOf(pm.inst);
-  if (!has(c, 'Token')) p.graveyard.push(pm.inst);
+  if (!has(c, 'Token')) graveFromArena(s.players[pm.inst.owner] ?? p, pm.inst);
   if (has(c, 'Item')) p.turn.itemDestroyed = true;
   log(s, p.id, `${c.name} leaves the arena.`);
   const onDestroy = getScript(c).onDestroy;
@@ -453,6 +462,14 @@ export function crowd(s: GameState, p: PlayerState, cheer: boolean) {
   if (cheer) ab?.onCheer?.(heroCtx(s, p)); else ab?.onBoo?.(heroCtx(s, p));
 }
 
+const evoCount = (p: PlayerState) => p.equipment.filter((e) => !e.destroyed && cardOf(e.inst).types.includes('Evo')).length;
+
+/** Watery grave: a card put into the graveyard from the arena is turned face-down. */
+function graveFromArena(p: PlayerState, inst: CardInst) {
+  if (getScript(cardOf(inst)).wateryGrave) inst.faceDown = true;
+  toGraveyard(p, inst);
+}
+
 /** Put a card into its owner's graveyard; ephemeral cards cease to exist instead. */
 function toGraveyard(p: PlayerState, inst: CardInst) {
   if (getScript(cardOf(inst)).ephemeral) return;
@@ -520,6 +537,12 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'wageredThisLink': { const l = link ?? currentLink(s); return !!l && (l.wagers?.length ?? 0) > 0; }
     case 'cheered': return (p.turn.cheers ?? 0) > 0;
     case 'booed': return (p.turn.boos ?? 0) > 0;
+    case 'hasAim': return !!(link ?? currentLink(s))?.inst.aim;
+    case 'scrapped': { const l = link ?? currentLink(s); return !!l && !!p.turn.flags[`scrap${l.inst.uid}`]; }
+    case 'beatChest': return !!p.turn.beatChest;
+    case 'noChest': return !p.equipment.some((e) => !e.destroyed && cardOf(e.inst).types.includes('Chest'));
+    case 'evoEquipped': return evoCount(p) >= cond.n;
+    case 'all': return cond.conds.every((x) => evalCondition(s, p, x, link));
   }
 }
 
@@ -548,7 +571,7 @@ function applyAdditionalPayoff(s: GameState, p: PlayerState, c: Card, inst: Card
 export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: number): boolean {
   const others = p.hand.filter((h) => h.uid !== playingUid);
   switch (oc.cost.kind) {
-    case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+    case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (!oc.cost.power || powerOf(cardOf(h)) >= oc.cost.power));
     case 'pay': return true;
     case 'banishGrave': return p.graveyard.length >= oc.cost.n;
     case 'destroyTop': return p.deck.length > 0;
@@ -565,6 +588,7 @@ export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: nu
 
 function graveMatches(c: Card, cost: OptionalCost['cost']): boolean {
   if (cost.kind !== 'banishGraveMatch') return false;
+  if (cost.types) return cost.types.some((t) => c.types.includes(t));
   return cost.name ? c.name.toLowerCase() === cost.name.toLowerCase() : !!cost.type && c.types.includes(cost.type) && (cost.type !== 'Attack' || c.types.includes('Action'));
 }
 
@@ -608,7 +632,8 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
       return cardOf(inst);
     }
     case 'discard': {
-      const inst = pick((c) => !cost.pitch || pitchOf(c) === cost.pitch);
+      const inst = pick((c) => (!cost.pitch || pitchOf(c) === cost.pitch) && (!cost.power || powerOf(c) >= cost.power));
+      if (cost.power) { p.turn.beatChest = true; log(s, p.id, `${p.name} beats their chest!`, 'Beat Chest: as an additional cost to play this, you may discard a card with 6 or more power.'); }
       p.graveyard.push(inst);
       noteDiscard(s, p, inst);
       log(s, p.id, `${p.name} discards ${cardOf(inst).name}.`);
@@ -676,7 +701,8 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
       if (!g) throw new Error('No such card in your graveyard.');
       removeFrom(p.graveyard, g.uid);
       p.banished.push(g);
-      log(s, p.id, `${p.name} banishes ${cardOf(g).name} from the graveyard.`);
+      if (cost.types) p.turn.flags[`scrap${playingUid}`] = 1;
+      log(s, p.id, cost.types ? `${p.name} scraps ${cardOf(g).name}.` : `${p.name} banishes ${cardOf(g).name} from the graveyard.`, cost.types ? 'Scrap: as an additional cost to play this, you may banish an item or equipment from your graveyard.' : undefined);
       return cardOf(g);
     }
     case 'decompose': {
@@ -735,6 +761,7 @@ export function effectiveCost(s: GameState, p: PlayerState, c: Card): number {
   if (sc.costLessPer === 'draconicLink') less = s.chain.filter((l) => l.attacker === p.id && cardOf(l.inst).types.includes('Draconic')).length;
   else if (sc.costLessPer) less = p.permanents.filter((pm) => cardOf(pm.inst).name === sc.costLessPer).length;
   if (sc.costLessIf && p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === sc.costLessIf!.toLowerCase())) less += 1;
+  for (const e of p.effects) if (e.kind === 'costLess' && matchesFilter(e.filter, { inst: { uid: -1, cardId: c.id, owner: p.id }, fromWeapon: false })) less += e.amount;
   return Math.max(0, costOf(c) - less) + frostbite(p);
 }
 
@@ -788,6 +815,13 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const out: PlayOption[] = [];
   if (s.priority !== pid || !['action', 'reaction'].includes(s.phase) || s.pendingTriggers || s.pendingChoices?.length) return out;
   const fromBanished = p.banished.filter((b) => { const fb = getScript(cardOf(b)).fromBanished; return !!fb && (!fb.cond || evalCondition(s, p, fb.cond)); });
+  // Rune Gate: with Runechants at least equal to its cost, play it from your banished zone without paying its cost
+  const runechants = p.permanents.filter((pm) => cardOf(pm.inst).name === 'Runechant').length;
+  for (const b of p.banished) {
+    const c = cardOf(b);
+    if (!getScript(c).runeGate || fromBanished.includes(b) || runechants < costOf(c) || !timingOk(s, pid, c)) continue;
+    out.push({ uid: b.uid, kind: 'card', index: 0, cost: frostbite(p), label: `${c.name} (rune gate)` });
+  }
   for (const inst of [...p.hand, ...p.arsenal, ...fromBanished]) {
     const c = cardOf(inst);
     if (!timingOk(s, pid, c)) continue;
@@ -897,6 +931,7 @@ export function applyAction(prev: GameState, action: Action): GameState {
     case 'pass': doPass(s, action.pitchOrder); break;
     case 'orderTriggers': doOrderTriggers(s, action.order); break;
     case 'choose': doChoose(s, action); break;
+    case 'heave': doHeave(s, action.uid, action.pitch); break;
     case 'defend': doDefend(s, action.uids, action.boosts ?? [], action.pitch ?? []); break;
     case 'arsenal': if (action.pitchOrder) s.players[s.turnPlayer].turn.pitchOrder = action.pitchOrder; doArsenal(s, action.uid); break;
     case 'concede': {
@@ -938,6 +973,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   if (!opt) throw new Error('That card can’t be played now');
   const fromArsenal = p.arsenal.some((a) => a.uid === uid);
   const fromBanished = !fromArsenal && p.banished.some((b) => b.uid === uid);
+  if (fromBanished && getScript(cardOf(p.banished.find((b) => b.uid === uid)!)).runeGate) p.turn.flags[`runeGated${uid}`] = 1;
   const c = cardOf((fromArsenal ? p.arsenal : fromBanished ? p.banished : p.hand).find((h) => h.uid === uid)!);
   const sc = getScript(c);
   // optional cost ("you may ... If you do, ..."): validate before paying anything
@@ -968,6 +1004,9 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
     if (d) { p.banished.push(d); log(s, pid, `${p.name} banishes ${cardOf(d).name} at random.`); }
   }
   const optUsed = oc ? payOptional(s, p, oc, optional!, uid) : null;
+  // a cost reduction for "your next ... card" is used up by this card
+  const cl = p.effects.findIndex((e) => e.kind === 'costLess' && matchesFilter(e.filter, { inst, fromWeapon: false }));
+  if (cl >= 0) p.effects.splice(cl, 1);
   const isAction = has(c, 'Action') && !has(c, 'Instant');
   if (s.phase === 'action' && isAction) p.actionPoints -= 1;
   log(s, pid, `${p.name} plays ${c.name}${fromArsenal ? ' from arsenal' : fromBanished ? ' from the banished zone' : ''}.`);
@@ -1035,8 +1074,18 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
   if (oc) optionalPayoff(s, p, oc, optUsed, inst);
   if (fromArsenal) for (const cnd of sc.conditional) if (cnd.when === 'fromArsenal') resolveEffects(s, p, cnd.effects, inst);
   if (p.turn.flags[`banishedPlay${inst.uid}`]) for (const cnd of sc.conditional) if (cnd.when === 'fromBanished') resolveEffects(s, p, cnd.effects, inst);
-  if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
-    const pm: PermanentState = { inst, ward: sc.ward, steam: sc.steam || undefined };
+  if (sc.evoSlot) {
+    // Evo: transform the base equipment in that slot into this
+    const base = p.equipment.find((e) => !e.destroyed && cardOf(e.inst).types.includes('Base') && cardOf(e.inst).types.includes(sc.evoSlot!));
+    if (base) {
+      log(s, pid, `${cardOf(base.inst).name} transforms into ${c.name}.`, 'Evo: if you have a base equipment in that slot, it transforms into the Evo, which is equipped.');
+      base.inst = inst; base.defenseMod = 0; base.usedThisTurn = false;
+    } else {
+      log(s, pid, `${c.name} has no base ${sc.evoSlot.toLowerCase()} to transform.`);
+      toGraveyard(p, inst);
+    }
+  } else if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
+    const pm: PermanentState = { inst, ward: sc.ward, steam: sc.steam || undefined, suspense: sc.suspense ? 2 : undefined };
     p.permanents.push(pm);
     if (sc.crank && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
       pm.steam = (pm.steam ?? 0) - 1;
@@ -1180,6 +1229,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     noEquipDefense: sc.noEquipDefense || undefined,
     unpreventable: sc.unpreventable || undefined,
   };
+  if (p.turn.flags[`runeGated${inst.uid}`]) (link as ChainLink & { runeGated?: boolean }).runeGated = true;
   s.chain.push(link);
   s.chainOpen = true;
   p.turn.attacks += 1;
@@ -1262,6 +1312,25 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
     if (!e) throw new Error('Invalid defending card');
     l.defenders.push({ kind: 'equipment', inst: e.inst, defense: defenseFor(d, cardOf(e.inst), equipDefense(e)) });
     names.push(cardOf(e.inst).name);
+  }
+  // Fragment: each defending card with 2 or more defense makes this attack lose 2 power
+  const atk = getScript(cardOf(l.inst));
+  if (atk.fragment) {
+    for (const x of l.defenders) {
+      if ((defenseOf(cardOf(x.inst)) ?? 0) < 2) continue;
+      l.powerMod -= 2;
+      log(s, l.attacker, `${cardOf(l.inst).name} fragments: -2 power (${linkPower(l)}).`, 'Fragment: whenever a card with 2 or more defense defends this, this gets -2 power.');
+      if (atk.onFragment.length) resolveEffects(s, s.players[l.attacker], atk.onFragment, l.inst);
+    }
+  }
+  // Mirage: a mirage defending a non-Illusionist attack with 6 or more power is destroyed
+  if (!cardOf(l.inst).types.includes('Illusionist') && linkPower(l) >= 6) {
+    for (const x of [...l.defenders]) {
+      if (!getScript(cardOf(x.inst)).mirage) continue;
+      l.defenders = l.defenders.filter((y) => y !== x);
+      graveFromArena(d, x.inst);
+      log(s, d.id, `${cardOf(x.inst).name} (mirage) is destroyed by the ${linkPower(l)}-power attack.`, 'Mirage: when this is defending a non-Illusionist attack with 6 or more power, destroy it.');
+    }
   }
   // lasting defense bonuses
   const grants = d.permanents.map((pm) => getScript(cardOf(pm.inst)).grantDefend).filter((g): g is NonNullable<typeof g> => !!g);
@@ -1407,11 +1476,35 @@ function closeChain(s: GameState) {
     const owner = s.players[l.attacker];
     if (l.destination === 'soul') { (owner.soul ??= []).push(l.inst); log(s, owner.id, `${cardOf(l.inst).name} is put into ${owner.name}'s soul.`); }
     else if (l.destination === 'deckBottom') owner.deck.push(l.inst);
-    else toGraveyard(owner, l.inst);
+    else graveFromArena(owner, l.inst);
+  }
+  // Guardwell: equipment that defended loses all its defense when the combat chain closes
+  for (const l of s.chain) for (const d of l.defenders) {
+    if (d.kind !== 'equipment' || !getScript(cardOf(d.inst)).guardwell) continue;
+    const e = s.players[d.inst.owner].equipment.find((x) => x.inst.uid === d.inst.uid);
+    if (e && !e.destroyed) { e.defenseMod -= equipDefense(e); log(s, d.inst.owner, `${cardOf(e.inst).name} (guardwell) loses its defense.`); }
   }
   if (s.chain.length) log(s, null, 'The combat chain closes.', RULES.chainClose);
   s.chain = [];
   s.chainOpen = false;
+}
+
+/** Heave N: at the end of your turn, pay N to put this from your hand face-up into your arsenal and create N Seismic Surge tokens. */
+export function heaveOptions(s: GameState, pid: PlayerId): { uid: number; cost: number }[] {
+  const p = s.players[pid];
+  if (s.phase !== 'arsenal' || s.turnPlayer !== pid || p.arsenal.length) return [];
+  return p.hand.filter((h) => { const n = getScript(cardOf(h)).heave; return !!n && availableResources(p, [h.uid]) >= n; }).map((h) => ({ uid: h.uid, cost: getScript(cardOf(h)).heave! }));
+}
+function doHeave(s: GameState, uid: number, pitch: number[]) {
+  const opt = heaveOptions(s, s.turnPlayer).find((o) => o.uid === uid);
+  if (!opt) throw new Error('You can’t heave that now.');
+  const p = s.players[s.turnPlayer];
+  const inst = removeFrom(p.hand, uid)!;
+  pay(s, p, opt.cost, pitch.length ? pitch : autoPitch(p, Math.max(0, opt.cost - p.resources)) ?? []);
+  p.arsenal.push(inst);
+  log(s, p.id, `${p.name} heaves ${cardOf(inst).name} into the arsenal.`, 'Heave N: at the beginning of your end phase, you may pay N to put this face-up into your arsenal. If you do, create N Seismic Surge tokens.');
+  createToken(s, p, 'Seismic Surge', opt.cost);
+  endTurn(s);
 }
 
 function doArsenal(s: GameState, uid: number | null) {
@@ -1429,6 +1522,8 @@ function doArsenal(s: GameState, uid: number | null) {
 
 function endTurn(s: GameState) {
   const p = s.players[s.turnPlayer];
+  // quelled equipment is destroyed at the beginning of the end phase; stolen cards go home
+  for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
   const debt = ability(p)?.skipBloodDebt?.(heroCtx(s, p)) ? 0 : p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
   if (debt > 0) { p.life -= debt; log(s, p.id, `Blood debt: ${p.name} loses ${debt} life (${p.life}).`); checkWin(s); if (s.phase === 'gameOver') return; }
@@ -1510,6 +1605,16 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
     }
   }
   p.effects = p.effects.filter((e) => !(e.kind === 'preventNext' && e.amount <= 0));
+  // Quell N: pay N floating resources to prevent N (the equipment is destroyed at the end phase)
+  for (const e of p.equipment) {
+    const q = getScript(cardOf(e.inst)).quell;
+    if (!q || e.destroyed || dmg <= 0 || p.resources < q) continue;
+    p.resources -= q;
+    const prevented = Math.min(q, dmg);
+    dmg -= prevented;
+    e.quelled = true;
+    log(s, target, `${p.name} pays ${q} for ${cardOf(e.inst).name} (quell): ${prevented} damage prevented.`, 'Quell N: if you would be dealt damage, you may pay N resources to prevent N of it. If you do, destroy this at the beginning of the end phase.');
+  }
   // ward
   for (const pm of [...p.permanents]) {
     if (dmg <= 0) break;
@@ -1660,6 +1765,23 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       }
       case 'ifCond': if (evalCondition(s, p, e.cond)) resolveEffects(s, p, e.effects, src); break;
+      case 'costLess': p.effects.push({ kind: 'costLess', amount: e.amount, filter: e.filter, source: srcName }); log(s, p.id, `Next ${describeFilter(e.filter)} costs ${e.amount} less.`); break;
+      case 'perEvoPower': {
+        const n = evoCount(p);
+        if (l && l.inst.uid === src.uid && n) { l.powerMod += e.amount * n; log(s, p.id, `${srcName} gets +${e.amount * n} power (${n} Evo${n > 1 ? 's' : ''} equipped).`); }
+        break;
+      }
+      case 'stealGold': {
+        const gold = (pl: PlayerState) => pl.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+        if (gold(opp).length > gold(p).length) {
+          const g = gold(opp)[0];
+          opp.permanents = opp.permanents.filter((pm) => pm !== g);
+          p.permanents.push(g);
+          log(s, p.id, `${p.name} steals a Gold token from ${opp.name}.`, 'To steal a card is to gain control of it.');
+          ability(p)?.onSteal?.(heroCtx(s, p), cardOf(g.inst));
+        }
+        break;
+      }
       case 'noDefenseReactions':
         if (l) { l.noDefenseReactions = true; log(s, p.id, `Defense reactions can't be played this chain link.`); }
         break;

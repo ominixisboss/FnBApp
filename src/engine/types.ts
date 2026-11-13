@@ -8,6 +8,10 @@ export interface CardInst {
   uid: number;
   cardId: string;
   owner: PlayerId;
+  /** an arrow with an aim counter */
+  aim?: boolean;
+  /** watery grave: turned face-down in the graveyard */
+  faceDown?: boolean;
 }
 
 export interface EquipState {
@@ -15,6 +19,8 @@ export interface EquipState {
   defenseMod: number; // negative counters (battleworn / temper)
   destroyed: boolean;
   usedThisTurn: boolean;
+  /** quell was used: destroyed at the beginning of the end phase */
+  quelled?: boolean;
 }
 
 export interface WeaponState {
@@ -29,6 +35,10 @@ export interface PermanentState {
   ward: number;
   steam?: number; // Mechanologist steam counters
   counters?: number; // sandbox: generic counters
+  suspense?: number; // suspense counters
+  quelled?: boolean; // quell was used: destroyed at the beginning of the end phase
+  /** stolen: goes back to this player at the end of the action phase */
+  returnTo?: PlayerId;
 }
 
 export type TurnEffect =
@@ -38,7 +48,9 @@ export type TurnEffect =
   | { kind: 'preventNext'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string }
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
-  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string };
+  | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }
+  /** "your next Guardian attack action card this turn costs {r} less" (Seismic Surge) */
+  | { kind: 'costLess'; amount: number; filter: AttackFilter; source: string };
 
 export interface PlayerState {
   id: PlayerId;
@@ -90,6 +102,7 @@ export interface TurnInfo {
   arcaneTaken?: boolean;
   clashesWon?: number;
   cheers?: number;
+  beatChest?: boolean;
   boos?: number;
 }
 
@@ -196,6 +209,8 @@ export type Action =
   | { type: 'concede' }
   | { type: 'orderTriggers'; order: number[] }
   | { type: 'choose'; picks?: number[]; yes?: boolean }
+  /** Heave: at the end of your turn, pay to put a card from hand face-up into your arsenal */
+  | { type: 'heave'; uid: number; pitch: number[] }
   | ManualAction;
 
 export type ManualAction =

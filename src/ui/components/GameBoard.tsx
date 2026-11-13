@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -715,6 +715,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     prompt = (
       <>
         <span className="msg">End phase: choose a card for your arsenal.</span>
+        {heaveOptions(state, HUMAN).map((o) => (
+          <button key={o.uid} onClick={() => endTurnAct({ type: 'heave', uid: o.uid, pitch: [] })} title="Heave: pay to put this face-up into your arsenal and create Seismic Surge tokens">
+            ⛰ Heave {cardOf(me.hand.find((h) => h.uid === o.uid)!).name} (pay {o.cost})
+          </button>
+        ))}
         <button className="primary" onClick={() => endTurnAct({ type: 'arsenal', uid: null })}>No Arsenal</button>
       </>
     );

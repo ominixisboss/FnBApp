@@ -7,7 +7,7 @@ import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
   defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, other, pitchOf,
-  playOptions, powerOf,
+  heaveOptions, playOptions, powerOf,
 } from '../engine/game';
 import { getHeroAbility } from '../engine/heroes';
 import type { PlayOption } from '../engine/game';
@@ -134,7 +134,8 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
   if (!inst) return undefined;
   const oc = getScript(cardOf(inst)).optional;
   if (!oc || oc.timing === 'defend' || !optionalPayable(p, oc, uid)) return undefined;
-  const gain = effectValue(oc.effects);
+  // Scrap / Beat Chest have no effect of their own: their payoff is in the card's "if it scrapped / if you've beaten chest" text
+  const gain = oc.effects.length ? effectValue(oc.effects) : 1.5;
   const pool = p.hand.filter((h) => h.uid !== uid && !pitch.includes(h.uid));
   const cheapest = (filter: (c: Card) => boolean) =>
     pool.filter((h) => filter(cardOf(h))).sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
@@ -144,7 +145,8 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
   switch (oc.cost.kind) {
     case 'discard': case 'handToBottom': case 'banishHand': {
       const want = oc.cost.kind === 'discard' ? oc.cost.pitch : undefined;
-      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c));
+      const minP = oc.cost.kind === 'discard' ? oc.cost.power ?? 0 : 0;
+      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c) && powerOf(c) >= minP);
       if (!h) return { accept: false };
       choice = { accept: true, uid: h.uid };
       cost = cardPlayValue(cardOf(h)) * (oc.cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4;
@@ -524,6 +526,10 @@ function planStackResponse(s: GameState, pid: PlayerId, difficulty: Difficulty):
 
 function planArsenal(s: GameState, pid: PlayerId): BotDecision {
   const p = s.players[pid];
+  // Heave: a big attack goes face-up into the arsenal and leaves Seismic Surge tokens for next turn
+  const hv = heaveOptions(s, pid).sort((a, b) => cardPlayValue(cardOf([...p.hand].find((h) => h.uid === b.uid)!)) - cardPlayValue(cardOf([...p.hand].find((h) => h.uid === a.uid)!)))[0];
+  // only when it doesn't strip the hand bare: leftover resources, or plenty of cards to pitch
+  if (hv && (p.resources >= hv.cost || p.hand.length >= 4)) return { action: { type: 'heave', uid: hv.uid, pitch: [] }, reason: `Heave ${cardOf(p.hand.find((h) => h.uid === hv.uid)!).name}: it waits face-up in the arsenal and the Seismic Surge tokens make next turn's Guardian attacks cheaper.` };
   const best = [...p.hand]
     .map((h) => ({ h, v: cardPlayValue(cardOf(h)) + (has(cardOf(h), 'Defense Reaction') ? 1.5 : 0) }))
     .sort((a, b) => b.v - a.v)[0];
@@ -592,6 +598,8 @@ export function describeAction(s: GameState, a: Action): string {
     case 'defend': return a.uids.length ? `Defend with ${a.uids.map(nameOf).join(', ')}` : 'Don’t defend';
     case 'arsenal': return a.uid === null ? 'Leave arsenal empty' : `Put ${nameOf(a.uid)} in arsenal`;
     case 'pass': return s.phase === 'action' ? 'End your turn' : 'Pass';
+    case 'heave': return `Heave ${nameOf(a.uid)} into the arsenal`;
+    case 'choose': return a.picks ? 'Confirm the choice' : a.yes ? 'Yes' : 'No';
     case 'orderTriggers': return `Resolve triggers: ${a.order.map((u) => nameOfUid(s, u)).join(', then ')}`;
     default: return a.type;
   }
