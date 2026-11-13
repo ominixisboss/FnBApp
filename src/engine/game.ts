@@ -348,6 +348,8 @@ function startTurn(s: GameState) {
   p.weapons.forEach((w) => (w.usedThisTurn = false));
   p.equipment.forEach((e) => (e.usedThisTurn = false));
   for (const pl of s.players) { pl.turn = newTurnInfo(); pl.redirectTo = undefined; }
+  // grudges fade: halve how much each opponent attacked this player
+  if (p.attackedBy) for (const k of Object.keys(p.attackedBy)) p.attackedBy[+k as PlayerId] = Math.floor((p.attackedBy[+k as PlayerId] ?? 0) / 2);
   s.phase = 'action';
   s.priority = s.turnPlayer;
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
@@ -392,6 +394,25 @@ function equipCard(s: GameState, p: PlayerState, cid: string) {
   log(s, p.id, `${p.name} equips ${c.name}.`);
 }
 
+/** How threatening an opponent is to `me` in a Pit Fight: life, cards, board and grudges. */
+function pitThreat(s: GameState, me: PlayerState, q: PlayerState): number {
+  const others = alivePlayers(s).filter((x) => x.id !== me.id);
+  const leader = others.every((x) => x.id === q.id || q.life + q.hand.length * 2 >= x.life + x.hand.length * 2);
+  return q.life * 0.5 + q.hand.length * 1.5 + q.permanents.length * 0.5 + (leader ? 4 : 0) + (me.attackedBy?.[q.id] ?? 0) * 3;
+}
+
+/** A bot's Pit Fight target: a hero it can knock out, else the biggest threat it can reach. */
+function pitTarget(s: GameState, p: PlayerState, legal: PlayerId[], power: number): PlayerId | undefined {
+  if (legal.length <= 1) return legal[0];
+  const score = (q: PlayerState) => {
+    const expectedBlock = Math.min(q.hand.length, 2) * 1.5 + q.equipment.filter((e) => !e.destroyed).length * 0.5;
+    const lethal = power - expectedBlock >= q.life;
+    // heroes on the brink are worth pressing even if they can still block this one
+    return (lethal ? 100 - q.life : 0) + pitThreat(s, p, q) + Math.max(0, 8 - q.life) * 3;
+  };
+  return [...legal].sort((a, b) => score(s.players[b]) - score(s.players[a]))[0];
+}
+
 /** Cards that can protect (defend an attack aimed at another hero). */
 function protectOptions(p: PlayerState): CardInst[] {
   const all = !!ability(p)?.protectAll;
@@ -410,9 +431,24 @@ function offerProtect(s: GameState, l: ChainLink) {
     // protect with the card that defends best for the least value
     const best = [...opts].sort((a, b) => (defenseOf(cardOf(b)) ?? 0) - (defenseOf(cardOf(a)) ?? 0) || (pitchOf(cardOf(b)) - pitchOf(cardOf(a))))[0];
     // bots protect when their hero profits from it, or when the attacker is their neighbour too
-    const botYes = !!ability(q)?.onProtect || targetableOpponents(s, q.id).includes(l.attacker) && linkPower(l) >= 5;
+    const botYes = protectWorthIt(s, q, l, best);
     ask(s, { player: q.id, kind: 'yesno', prompt: `Protect ${s.players[defenderOf(l)].name} from ${cardOf(l.inst).name} with ${cardOf(best).name}?`, options: [{ uid: best.uid, cardId: best.cardId }], resume: { type: 'hero', owner: q.id, key: 'protect', data: [li, best.uid], botYes } });
   }
+}
+
+/** Should a bot protect the defender? When its hero profits, to stop a knock-out that would leave the attacker stronger, or to blunt the leader. */
+function protectWorthIt(s: GameState, q: PlayerState, l: ChainLink, card0: CardInst): boolean {
+  if (ability(q)?.onProtect) return true;
+  const def = s.players[defenderOf(l)];
+  const atk = s.players[l.attacker];
+  const incoming = linkPower(l) - linkDefense(l);
+  const cheap = pitchOf(cardOf(card0)) !== 1 || (defenseOf(cardOf(card0)) ?? 0) >= 3;
+  const wouldDie = incoming >= def.life;
+  // with 3 left, losing the defender means facing the attacker alone; and don't save someone who keeps hitting us
+  const grudge = (q.attackedBy?.[def.id] ?? 0) >= 2;
+  if (wouldDie && !grudge && alivePlayers(s).length === 3) return true;
+  if (wouldDie && !grudge && pitThreat(s, q, atk) > pitThreat(s, q, def) + 4) return true;
+  return cheap && incoming >= 6 && pitThreat(s, q, atk) > pitThreat(s, q, def) + 8 && q.hand.length >= 4;
 }
 
 function doProtect(s: GameState, q: PlayerState, li: number, uid: number) {
@@ -1525,7 +1561,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   const legal = targetableOpponents(s, p.id);
   link.defender = prev ? defenderOf(prev)
     : p.focus !== undefined && legal.includes(p.focus) ? p.focus
-    : p.isBot ? [...legal].sort((a, b) => s.players[a].life - s.players[b].life)[0] ?? oppOf(s, p.id)
+    : p.isBot ? pitTarget(s, p, legal, linkPower(link)) ?? oppOf(s, p.id)
     : legal[0] ?? oppOf(s, p.id);
   const heroes = prev ? [s.players[link.defender].hero] : legal.map((q) => s.players[q].hero);
   const targets = (prev ? [link.defender] : legal).flatMap((q) => attackablePermanents(s.players[q]));
@@ -1533,6 +1569,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     ask(s, { player: p.id, kind: 'target', prompt: `What does ${c.name} attack?`, options: [...heroes, ...targets.map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'attackTarget', link: s.chain.length - 1 } });
   }
   p.turn.attacks += 1;
+  if (s.players.length > 2 && link.defender !== undefined) { const d = s.players[link.defender]; (d.attackedBy ??= {})[p.id] = (d.attackedBy[p.id] ?? 0) + 1; }
   if (fromWeapon) p.turn.weaponAttacked = true;
   const target = s.players[link.defender];
   target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;

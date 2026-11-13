@@ -86,6 +86,8 @@ export interface PlayerState {
   redirectTo?: PlayerId;
   /** extra intellect until the end of this player's next turn (The Librarian) */
   bonusIntellect?: number;
+  /** Pit Fight memory for the bots: how much each opponent has attacked this player lately */
+  attackedBy?: Partial<Record<PlayerId, number>>;
   /** penalties for this player's next turn (Crush cards): applied at the start of it */
   nextTurn?: { attackPower?: number; costMore?: number; noDraw?: boolean; noGoAgain?: boolean; noSmallAttacks?: boolean };
   weapons: WeaponState[];
