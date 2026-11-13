@@ -159,7 +159,12 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
         <GameBoard key={`spec-${sp.names.join('-')}`} initial={sp.state} tutorial={false} onExit={() => online.unspectate()}
           online={{ state: sp.state, send: () => {}, opponent: null, error: null }} />
         <div className="replay-shield" />
-        <div className="replay-bar"><span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span><button className="small" onClick={() => online.unspectate()}>Stop watching</button></div>
+        <div className="replay-bar">
+          {sp.seats && sp.seats.length > 2
+            ? <span className="small">👁 Watching from <span className="seg">{sp.seats.map((n, i) => <button key={i} className={`small ${sp.seat === i ? 'on' : ''}`} onClick={() => online.spectateSeat(i)}>{n}</button>)}</span></span>
+            : <span className="small"><b>👁 Watching {sp.names[0]}</b> vs {sp.names[1]} · you see {sp.watching}’s side</span>}
+          <button className="small" onClick={() => online.unspectate()}>Stop watching</button>
+        </div>
       </>
     );
   }
@@ -278,6 +283,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                       <div className="pit-wait">{Array.from({ length: net.table.size }, (_, i) => <span key={i} className={net.table!.seats[i] ? 'in' : ''}>{net.table!.seats[i] ?? 'empty seat'}</span>)}</div>
                       <div className="small muted">{net.code ? 'The game starts when every seat is taken.' : 'Bots take the empty seats 30 seconds after a second player joins.'}</div>
                       {(net.table.host || !net.code) && <button className="primary" onClick={() => online.fillBots()}>Start now with bots in the empty seats</button>}
+                      {net.table.host && net.code && net.table.seats.length < net.table.size && <FriendsPanel canChallenge label="➕ Invite" allowOffline onChallenge={(u) => online.invite(u)} />}
                     </>
                   )}
                   <button onClick={() => online.cancel()}>Cancel</button>
@@ -399,7 +405,7 @@ function DeckBox({ hero, title, sub, selected, onClick }: { hero: Card; title: s
 }
 
 /** Friends with online status; challenge one to a game with your selected deck. */
-function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; onChallenge: (username: string) => void }) {
+function FriendsPanel({ canChallenge, onChallenge, label = '⚔ Challenge', allowOffline = false }: { canChallenge: boolean; onChallenge: (username: string) => void; label?: string; allowOffline?: boolean }) {
   const [list, setList] = useState<FriendRow[] | null>(null);
   useEffect(() => {
     let off = false;
@@ -419,7 +425,7 @@ function FriendsPanel({ canChallenge, onChallenge }: { canChallenge: boolean; on
           <span className="grow">{f.name}</span>
           {f.status === 'in-game'
             ? <button className="small" title="Watch their game" onClick={() => online.spectate(f.username)}>👁 Watch</button>
-            : <button className="small" disabled={!canChallenge || f.status !== 'online'} title={f.status === 'online' ? 'Challenge with your selected deck' : 'Offline'} onClick={() => onChallenge(f.username)}>⚔ Challenge</button>}
+            : <button className="small" disabled={!canChallenge || (f.status !== 'online' && !allowOffline)} title={f.status === 'online' ? 'Challenge with your selected deck' : allowOffline ? 'They get a notification' : 'Offline'} onClick={() => onChallenge(f.username)}>{label}</button>}
         </div>
       ))}
     </div>
