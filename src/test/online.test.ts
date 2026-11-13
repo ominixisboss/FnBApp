@@ -77,10 +77,10 @@ describe('online play', () => {
     const deckA = toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1));
     const deckB = toDeckList(autoBuildDeck(findCard('Bravo')!.id, 'blitz', 2));
     ca.ws.send(JSON.stringify({ t: 'host', deck: deckA, format: 'blitz' }));
-    await wait(300);
+    await until(() => !!ca.waiting?.code);
     expect(ca.waiting?.code).toMatch(/^[A-Z0-9]{5}$/);
     cb.ws.send(JSON.stringify({ t: 'join', code: ca.waiting!.code, deck: deckB }));
-    await wait(300);
+    await until(() => ca.states.length > 0 && cb.states.length > 0);
     expect(ca.states.length).toBeGreaterThan(0);
 
     // hidden information never reaches the other player
@@ -249,12 +249,15 @@ describe('online play', () => {
     expect(ca.pod!.players.length).toBe(8); // six bots fill the table
     // each player drafts for a hero, taking the card a bot would (3 packs of 14)
     const [ha, hb] = setHeroes('WTR');
-    for (let i = 0; i < 42 && ca.pod!.phase === 'drafting'; i++) {
+    const stamp = (c: Client) => `${c.pod!.round}:${c.pod!.you.pack.length}`;
+    for (let i = 0; i < 50 && ca.pod!.phase === 'drafting'; i++) {
+      const before = stamp(ca);
       ca.ws.send(JSON.stringify({ t: 'podPick', index: botPick(ca.pod!.you.pack, ha) }));
       cb.ws.send(JSON.stringify({ t: 'podPick', index: botPick(cb.pod!.you.pack, hb) }));
-      await wait(80);
+      // wait for the packs to pass: both players see the next pack, not yet picked from
+      await until(() => ca.pod!.phase !== 'drafting' || (stamp(ca) !== before && stamp(cb) === stamp(ca) && !ca.pod!.you.picked && !cb.pod!.you.picked));
     }
-    await wait(300);
+    await until(() => ca.pod!.phase === 'building');
     expect(ca.pod!.phase).toBe('building');
     expect(ca.pod!.you.pool.length).toBe(42);
     // a deck with a card that isn't in your pool is refused
