@@ -34,6 +34,14 @@ A web app for learning and playing the **Flesh and Blood** TCG against AI bots, 
 - **Replays:** watch any recent game again, with play, step, scrub and speed controls. Games against the AI are stored in the browser; online games are stored on the server.
 - **Online extras:** a ranked ladder (Elo, Bronze to Mythic) for quick matches, friends with online status, direct challenges, and emotes.
 - **Deck tools:** pitch balance, average resources per hand, and per-card odds of drawing a card in your opening hand or by turn 2 or 3. Deck links from Fabrary, FaB DB and Talishar are recognised, with steps to copy the list as text.
+- **The stack and priority:** played cards and activations go on a stack. Your opponent gets priority to respond with instants (prevention, pumps, …) before anything resolves, just like at a real table. You choose the order of your pitched cards at the end of turn, and the log explains the rule behind each step (tap a 📖 tip).
+- **Sandbox mode:** move any card between any zones, shuffle, add counters, flip equipment, for effects the engine doesn't automate. Play against a 🐟 Goldfish (a dummy that never acts) to test a deck, or open a sandbox online room to play a tabletop-style game with a friend.
+- **Real match structure:** roll a die for first turn, choose your equipment and cards from your pool before each game (Classic Constructed sideboarding), best of 3 with the loser choosing who goes first, and an optional chess clock.
+- **Armory tournament:** three Swiss rounds against bots, then a Top 4 cut.
+- **Formats:** Blitz, Classic Constructed, Living Legend, Silver Age, Commoner and Casual, each with its own deck rules and ban list. A weekly workflow (`update-cards.yml`) refreshes the card database and ban lists and opens a pull request; it needs *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests*. Every card's detail view shows the official keyword rules and links to the rules site and rulings.
+- **Table tools** (`#tools`): a life counter for two players (keeps the screen awake, hold ± for 5), sample opening hands from your decks, and a printable deck registration sheet.
+- **Bot personalities:** aggressive heroes (Brute, Ninja, Assassin, Pirate, Ranger) keep fewer cards back to block, patient ones (Guardian, Wizard, Illusionist, Mechanologist) defend more. The lobby shows each bot's style.
+- **Spectating & friend cups:** watch a friend's live online game from your friends list. Friend cups (`#cups`) are private round robins for up to 8 friends; results fill in automatically when cup members finish an online game against each other.
 - **Installable web app:** on Android or desktop Chrome or Edge, the Home page offers *Install*. On iPhone, use Safari → Share → *Add to Home Screen*. The installed app runs full screen and plays the bots offline.
 
 ## Running it online
@@ -71,7 +79,8 @@ The `android/` folder is a [Capacitor](https://capacitorjs.com) project that pac
 `src/engine/game.ts` is a pure, deterministic engine (seeded RNG, immutable state updates). It automates:
 
 - Setup, start, action and end phases; action points and **go again**; drawing up to intellect; arsenal; pitched cards going to the bottom of the deck.
-- Paying costs by pitching. Weapon and equipment activations (once per turn, `destroy this` costs).
+- The stack and priority: layers resolve last in, first out after both players pass; only instants can be played while the stack is open.
+- Paying costs by pitching, with a chosen pitch order. Weapon and equipment activations (once per turn, `destroy this` costs).
 - The combat chain: attack, defend (hand and equipment), alternating reaction step, damage, on-hit, resolution, chain close.
 - Keywords: dominate, overpower, intimidate, piercing, ward, arcane barrier, spellvoid, battleworn, blade break, temper and boost.
 - Common tokens: Runechant, Quicken, Courage, Might, Agility, Vigor, Ponder, Embodiment of Lightning, Blade Dance, Eloquence, Frostbite, Spectral Shield, Zen State, …
@@ -84,11 +93,13 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~410 |
-| Partly automated | ~1,810 |
-| Stats only (text not automated) | ~2,600 |
+| Fully automated | ~940 |
+| Partly automated | ~1,650 |
+| Stats only (text not automated) | ~2,370 |
 
-Hero abilities for about 27 heroes are automated; the rest (mostly ones built on wagers, the crowd, soul, chi or Gold tokens) aren't yet. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, or create tokens. The bots play every card using its stats plus whatever text is automated.
+Hero abilities for about 27 heroes are automated; the rest (mostly ones built on wagers, the crowd, soul, chi or Gold tokens) aren't yet. Every card's detail view shows what is and isn't automated. In a game, the **🛠 Manual** panel lets you apply any missing effect yourself: change life, draw, add resources or action points, change attack power, create tokens, or (in sandbox mode) move any card between zones.
+
+Not yet supported: choosing the order of simultaneous triggers (they resolve in a fixed order) and multiplayer formats such as Ultimate Pit Fight. The bots play every card using its stats plus whatever text is automated.
 
 ## Development
 
