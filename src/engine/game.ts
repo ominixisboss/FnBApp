@@ -320,7 +320,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
       }
       if (slots.has(slot)) { p.inventory.push(eid); continue; }
       slots.add(slot);
-      p.equipment.push({ inst: mk(s, eid, id), defenseMod: 0, destroyed: false, usedThisTurn: false });
+      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false });
     }
     s.players[id] = p;
   });
@@ -376,6 +376,13 @@ function startTurn(s: GameState) {
   log(s, s.turnPlayer, `— Turn ${s.turn}: ${p.name} —`);
   for (const pl of s.players) if (pl.drinkFrom === p.id) pl.drinkFrom = undefined; // "until the start of your next turn"
   if (s.eventDeck) flipEvent(s, p);
+  // Graven equipment: destroy Silver to equip it again from the graveyard
+  for (const e of p.equipment) {
+    const n = e.destroyed ? getScript(cardOf(e.inst)).graveEquip : undefined;
+    if (!n || p.permanents.filter((pm) => cardOf(pm.inst).name === 'Silver').length < n) continue;
+    if (p.isBot) graveEquip(s, p, e.inst.uid, n);
+    else ask(s, { player: p.id, kind: 'yesno', prompt: `${cardOf(e.inst).name}: destroy ${n} Silver to equip it again from your graveyard?`, options: [{ uid: e.inst.uid, cardId: e.inst.cardId }], resume: { type: 'event', key: 'graveEquip', data: [e.inst.uid, n] } });
+  }
   if (p.nextTurn) {
     const n = p.nextTurn;
     if (n.attackPower) p.effects.push({ kind: 'nextAttackPower', amount: -n.attackPower, filter: { kind: 'any' }, source: 'crush' });
@@ -920,6 +927,14 @@ function pounce(s: GameState, p: PlayerState, q: PlayerState, uids: number[]) {
   void p;
 }
 
+function graveEquip(s: GameState, p: PlayerState, uid: number, n: number) {
+  const e = p.equipment.find((x) => x.inst.uid === uid && x.destroyed);
+  if (!e || p.permanents.filter((pm) => cardOf(pm.inst).name === 'Silver').length < n) return;
+  for (let i = 0; i < n; i++) { const sv = p.permanents.find((pm) => cardOf(pm.inst).name === 'Silver'); if (sv) removePermanent(s, p, sv.inst.uid); }
+  e.destroyed = false; e.defenseMod = 0; e.usedThisTurn = false;
+  log(s, p.id, `${p.name} destroys ${n} Silver and equips ${cardOf(e.inst).name} from their graveyard.`);
+}
+
 function comeback(s: GameState, p: PlayerState, inst: CardInst) {
   if (!p.hand.length) {
     p.turn.flags[`playGrave${inst.uid}`] = 1; p.turn.flags[`freePlay${inst.uid}`] = 1;
@@ -965,6 +980,7 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
     case 'drink': { const q = hero(); if (q) drink(s, p, q); break; }
     case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
     case 'pounce': pounce(s, s.players[_data![0]], p, picks); break;
+    case 'graveEquip': if (yes) graveEquip(s, p, _data![0], _data![1]); break;
     case 'payOrWeaken': {
       const [li, amount, cost] = _data!;
       const l = s.chain[li];
@@ -1053,7 +1069,7 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'powerAtLeast': return !!link && linkPower(link) >= cond.n;
     case 'reactionsThisLink': return !!link && (link.reactionCount ?? 0) >= cond.n;
     case 'discardedPower': return (p.turn.discardedPower ?? 0) >= cond.n;
-    case 'hitWithDagger': return chainBy.some((l) => l.hit && cardOf(l.inst).types.includes('Dagger'));
+    case 'hitWithDagger': return chainBy.some((l) => l.hit && cardOf(l.inst).types.includes('Dagger')) || !!p.turn.flags.daggerHit;
     case 'defendedByAction': return !!link && link.defenders.some((d) => has(cardOf(d.inst), 'Action'));
     case 'earthBanished': return p.banished.filter((b) => cardOf(b).types.includes('Earth')).length >= cond.n;
     case 'playedNonAttack': return p.turn.played.some((id) => { const c = card(id); return has(c, 'Action') && !has(c, 'Attack'); });
@@ -1088,6 +1104,8 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'oppSoul': return (opp.soul ?? []).length > 0;
     case 'phantasmDestroyed': return !!p.turn.flags.phantasm;
     case 'createdToken': return !!p.turn.flags[`created:${cond.name}`];
+    case 'lastAttackColor': { const prev = s.chain[s.chain.length - 2]; return !!prev && prev.attacker === p.id && !prev.fromWeapon && cardOf(prev.inst).pitch === cond.pitch; }
+    case 'lastAttackName': { const prev = s.chain[s.chain.length - 2]; return !!prev && prev.attacker === p.id && cardOf(prev.inst).name.toLowerCase() === cond.name.toLowerCase(); }
     case 'hasAim': return !!(link ?? currentLink(s))?.inst.aim;
     case 'scrapped': { const l = link ?? currentLink(s); return !!l && !!p.turn.flags[`scrap${l.inst.uid}`]; }
     case 'beatChest': return !!p.turn.beatChest;
@@ -2495,6 +2513,33 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         const t = l ? s.players[defenderOf(l)] : opp;
         const x = t.intimidated.shift();
         if (x) { toGraveyard(t, x); log(s, p.id, `${srcName}: ${cardOf(x).name} (intimidated) is destroyed.`); }
+        break;
+      }
+      case 'createInBanished': {
+        const t = findCard(e.name);
+        if (t) { const inst = mk(s, t.id, p.id); p.banished.push(inst); p.turn.flags.lastBanished = inst.uid; log(s, p.id, `${p.name} creates ${t.name} in their banished zone.`); }
+        break;
+      }
+      case 'playLastBanished': {
+        const uid = p.turn.flags.lastBanished;
+        if (uid && p.banished.some((b) => b.uid === uid)) { p.turn.flags[`playBanished${uid}`] = 1; log(s, p.id, `${p.name} may play ${cardOf(p.banished.find((b) => b.uid === uid)!).name} this turn.`); }
+        break;
+      }
+      case 'banishFromGrave': {
+        const g = [...p.graveyard].filter((x) => { const c2 = cardOf(x); return has(c2, e.type) && (e.type !== 'Action' || !has(c2, 'Attack')) && (!e.cls || c2.types.includes(e.cls)); }).sort((a, b) => powerOf(cardOf(b)) - powerOf(cardOf(a)))[0];
+        if (!g) break;
+        removeFrom(p.graveyard, g.uid); p.banished.push(g); p.turn.flags.lastBanished = g.uid;
+        log(s, p.id, `${p.name} banishes ${cardOf(g).name} from their graveyard.`);
+        break;
+      }
+      case 'daggerStrike': {
+        const w = p.weapons.find((x) => cardOf(x.inst).types.includes('Dagger'));
+        const t = l ? s.players[defenderOf(l)] : opp;
+        if (!w) break;
+        if (dealDamage(s, t.id, 1, false, cardOf(w.inst).name) > 0) { p.turn.flags.daggerHit = 1; p.turn.weaponHits += 1; }
+        p.weapons = p.weapons.filter((x) => x !== w);
+        toGraveyard(p, w.inst);
+        log(s, p.id, `${cardOf(w.inst).name} deals 1 damage and is destroyed.`);
         break;
       }
       case 'gainAP': p.actionPoints += e.amount; log(s, p.id, `${p.name} gains ${e.amount} action point${e.amount > 1 ? 's' : ''}.`); break;

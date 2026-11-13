@@ -97,6 +97,14 @@ export type Effect =
   /** this defending equipment is destroyed when the combat chain closes */
   | { kind: 'destroyAtChainClose' }
   | { kind: 'gainAP'; amount: number }
+  /** create a card (Crouching Tiger) in your banished zone */
+  | { kind: 'createInBanished'; name: string }
+  /** "You may play it this turn": the card the effect just banished can be played from the banished zone */
+  | { kind: 'playLastBanished' }
+  /** banish a card of this class and type from your graveyard (Rattle Bones) */
+  | { kind: 'banishFromGrave'; cls?: string; type: string }
+  /** Bite: a dagger you control deals 1 damage to the hero; if it does, the dagger has hit; destroy the dagger */
+  | { kind: 'daggerStrike' }
   /** put a card from your arsenal on the bottom of your deck; if you do, draw a card */
   | { kind: 'arsenalCycle' }
   /** banish a card defending this chain link (the best one) */
@@ -158,7 +166,9 @@ export type Condition =
   | { kind: 'boostedTimes'; n: number }
   | { kind: 'oppSoul' }
   | { kind: 'phantasmDestroyed' }
-  | { kind: 'createdToken'; name: string };
+  | { kind: 'createdToken'; name: string }
+  | { kind: 'lastAttackColor'; pitch: number }
+  | { kind: 'lastAttackName'; name: string };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
@@ -243,6 +253,10 @@ export interface CardScript {
   additionalCost: { discardRandom?: number; banishRandomHand?: number; banishGraveyard?: number; handToBottom?: number; banishSoul?: number };
   /** Contract: banishing an opponent's card of this kind (while this is on the combat chain) creates a Silver */
   contract?: 'nonAction' | 'attackAction' | 'nonAttackAction' | 'red' | 'yellow' | 'blue' | 'reaction' | 'lowDefense' | 'cheap' | 'costly' | 'goAgain';
+  /** Graven equipment: from the graveyard, at the start of your turn, destroy N Silver to equip it again */
+  graveEquip?: number;
+  /** "When this is equipped from anywhere other than your graveyard, put a -1{d} counter on it" */
+  equipCounter?: boolean;
   /** destroyed at the beginning of its controller's end phase */
   destroyAtEnd?: boolean;
   /** "If you would be dealt damage, you may banish this to prevent N of that damage" */
@@ -411,6 +425,10 @@ export function parseEffect(raw: string): Effect[] | null {
     return [{ kind: 'oppDiscardRandom', amount: toNum(m[1].toLowerCase()) }];
   if (/^intimidate(?: them| the defending hero| target hero)?$/i.test(s)) return [{ kind: 'intimidate' }];
   if ((m = s.match(/^gain (a|an|one|two|\d+) action points?$/i))) return [{ kind: 'gainAP', amount: toNum(m[1].toLowerCase()) }];
+  if ((m = s.match(/^[Cc]reate (?:a|an) ([A-Z][\w' ]+?) in your banished zone$/))) return [{ kind: 'createInBanished', name: m[1] }];
+  if (/^you may play it this turn$/i.test(s)) return [{ kind: 'playLastBanished' }];
+  if ((m = s.match(/^banish target (\w+) (attack action|action) card from your graveyard$/i))) return [{ kind: 'banishFromGrave', cls: titleCase(m[1]), type: m[2].toLowerCase() === 'attack action' ? 'Attack' : 'Action' }];
+  if (/^you may have target dagger you control deal 1 damage to them\. if damage is dealt this way, the dagger has hit\. destroy the dagger$/i.test(s)) return [{ kind: 'daggerStrike' }];
   if ((m = s.match(/^the next attack action card you play this turn costs ((?:\{r\})+) less to play$/i))) return [{ kind: 'costLess', amount: m[1].length / 3, filter: { kind: 'attackAction' } }];
   if ((m = s.match(/^banish the top card of their deck and a defending card$/i))) return [{ kind: 'banishTopOpp', amount: 1 }, { kind: 'banishDefender' }];
   if (/^destroy an intimidated card they own$/i.test(s)) return [{ kind: 'destroyIntimidated' }];
@@ -484,9 +502,9 @@ export function parseEffect(raw: string): Effect[] | null {
       else if ((k = it.match(/^"(?:when|if) this hits(?: a hero)?, (.+?)\.?"$/i))) {
         const dest = /^put it on the bottom of its owner's deck$/i.test(k[1]) ? 'deckBottom' : /^put it into your hand$/i.test(k[1]) ? 'hand' : /^put it into your soul$/i.test(k[1]) ? 'soul' : null;
         const e = dest ? [{ kind: 'setDestination' as const, dest: dest as 'hand' }] : parseEffect(k[1]);
-        if (!e) return null;
+        if (!e) { out.length = 0; break; }
         out.push({ kind: 'thisGrantOnHit', effects: e });
-      } else return null;
+      } else { out.length = 0; break; } // not a list of "this gets" items: let the rules below try
     }
     if (out.length) return out;
   }
@@ -600,6 +618,8 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you've been booed this turn$/.test(t) || /^the crowd has booed you this turn$/.test(t)) return { kind: 'booed' };
   if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
   if (/^you've played another red card this turn$/.test(t)) return { kind: 'anotherRed' };
+  if ((m = t.match(/^an? (red|yellow|blue) attack action card was the last attack this combat chain$/))) return { kind: 'lastAttackColor', pitch: { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] };
+  if ((m = t.match(/^([a-z' ]+) was the last attack this combat chain$/))) return { kind: 'lastAttackName', name: titleCase(m[1]) };
   if ((m = t.match(/^you've created (?:a|an) ([a-z' ]+) token this turn$/))) return { kind: 'createdToken', name: titleCase(m[1]) };
   if (/^you have no cards in (?:your )?hand$/.test(t)) return { kind: 'emptyHand' };
   if (/^you have no cards in your deck$/.test(t)) return { kind: 'emptyDeck' };
@@ -746,14 +766,28 @@ function compile(c: Card): CardScript {
       continue;
     }
     // modal cards: "Choose 1;" followed by one option per line
-    if (/^choose 1;?$/i.test(line)) {
-      while (li + 1 < lines.length && /[.!]$/.test(lines[li + 1])) {
-        const opt = lines[++li];
+    // "Choose 1 or both;", "Choose 2;", "Choose any number;": each allowed combination becomes one mode
+    const modal = line.match(/^choose (1|2|3|1 or both|any number);?$/i);
+    if (modal) {
+      const single: Mode[] = [];
+      while (li + 1 < lines.length && /[.!"]$/.test(lines[li + 1])) {
+        const opt = lines[++li].replace(/^[-•]\s*/, '');
         const tmp = emptyScript();
         handleSentence(tmp, opt, false, false);
         const parsed = tmp.unparsed.length === 0;
-        sc.modes.push({ label: opt.replace(/\.$/, ''), onPlay: tmp.onPlay, onAttack: tmp.onAttack, onHit: tmp.onHit, parsed });
+        single.push({ label: opt.replace(/\.$/, ''), onPlay: tmp.onPlay, onAttack: tmp.onAttack, onHit: tmp.onHit, parsed });
         if (!parsed) sc.unparsed.push(`(mode) ${opt}`);
+      }
+      const how = modal[1].toLowerCase();
+      const sizes = how === '1' ? [1] : how === '2' ? [2] : how === '3' ? [3] : how === '1 or both' ? [1, 2] : single.map((_, i) => i + 1);
+      const combos: Mode[][] = [];
+      const pick = (start: number, acc: Mode[]) => { if (sizes.includes(acc.length)) combos.push(acc); for (let i = start; i < single.length; i++) pick(i + 1, [...acc, single[i]]); };
+      pick(0, []);
+      for (const set of combos.filter((x) => x.length)) {
+        sc.modes.push(set.length === 1 ? set[0] : {
+          label: set.map((m) => m.label).join(' + '),
+          onPlay: set.flatMap((m) => m.onPlay), onAttack: set.flatMap((m) => m.onAttack), onHit: set.flatMap((m) => m.onHit), parsed: set.every((m) => m.parsed),
+        });
       }
       continue;
     }
@@ -927,6 +961,16 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if (/^at the beginning of your end phase, put a -1\{d\} counter on this\.?$/i.test(sent)) { sc.endPhaseWear = true; return; }
   if (/^at the beginning of your end phase, destroy this\.?$/i.test(sent)) { sc.destroyAtEnd = true; return; }
   if (/^you may equip this\.?$/i.test(sent)) return; // event equipment: the event deck offers to equip it
+  // "You may play it this turn." belongs to the effect before it that banished or created the card
+  if (/^you may play it this turn\.?$/i.test(sent)) {
+    const host = findHost(sc, (e) => e.kind === 'createInBanished' || e.kind === 'banishFromGrave');
+    if (host) { host.push({ kind: 'playLastBanished' }); return; }
+  }
+  if (/^when this attacks a hero, you may have target dagger you control deal 1 damage to them\.?$/i.test(sent)) { sc.onAttack.push({ kind: 'daggerStrike' }); return; }
+  if (/^(if damage is dealt this way, the dagger has hit|destroy the dagger)\.?$/i.test(sent) && sc.onAttack.some((e) => e.kind === 'daggerStrike')) return;
+  if ((m = sent.match(/^while this is in your graveyard, at the start of your turn, you may destroy (\d+) silver you control\.?$/i))) { sc.graveEquip = +m[1]; return; }
+  if (/^if you do, equip this\.?$/i.test(sent) && sc.graveEquip) return;
+  if (/^when this is equipped from anywhere other than your graveyard, put a -1\{d\} counter on it\.?$/i.test(sent)) { sc.equipCounter = true; return; }
   if ((m = sent.match(/^when this enters the arena, (.+)$/i)) && isPermanentLike) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onPlay.push(...e);
@@ -986,7 +1030,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const e = cond && parseEffect(m[2]);
     if (cond && e && !isAttack) return void sc.conditional.push({ when: 'instead', cond, effects: e });
   }
-  if ((m = sent.match(/^when this attacks, if (.+?), (.+)$/i))) {
+  if ((m = sent.replace(/^combo - /i, '').match(/^when this attacks, if (.+?), (.+)$/i))) {
     const cond = parseCondition(m[1]);
     const e = cond && parseEffect(m[2]);
     if (cond && e) return void sc.conditional.push({ when: LINK_CONDITIONS.has(cond.kind) ? 'ifLink' : 'if', cond, effects: e });
@@ -1087,6 +1131,17 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     if (e) return void sc.onPlay.push(...e);
   }
   sc.unparsed.push(sent);
+}
+
+/** The effect list (anywhere in the script, including conditionals) whose last effect matches. */
+function findHost(sc: CardScript, pred: (e: Effect) => boolean): Effect[] | null {
+  const lists: Effect[][] = [sc.onPlay, sc.onAttack, sc.onHit, ...sc.conditional.map((c) => c.effects), ...sc.activations.map((a) => a.effects)];
+  const walk = (list: Effect[]): Effect[] | null => {
+    for (const e of list) if (e.kind === 'ifCond') { const r = walk(e.effects); if (r) return r; }
+    return list.length && pred(list[list.length - 1]) ? list : null;
+  };
+  for (const l of lists.reverse()) { const r = walk(l); if (r) return r; }
+  return null;
 }
 
 function finish(sc: CardScript, c: Card): CardScript {

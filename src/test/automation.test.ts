@@ -170,3 +170,33 @@ describe('long tail', () => {
     expect(life - s.players[1].life).toBe(Math.max(0, power - 2)); // the attack minus the 2 prevented
   });
 });
+
+describe('third pass', () => {
+  it('a Crouching Tiger created in your banished zone can be played this turn', () => {
+    let s = game([findCard('Biting Breeze')!.id, filler()]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' }); s = applyAction(s, { type: 'pass' });
+    const tiger = s.players[0].banished.find((b) => getDb().byId.get(b.cardId)!.name === 'Crouching Tiger');
+    expect(tiger).toBeDefined();
+    s.players[0].actionPoints = Math.max(1, s.players[0].actionPoints); s.players[0].resources = 5;
+    expect(playOptions(s, 0).some((o) => o.uid === tiger!.uid)).toBe(true);
+  });
+  it('"Choose 1 or both" offers each option and both together', () => {
+    const c = getDb().cards.find((x) => /^Choose 1 or both;/im.test(x.text) && getScript(x).modes.length >= 3)!;
+    expect(getScript(c).modes.some((m) => m.label.includes(' + '))).toBe(true);
+  });
+  it('Bite: the dagger deals 1 and is destroyed, and counts as a dagger hit', () => {
+    const dagger = getDb().cards.find((c) => c.types.includes('Dagger') && c.types.includes('Assassin'))!;
+    const mk = (hand: string[], w: string[]): DeckList => ({ heroId: findCard('Arakni')!.id, weaponIds: w, equipmentIds: [], cardIds: [...hand, ...Array(30).fill(filler())] });
+    let s = createGame([{ name: 'A', isBot: false, deck: mk([findCard('Bite')!.id], [dagger.id]) }, { name: 'B', isBot: false, deck: mk([], []) }], 3, 'blitz', 0);
+    s = structuredClone(s);
+    const p = s.players[0]; const all = [...p.hand, ...p.deck];
+    p.hand = [all.splice(all.findIndex((x) => getDb().byId.get(x.cardId)!.name === 'Bite'), 1)[0]]; p.deck = all;
+    p.actionPoints = 1; p.resources = 10;
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'play', uid: p.hand[0].uid, pitch: [] });
+    expect(s.players[1].life).toBe(life - 1);
+    expect(s.players[0].weapons.length).toBe(0);
+  });
+});
