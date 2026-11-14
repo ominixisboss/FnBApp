@@ -48,6 +48,15 @@ function effectValue(effects: Effect[]): number {
       case 'mayThen': v += Math.max(0, effectValue(e.then) - 0.5); break;
       case 'rollDie': v += e.then.length * 2; break;
       case 'destroySelf': v -= 1; break;
+      case 'oppBanishHand': case 'oppBanishArsenal': v += 1.6; break;
+      case 'preventArcane': v += 0.5 * e.amount; break;
+      case 'transcend': v += 1; break;
+      case 'lookTop': v += 0.1; break;
+      case 'selfToSoul': v += 0.6; break;
+      case 'treasurePut': v += 0.5; break;
+      case 'treasureTake': v += 0.7; break;
+      case 'treasureDivvy': v += 2; break;
+      case 'ifOppClass': v += effectValue(e.then) * 0.5; break;
       default: v += 0.3;
     }
   }
@@ -154,7 +163,9 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
     const srcInst = findSourceInst(p, opt.uid)!;
     const src = cardOf(srcInst);
     const a = activationsOf(p, srcInst)[opt.index];
-    const value = a.attack ? powerOf(src) : effectValue(a.effects) - (a.destroySelf ? 1 : 0);
+    // turning a cloaked equipment face-up also makes it a blocker again
+    const faceUpBonus = a.faceUpCost ? 0.4 + (Number(src.defense ?? 0) || 0) * 0.3 : 0;
+    const value = a.attack ? powerOf(src) : effectValue(a.effects) - (a.destroySelf ? 1 : 0) + faceUpBonus;
     return { opt, value, goAgain: a.goAgain, usesAP: !a.instant, isAttack: a.attack, cost: opt.cost, uidInHand: null };
   });
 }
