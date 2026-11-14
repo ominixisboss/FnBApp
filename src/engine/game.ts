@@ -171,7 +171,7 @@ function heroApi(s: GameState): HeroApi {
     targets: (p) => targetableOpponents(s, p.id).map((q) => s.players[q]),
     pay: (p, amount) => {
       if (availableResources(p, []) < amount) return false;
-      pay(s, p, amount, autoPitch(p, Math.max(0, amount - p.resources)) ?? []);
+      pay(s, p, amount, autoPitch(p, amount) ?? []);
       return true;
     },
     removeEquipment: (p, uid) => {
@@ -736,7 +736,7 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
     case 'betsy': {
       const l = s.chain[c.resume.link];
       if (a.yes && l && availableResources(p) >= 2) {
-        pay(s, p, 2, autoPitch(p, Math.max(0, 2 - p.resources)) ?? []);
+        pay(s, p, 2, autoPitch(p, 2) ?? []);
         l.powerMod += 1; l.overpower = true;
         log(s, p.id, `${p.name} pays 2: ${cardOf(l.inst).name} gets +1 power and overpower.`);
       }
@@ -762,7 +762,7 @@ function addWager(s: GameState, p: PlayerState, li: number, tokens: string[], wi
   });
   const ab = ability(p);
   if (ab?.id === 'betsy' && availableResources(p) >= 2) {
-    if (p.isBot) { pay(s, p, 2, autoPitch(p, Math.max(0, 2 - p.resources)) ?? []); l.powerMod += 1; l.overpower = true; log(s, p.id, `Betsy pays 2: ${cardOf(l.inst).name} gets +1 power and overpower.`); }
+    if (p.isBot) { pay(s, p, 2, autoPitch(p, 2) ?? []); l.powerMod += 1; l.overpower = true; log(s, p.id, `Betsy pays 2: ${cardOf(l.inst).name} gets +1 power and overpower.`); }
     else ask(s, { player: p.id, kind: 'yesno', prompt: `Betsy: pay 2 resources to give ${cardOf(l.inst).name} +1 power and overpower?`, options: [], resume: { type: 'betsy', link: li } });
   }
 }
@@ -1047,7 +1047,7 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
       const [li, amount, cost] = _data!;
       const l = s.chain[li];
       if (!l) break;
-      if (yes && availableResources(p) >= cost) { pay(s, p, cost, autoPitch(p, Math.max(0, cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${cost} for ${cardOf(l.inst).name}.`); }
+      if (yes && availableResources(p) >= cost) { pay(s, p, cost, autoPitch(p, cost) ?? []); log(s, p.id, `${p.name} pays ${cost} for ${cardOf(l.inst).name}.`); }
       else { l.powerMod -= amount; log(s, p.id, `${cardOf(l.inst).name} gets -${amount}{p} (${linkPower(l)}).`); }
       break;
     }
@@ -1399,7 +1399,7 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
     case 'all': {
       let used: Card | null = null;
       for (const k of cost.costs) {
-        if (k.kind === 'pay') { pay(s, p, k.amount, autoPitch(p, Math.max(0, k.amount - p.resources)) ?? []); continue; }
+        if (k.kind === 'pay') { pay(s, p, k.amount, autoPitch(p, k.amount) ?? []); continue; }
         used = payOptional(s, p, { ...oc, cost: k }, choice, playingUid) ?? used;
       }
       return used;
@@ -1449,7 +1449,7 @@ function mayPayable(p: PlayerState, cost: OptionalCostKind, src: CardInst): bool
   return optionalPayable(p, { timing: 'play', cost, effects: [], costText: '', effectText: '' }, src.uid);
 }
 function payMay(s: GameState, p: PlayerState, cost: OptionalCostKind, src: CardInst) {
-  if (cost.kind === 'pay') { pay(s, p, cost.amount, autoPitch(p, Math.max(0, cost.amount - p.resources)) ?? []); return; }
+  if (cost.kind === 'pay') { pay(s, p, cost.amount, autoPitch(p, cost.amount) ?? []); return; }
   payOptional(s, p, { timing: 'play', cost, effects: [], costText: '', effectText: '' }, { accept: true }, src.uid);
 }
 
@@ -2441,7 +2441,7 @@ function doHeave(s: GameState, uid: number, pitch: number[]) {
   if (!opt) throw new Error('You can’t heave that now.');
   const p = s.players[s.turnPlayer];
   const inst = removeFrom(p.hand, uid)!;
-  pay(s, p, opt.cost, pitch.length ? pitch : autoPitch(p, Math.max(0, opt.cost - p.resources)) ?? []);
+  pay(s, p, opt.cost, pitch.length ? pitch : autoPitch(p, opt.cost) ?? []);
   p.arsenal.push(inst);
   log(s, p.id, `${p.name} heaves ${cardOf(inst).name} into the arsenal.`, 'Heave N: at the beginning of your end phase, you may pay N to put this face-up into your arsenal. If you do, create N Seismic Surge tokens.');
   createToken(s, p, 'Seismic Surge', opt.cost);
@@ -2777,7 +2777,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'payOrWeaken': {
         if (!l || l.inst.uid !== src.uid) break;
         if (!p.isBot) { ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: pay ${e.cost} or it gets -${e.amount}{p}?`, options: [], resume: { type: 'event', key: 'payOrWeaken', data: [s.chain.indexOf(l), e.amount, e.cost] } }); break; }
-        if (availableResources(p) >= e.cost && (p.resources >= e.cost || e.amount >= 2)) { pay(s, p, e.cost, autoPitch(p, Math.max(0, e.cost - p.resources)) ?? []); log(s, p.id, `${p.name} pays ${e.cost} for ${srcName}.`); }
+        if (availableResources(p) >= e.cost && (p.resources >= e.cost || e.amount >= 2)) { pay(s, p, e.cost, autoPitch(p, e.cost) ?? []); log(s, p.id, `${p.name} pays ${e.cost} for ${srcName}.`); }
         else { l.powerMod -= e.amount; log(s, p.id, `${srcName} gets -${e.amount}{p} (${linkPower(l)}).`); }
         break;
       }

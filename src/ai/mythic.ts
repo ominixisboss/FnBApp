@@ -87,7 +87,7 @@ function candidates(s: GameState, pid: PlayerId, hard: Action): Action[] {
   out.set(key({ type: 'pass' }), { type: 'pass' });
   for (const o of playOptions(s, pid)) {
     if (out.size >= 10) break;
-    const pitch = autoPitch(p, Math.max(0, o.cost - p.resources), [o.uid]);
+    const pitch = autoPitch(p, o.cost, [o.uid]);
     if (pitch === null) continue;
     const a: Action = o.kind === 'card'
       ? { type: 'play', uid: o.uid, pitch, optional: decideOptional(s, p, o.uid, pitch) }
