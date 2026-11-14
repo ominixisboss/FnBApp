@@ -239,6 +239,8 @@ export function findInst(s: GameState, uid: number): { p: PlayerState; zone: str
     const pm = p.permanents.find((e) => e.inst.uid === uid);
     if (pm) return { p, zone: 'permanent', inst: pm.inst };
   }
+  const l = s.chain.find((x) => x.inst.uid === uid);
+  if (l) return { p: s.players[l.attacker], zone: 'chain', inst: l.inst };
   return null;
 }
 
@@ -559,9 +561,11 @@ function doOrderTriggers(s: GameState, order: number[]) {
 }
 
 /** Run `p`'s permanents', equipment's and weapons' abilities that wait for `on` ("whenever you boost, ..."). */
-function fireTriggers(s: GameState, p: PlayerState, on: TriggerEvent, link?: { inst: CardInst; fromWeapon: boolean }) {
+function fireTriggers(s: GameState, p: PlayerState, on: TriggerEvent, link?: { inst: CardInst; fromWeapon: boolean }, createdBefore?: number) {
   if (p.eliminated) return;
-  const srcs = [...p.permanents.map((pm) => pm.inst), ...p.equipment.filter((e) => !e.destroyed).map((e) => e.inst), ...p.weapons.map((w) => w.inst)];
+  // a card created after the event (a Runechant made while the attack started) doesn't see it
+  const srcs = [...p.permanents.map((pm) => pm.inst), ...p.equipment.filter((e) => !e.destroyed).map((e) => e.inst), ...p.weapons.map((w) => w.inst)]
+    .filter((i) => createdBefore === undefined || i.uid < createdBefore);
   for (const inst of srcs) {
     const trs = getScript(cardOf(inst)).triggers;
     if (!trs) continue;
@@ -577,6 +581,12 @@ function fireTriggers(s: GameState, p: PlayerState, on: TriggerEvent, link?: { i
       resolveEffects(s, p, t.effects, inst);
     });
   }
+}
+
+/** Is it a <name> ("Gold", "Runechant"), or does it count as one ("This counts as a Gold")? */
+export function isA(inst: CardInst, name: string): boolean {
+  const c = cardOf(inst);
+  return c.name === name || getScript(c).countsAs === name;
 }
 
 function removePermanent(s: GameState, p: PlayerState, uid: number) {
@@ -765,7 +775,7 @@ function settleWagers(s: GameState, l: ChainLink) {
     log(s, winner.id, `${winner.name} wins the wager.`);
     fireTriggers(s, winner, 'winWager');
     if (w.goldSwap) {
-      const gold = loser.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+      const gold = loser.permanents.filter((pm) => isA(pm.inst, 'Gold'));
       loser.permanents = loser.permanents.filter((pm) => !gold.includes(pm));
       winner.permanents.push(...gold);
       if (gold.length) log(s, winner.id, `${winner.name} gains control of ${gold.length} Gold from ${loser.name}.`);
@@ -845,7 +855,7 @@ function flipEvent(s: GameState, p: PlayerState) {
   if (!resolveEvent(s, p, id)) (s.eventDiscard ??= []).push(id);
 }
 
-const golds = (p: PlayerState) => p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+const golds = (p: PlayerState) => p.permanents.filter((pm) => isA(pm.inst, 'Gold'));
 const worstCard = (list: CardInst[]) => [...list].sort((a, b) => cardPlayValueLite(cardOf(a)) - cardPlayValueLite(cardOf(b)))[0];
 const pickOpts = (list: CardInst[]) => list.map((i) => ({ uid: i.uid, cardId: i.cardId }));
 
@@ -1026,6 +1036,13 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
     case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
     case 'pounce': pounce(s, s.players[_data![0]], p, picks); break;
     case 'graveEquip': if (yes) graveEquip(s, p, _data![0], _data![1]); break;
+    case 'powerOrGoAgain': {
+      const l = s.chain[_data![0]];
+      if (!l) break;
+      if (yes) { l.goAgain = true; log(s, p.id, `${cardOf(l.inst).name} gets go again.`); }
+      else { l.powerMod += _data![1]; log(s, p.id, `${cardOf(l.inst).name} gets +${_data![1]}{p} (${linkPower(l)}).`); }
+      break;
+    }
     case 'payOrWeaken': {
       const [li, amount, cost] = _data!;
       const l = s.chain[li];
@@ -1126,6 +1143,7 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'lastDraconic': { const prev = s.chain[s.chain.length - 2]; return !!prev && cardOf(prev.inst).types.includes('Draconic'); }
     case 'controls': return p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === cond.name.toLowerCase());
     case 'aurasAtLeast': return p.permanents.filter((pm) => has(cardOf(pm.inst), 'Aura')).length >= cond.n;
+    case 'rolledSix': return !!p.turn.flags.rolledSix;
     case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
     case 'attackingMarked': return opp.marked;
     case 'weaponAttacked': return !!p.turn.weaponAttacked;
@@ -1144,6 +1162,8 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'cheered': return (p.turn.cheers ?? 0) > 0;
     case 'booed': return (p.turn.boos ?? 0) > 0;
     case 'anotherRed': return p.turn.played.filter((id) => card(id).pitch === 1).length >= 2;
+    case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
+    case 'transcended': return !!p.turn.flags.transcended;
     case 'emptyHand': return p.hand.length === 0;
     case 'emptyDeck': return p.deck.length === 0;
     case 'boostedTimes': return (p.turn.flags.boosts ?? 0) >= cond.n;
@@ -1233,7 +1253,7 @@ function decomposePick(p: PlayerState, earth: number): CardInst[] | null {
 
 function ownMatches(c: Card, cost: OptionalCost['cost']): boolean {
   if (cost.kind !== 'destroyOwn') return false;
-  if (cost.name) return c.name.toLowerCase() === cost.name.toLowerCase();
+  if (cost.name) return c.name.toLowerCase() === cost.name.toLowerCase() || getScript(c).countsAs?.toLowerCase() === cost.name.toLowerCase();
   return !!cost.type && c.types.includes(cost.type);
 }
 
@@ -1395,6 +1415,12 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
   }
 }
 
+/** Does `p`'s hero's activated ability have {t} in its cost ("Instant - {r}, {t}: ...")? */
+function heroAbilityTaps(p: PlayerState): boolean {
+  const h = cardOf(p.hero);
+  return /(?:^|\n)(?:once per turn )?(?:action|instant|attack reaction|defense reaction)\s*[-–][^:\n]*\{t\}/i.test(h.text);
+}
+
 /** An untapped cog / ally `p` controls, or the card `uid` itself ('this'): a permanent, equipment or weapon. */
 function untappedOwn(p: PlayerState, what: 'cog' | 'ally' | 'this', uid: number): { inst: CardInst; tapped?: boolean; usedThisTurn?: boolean } | undefined {
   if (what === 'this') {
@@ -1411,6 +1437,10 @@ function tapThing(s: GameState, p: PlayerState, t: { inst: CardInst; tapped?: bo
   else t.tapped = true;
   log(s, p.id, `${p.name} taps ${cardOf(t.inst).name}.`, RULES.tap);
 }
+
+/** How a bot decides a "you may <cost>. If you do, <then>" (set by the AI module; without it bots pay when they can). */
+let botMayJudge: ((s: GameState, p: PlayerState, e: Extract<Effect, { kind: 'mayThen' }>, src: CardInst) => boolean) | null = null;
+export function setBotMayJudge(fn: typeof botMayJudge) { botMayJudge = fn; }
 
 /** "You may <cost>. If you do, <then>": can it be paid, and pay it (the ability's card is `src`). */
 function mayPayable(p: PlayerState, cost: OptionalCostKind, src: CardInst): boolean {
@@ -1473,7 +1503,7 @@ export function effectiveCost(s: GameState, p: PlayerState, c: Card): number {
   const sc = getScript(c);
   let less = 0;
   if (sc.costLessPer === 'draconicLink') less = s.chain.filter((l) => l.attacker === p.id && cardOf(l.inst).types.includes('Draconic')).length;
-  else if (sc.costLessPer) less = p.permanents.filter((pm) => cardOf(pm.inst).name === sc.costLessPer).length;
+  else if (sc.costLessPer) less = p.permanents.filter((pm) => isA(pm.inst, sc.costLessPer!)).length;
   if (sc.costLessIf && p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === sc.costLessIf!.toLowerCase())) less += 1;
   less -= ability(p)?.cardCostMod?.(heroCtx(s, p), c) ?? 0;
   for (const e of p.effects) if (e.kind === 'costLess' && matchesFilter(e.filter, { inst: { uid: -1, cardId: c.id, owner: p.id }, fromWeapon: false })) less += e.amount;
@@ -1553,7 +1583,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     out.push({ uid: g.uid, kind: 'card', index: 0, cost, label: `${c.name} (from graveyard)` });
   }
   // Rune Gate: with Runechants at least equal to its cost, play it from your banished zone without paying its cost
-  const runechants = p.permanents.filter((pm) => cardOf(pm.inst).name === 'Runechant').length;
+  const runechants = p.permanents.filter((pm) => isA(pm.inst, 'Runechant')).length;
   for (const b of p.banished) {
     const c = cardOf(b);
     if (!getScript(c).runeGate || fromBanished.includes(b) || runechants < costOf(c) || !timingOk(s, pid, c)) continue;
@@ -1577,13 +1607,16 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     ...p.weapons.map((w) => ({ inst: w.inst, used: w.usedThisTurn })),
     ...p.equipment.filter((e) => !e.destroyed).map((e) => ({ inst: e.inst, used: e.usedThisTurn })),
     ...p.permanents.map((pm) => ({ inst: pm.inst, used: false, perm: true })),
+    // the attack card on the active chain link: its "Instant - ...: This gets +1{p}" abilities
+    ...(() => { const l = currentLink(s); return l && l.attacker === pid && !l.fromWeapon && l.damage === null ? [{ inst: l.inst, used: false, perm: true, chain: true }] : []; })(),
   ];
   for (const src of sources) {
     const sc = getScript(cardOf(src.inst));
     sc.activations.forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
       // an ally's (or other permanent's) once-per-turn ability; allies attack only during your action phase
-      if (a.oncePerTurn && 'perm' in src && !a.tapSelf && p.turn.flags[`act${src.inst.uid}:${index}`]) return;
+      if (a.oncePerTurn && 'perm' in src && !a.tapSelf && (p.turn.flags[`act${src.inst.uid}:${index}`] ?? 0) >= (a.perTurn ?? 1)) return;
+      if ('chain' in src && !a.instant) return;
       if (a.attack && sc.attackIfWeapon && !p.turn.weaponAttacked) return;
       if (a.tapSelf && !untappedOwn(p, 'this', src.inst.uid)) return;
       if (a.tapHero && p.heroTapped) return;
@@ -1599,8 +1632,10 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   }
   // hero abilities
   const ab = ability(p);
+  const heroTaps = heroAbilityTaps(p);
   ab?.activations?.forEach((a, i) => {
-    if (a.oncePerTurn && p.turn.flags[`hero${i}`]) return;
+    // a hero ability with {t} in its cost: usable while the hero is untapped (an untap effect lets it go again)
+    if (heroTaps ? p.heroTapped : a.oncePerTurn && p.turn.flags[`hero${i}`]) return;
     if (a.instant) {
       if (!['action', 'reaction'].includes(s.phase)) return;
     } else if (s.phase !== 'action' || s.turnPlayer !== pid || p.actionPoints < 1 || s.stack?.length) return;
@@ -1739,6 +1774,11 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   const zone = fromArsenal ? p.arsenal : fromBanished ? p.banished : fromGrave ? p.graveyard : p.hand;
   const c = cardOf(zone.find((h) => h.uid === uid)!);
   const sc = getScript(c);
+  // Meld: the Action half (and the meld) needs an action; otherwise only the Instant half can be played
+  if (sc.meldAction && mode !== 1 && !(s.phase === 'action' && !s.stack?.length && s.turnPlayer === pid && p.actionPoints > 0)) {
+    mode = 1;
+    log(s, pid, `Only ${sc.modes[1]?.label ?? 'the instant half'} of ${c.name} can be played now.`);
+  }
   // optional cost ("you may ... If you do, ..."): validate before paying anything
   const oc = optional?.accept && sc.optional && sc.optional.timing !== 'defend' ? sc.optional : undefined;
   if (oc && !optionalPayable(p, oc, uid)) throw new Error('You can’t pay that optional cost.');
@@ -1785,7 +1825,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   // a cost reduction for "your next ... card" is used up by this card
   const cl = p.effects.findIndex((e) => e.kind === 'costLess' && matchesFilter(e.filter, { inst, fromWeapon: false }));
   if (cl >= 0) p.effects.splice(cl, 1);
-  const isAction = has(c, 'Action') && !has(c, 'Instant');
+  const isAction = (has(c, 'Action') && !has(c, 'Instant')) || (!!sc.meldAction && mode !== 1);
   if (s.phase === 'action' && isAction) p.actionPoints -= 1;
   if (has(c, 'Action')) p.turn.flags.costMore = 0; // "their first action during their next turn costs an additional {r}"
   log(s, pid, `${p.name} plays ${c.name}${fromArsenal ? ' from arsenal' : fromBanished ? ' from the banished zone' : ''}.`);
@@ -1816,7 +1856,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
   const pid = p.id;
   const c = cardOf(inst);
   const sc = getScript(c);
-  const isAction = has(c, 'Action') && !has(c, 'Instant');
+  const isAction = (has(c, 'Action') && !has(c, 'Instant')) || (!!sc.meldAction && mode !== 1);
   const chosen = sc.modes[mode];
   if (has(c, 'Attack') && has(c, 'Action')) {
     startAttack(s, p, inst, false, fromArsenal, chosen, oc ? { oc, used: optUsed } : undefined);
@@ -1941,6 +1981,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     pay(s, p, opt.cost, pitch);
     if (!a.instant) p.actionPoints -= 1;
     p.turn.flags[`hero${index - HERO_INDEX}`] = 1;
+    if (heroAbilityTaps(p)) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     inst = p.hero;
     label = `${cardOf(p.hero).name}: ${a.label}`;
     log(s, pid, `${p.name} activates ${label}.`);
@@ -1955,7 +1996,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     if (w && a.oncePerTurn) w.usedThisTurn = true;
     const e = p.equipment.find((e) => e.inst.uid === uid);
     if (e && a.oncePerTurn) e.usedThisTurn = true;
-    if (a.oncePerTurn && p.permanents.some((pm) => pm.inst.uid === uid)) p.turn.flags[`act${uid}:${index}`] = 1;
+    if (a.oncePerTurn && (p.permanents.some((pm) => pm.inst.uid === uid) || s.chain.some((l) => l.inst.uid === uid))) p.turn.flags[`act${uid}:${index}`] = (p.turn.flags[`act${uid}:${index}`] ?? 0) + 1;
     if (a.tapSelf) { const t = untappedOwn(p, 'this', uid); if (t) tapThing(s, p, t); }
     if (a.tapHero) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     if (a.tapCog) { const t = untappedOwn(p, 'cog', uid); if (t) tapThing(s, p, t); }
@@ -2008,6 +2049,7 @@ function resolveActivation(s: GameState, p: PlayerState, inst: CardInst, index: 
 }
 
 function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: boolean, fromArsenal: boolean, mode?: Mode, optional?: { oc: OptionalCost; used: Card | null }) {
+  const firstNewUid = s.nextUid;
   const c = cardOf(inst);
   const sc = getScript(c);
   // an ally attacks with its own power and stays in the arena (like a weapon), but it isn't a weapon attack
@@ -2053,9 +2095,6 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   const target = s.players[link.defender];
   target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;
   for (const pl of s.players) if (pl.id !== p.id && pl.id !== link.defender && !pl.eliminated) ability(pl)?.onOtherAttack?.(heroCtx(s, pl), link);
-  // "when you play an attack action card / activate a weapon attack" abilities (the attack is on the chain now)
-  if (weapon || (!fromWeapon && has(c, 'Attack') && has(c, 'Action'))) fireTriggers(s, p, weapon ? 'weaponAttack' : 'playAttackAction', link);
-  if (!s.chain.includes(link) || (s.phase as string) === 'gameOver') return;
   // pending "next attack" effects
   const grantedOnAttack: Effect[] = [];
   p.effects = p.effects.filter((e) => {
@@ -2065,7 +2104,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     if (e.kind === 'turnAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return true; }
     if (e.kind === 'turnAttackDominate') { link.dominate = true; return true; }
     if (e.kind === 'turnAttackGoAgain' && matchesFilter(e.filter, link)) { link.goAgain = true; return true; }
-    if (e.kind === 'nextAttackGoldPower') { const g = p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold').length; link.powerMod += g; if (g) log(s, p.id, `${c.name} gets +${g}{p} for ${p.name}'s Gold (${e.source}).`); return false; }
+    if (e.kind === 'nextAttackGoldPower') { const g = p.permanents.filter((pm) => isA(pm.inst, 'Gold')).length; link.powerMod += g; if (g) log(s, p.id, `${c.name} gets +${g}{p} for ${p.name}'s Gold (${e.source}).`); return false; }
     if (e.kind === 'nextAttackOnHit' && matchesFilter(e.filter, link)) { link.extraOnHit = [...link.extraOnHit, ...e.effects]; return false; }
     if (e.kind === 'nextAttackOnAttack' && matchesFilter(e.filter, link)) { grantedOnAttack.push(...e.effects); return false; }
     return true;
@@ -2074,12 +2113,21 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
     const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (name === 'Runechant') { destroy(); if (dealDamage(s, link.defender!, 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true; }
+    if (isA(pm.inst, 'Runechant')) {
+      // a card that counts as a Runechant ("Runechant of Envy") is usurped: its own payoff too
+      const usurp = name !== 'Runechant' ? getScript(cardOf(pm.inst)).onUsurp : undefined;
+      if (usurp?.length) { log(s, p.id, `${c.name} usurps ${name}.`); resolveEffects(s, p, usurp, pm.inst); }
+      if (p.permanents.includes(pm)) destroy();
+      if (dealDamage(s, link.defender!, 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true;
+    }
     else if (name === 'Quicken') { destroy(); link.goAgain = true; }
     else if (name === 'Courage') { destroy(); link.powerMod += 1; }
     else if (name === 'Embodiment of Lightning' && !fromWeapon) { destroy(); link.goAgain = true; }
     else if (name === 'Blade Dance' && weapon) { destroy(); link.goAgain = true; }
   }
+  // "when you play an attack action card / activate a weapon attack" abilities (the attack is on the chain now; Runechants went first)
+  if (weapon || (!fromWeapon && has(c, 'Attack') && has(c, 'Action'))) fireTriggers(s, p, weapon ? 'weaponAttack' : 'playAttackAction', link, firstNewUid);
+  if (!s.chain.includes(link) || (s.phase as string) === 'gameOver') return;
   if (!fromWeapon) {
     resolveEffects(s, p, sc.onPlay, inst);
     if (mode) resolveEffects(s, p, mode.onPlay, inst);
@@ -2359,6 +2407,8 @@ function resolveDamage(s: GameState) {
 }
 
 function closeChain(s: GameState) {
+  // "When the combat chain closes, if this didn't hit, the defending hero creates a <X> token"
+  for (const l of s.chain) { const t = getScript(cardOf(l.inst)).closeMissToken; if (t && !l.hit && !l.fromWeapon) createToken(s, s.players[defenderOf(l)], t, 1); }
   if (s.chain.length) for (const pl of s.players) fireTriggers(s, pl, 'chainClose');
   for (const l of s.chain) {
     if (l.fromWeapon) continue;
@@ -2575,6 +2625,12 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount + amp} arcane damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount + amp, arcane: true, source: srcName } });
           break;
         }
+        if (e.all) {
+          let total = 0;
+          for (const t of s.players.filter((q) => q.id !== p.id && !q.eliminated)) total += dealDamage(s, t.id, e.amount + amp, true, srcName);
+          p.turn.flags.lastArcane = total; if (total > 0) p.turn.arcaneDealt = true;
+          break;
+        }
         { const dealt = dealDamage(s, opp.id, e.amount + amp, true, srcName); p.turn.flags.lastArcane = dealt; if (dealt > 0) p.turn.arcaneDealt = true; }
         break;
       }
@@ -2585,10 +2641,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount} damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount, arcane: false, source: srcName } });
           break;
         }
-        dealDamage(s, opp.id, e.amount, false, srcName);
+        for (const t of e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [opp]) dealDamage(s, t.id, e.amount, false, srcName);
         break;
       case 'gainLife': p.life += e.amount; log(s, p.id, `${p.name} gains ${e.amount} life (${p.life}).`); ability(p)?.onGainLife?.(heroCtx(s, p), e.amount); break;
-      case 'loseLifeOpp': opp.life -= e.amount; log(s, opp.id, `${opp.name} loses ${e.amount} life (${opp.life}).`); break;
+      case 'loseLifeOpp':
+        for (const t of e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [opp]) { t.life -= e.amount; log(s, t.id, `${t.name} loses ${e.amount} life (${t.life}).`); }
+        checkWin(s);
+        break;
       case 'draw': draw(s, p, e.amount); log(s, p.id, `${p.name} draws ${e.amount} card${e.amount > 1 ? 's' : ''}.`); break;
       case 'gainResource': p.resources += e.amount; break;
       case 'nextAttackPower':
@@ -2644,8 +2703,16 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         cleanseName(s, p, t, e.n, cardOf(best[0]).name, srcName);
         break;
       }
-      case 'oppDraw': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); break; }
-      case 'oppCreateToken': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; createToken(s, t, e.name, 1); break; }
+      case 'oppDraw': {
+        const ts = e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp];
+        for (const t of ts) { draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); }
+        break;
+      }
+      case 'oppCreateToken': {
+        const ts = e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp];
+        for (const t of ts) createToken(s, t, e.name, 1);
+        break;
+      }
       case 'weaponsPowerTurn': {
         p.turn.flags.weaponBonus = (p.turn.flags.weaponBonus ?? 0) + e.amount;
         if (l && l.fromWeapon && !l.ally && l.attacker === p.id) l.powerMod += e.amount;
@@ -2747,6 +2814,34 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       }
       case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName, thenToken: e.thenToken }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
+      case 'oppMill': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        for (let i = 0; i < e.amount; i++) { const x = t.deck.shift(); if (x) { t.graveyard.push(x); log(s, t.id, `${cardOf(x).name} is destroyed from the top of ${t.name}'s deck.`); } }
+        break;
+      }
+      case 'ifOppClass': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        if (cardOf(t.hero).types.includes(e.cls)) resolveEffects(s, p, e.then, src);
+        break;
+      }
+      case 'banishOppSoul': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const x = (t.soul ?? []).shift();
+        if (x) { t.banished.push(x); log(s, t.id, `${cardOf(x).name} is banished from ${t.name}'s soul.`); banishedFromOpp(s, p, x); }
+        break;
+      }
+      case 'oppDestroyPerm': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const pm = [...t.permanents].filter((x) => has(cardOf(x.inst), e.type) && (!e.name || cardOf(x.inst).name.toLowerCase() === e.name.toLowerCase())).sort((a, b) => Number(cardOf(b.inst).cost ?? 0) - Number(cardOf(a.inst).cost ?? 0))[0];
+        if (pm) { log(s, p.id, `${srcName} destroys ${t.name}'s ${cardOf(pm.inst).name}.`); removePermanent(s, t, pm.inst.uid); }
+        break;
+      }
+      case 'banishOppGrave': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const g = t.graveyard.pop();
+        if (g) { t.banished.push(g); log(s, t.id, `${cardOf(g).name} is banished from ${t.name}'s graveyard.`); banishedFromOpp(s, p, g); }
+        break;
+      }
       case 'banishTopOpp':
         for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
         break;
@@ -2803,6 +2898,34 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'rollDie': {
+        const n = 1 + Math.floor(rand(s) * 6);
+        if (n === 6) p.turn.flags.rolledSix = 1;
+        log(s, p.id, `${srcName}: ${p.name} rolls a ${n}.`);
+        for (const r of e.then) {
+          const half = Math.floor(n / 2);
+          if (r.kind === 'resources') { p.resources += r.half ? half : n; log(s, p.id, `${p.name} gains ${r.half ? half : n} resource${(r.half ? half : n) === 1 ? '' : 's'}.`); }
+          else if (r.kind === 'actionPoints') { p.actionPoints += r.half ? half : n; log(s, p.id, `${p.name} gains ${r.half ? half : n} action point${(r.half ? half : n) === 1 ? '' : 's'}.`); }
+          else if (r.kind === 'prevent') p.effects.push({ kind: 'preventNext', amount: n, source: srcName });
+          else if (r.kind === 'thisPower') { const link = s.chain.find((x) => x.inst.uid === src.uid); if (link) { link.powerMod += n; log(s, p.id, `${srcName} gets +${n}{p} (${linkPower(link)}).`); } }
+          else if (r.kind === 'nextAttackPower') p.effects.push({ kind: 'nextAttackPower', amount: n, filter: r.filter, source: srcName });
+          else if (r.kind === 'ifAtLeast' && n >= r.min) resolveEffects(s, p, r.effects, src);
+        }
+        break;
+      }
+      case 'transcend':
+        p.turn.flags.transcended = 1;
+        log(s, p.id, `${srcName} transcends.`, 'Transcend: the card turns over. "If you\u2019ve transcended this turn" effects now apply.');
+        fireTriggers(s, p, 'transcend');
+        break;
+      case 'powerOrGoAgain': {
+        const link = s.chain.find((x) => x.inst.uid === src.uid);
+        if (!link) break;
+        if (link.goAgain) { link.powerMod += e.amount; log(s, p.id, `${srcName} gets +${e.amount}{p} (${linkPower(link)}).`); break; }
+        if (p.isBot) { link.goAgain = true; log(s, p.id, `${srcName} gets go again.`); break; }
+        ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: go again? (No: +${e.amount}{p} instead)`, options: [{ uid: src.uid, cardId: src.cardId }], resume: { type: 'event', key: 'powerOrGoAgain', data: [s.chain.indexOf(link), e.amount] } });
+        break;
+      }
       case 'counterUpkeep': case 'removeCounter': {
         const pm = p.permanents.find((x) => x.inst.uid === src.uid);
         if (!pm) break;
@@ -2866,7 +2989,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         if (p.isBot) {
           // a sturdy piece of equipment is worth more as a blocker than most of these payoffs
           const eq = e.cost.kind === 'destroySelf' ? p.equipment.find((x) => x.inst.uid === src.uid) : undefined;
-          if (eq && equipDefense(eq) >= 2) { log(s, p.id, `${srcName}: ${p.name} keeps it.`); break; }
+          if (botMayJudge ? !botMayJudge(s, p, e, src) : eq && equipDefense(eq) >= 2) { log(s, p.id, `${srcName}: ${p.name} doesn't ${e.text.split(' to ')[0]}.`); break; }
           payMay(s, p, e.cost, src); log(s, p.id, `${srcName}: ${p.name} chooses to ${e.text}.`); resolveEffects(s, p, e.then, src); break;
         }
         ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: ${e.text}?`, options: [{ uid: src.uid, cardId: src.cardId }], resume: { type: 'mayThen', cost: e.cost, then: e.then, src, text: e.text } });
@@ -2904,7 +3027,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       }
       case 'stealGold': {
-        const gold = (pl: PlayerState) => pl.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold');
+        const gold = (pl: PlayerState) => pl.permanents.filter((pm) => isA(pm.inst, 'Gold'));
         if (gold(opp).length > gold(p).length) {
           const g = gold(opp)[0];
           opp.permanents = opp.permanents.filter((pm) => pm !== g);

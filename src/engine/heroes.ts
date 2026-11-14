@@ -3,6 +3,7 @@
 import type { Card } from '../data/types';
 import { card, findCard, has } from '../data/cardDb';
 import type { CardInst, ChainLink, GameState, PlayerState } from './types';
+import { getScript } from './cardScript';
 
 /** Engine operations a hero ability may use (provided by game.ts to avoid import cycles). */
 export interface HeroApi {
@@ -706,7 +707,7 @@ HERO_ABILITIES.push(
 
 const earthBanished = (p: PlayerState) => p.banished.filter((b) => cardOf(b).types.includes('Earth')).length;
 const isNonAttackAction = (c: Card) => has(c, 'Action') && !has(c, 'Attack');
-const goldCount = (p: PlayerState) => p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold').length;
+const goldCount = (p: PlayerState) => p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold' || getScript(cardOf(pm.inst)).countsAs === 'Gold').length;
 /** search your deck for the best card with combo, banish it, and let it be played this turn */
 function comboToBanish(p: PlayerState, api: HeroApi) {
   const i = p.deck.findIndex((d) => /combo/i.test(cardOf(d).text) || cardOf(d).keywords.includes('Combo'));

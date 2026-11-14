@@ -102,9 +102,9 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,795 |
-| Partly automated | ~1,365 |
-| Stats only (text not automated) | ~1,655 |
+| Fully automated | ~1,880 |
+| Partly automated | ~1,355 |
+| Stats only (text not automated) | ~1,580 |
 
 The cards people actually play come first: 92% of the card copies in the bots' meta decklists are fully automated (including Guardian crush payoffs, Frontline and Adversity equipment, Ninja combo grants and Enlightened Strike).
 

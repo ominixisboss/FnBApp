@@ -6,7 +6,7 @@ import { getScript } from '../engine/cardScript';
 import { applyAction, createGame, currentLink, defendOptions, HAND_INDEX, linkPower, playOptions } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import type { GameState } from '../engine/types';
-import { decideOptional } from '../ai/bot';
+import { chooseAction, decideOptional } from '../ai/bot';
 
 const filler = () => findCard('Wounding Blow', 3)!.id;
 const legal = (c: Card) => c.legal.includes('blitz') || c.legal.includes('cc');
@@ -320,5 +320,143 @@ describe('ally attacks', () => {
     for (let i = 0; i < 4 && !currentLink(s); i++) s = applyAction(s, s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
     expect(currentLink(s)?.ally).toBe(true);
     expect(playOptions(s, 0).some((o) => o.uid === 9994 && o.kind === 'activation')).toBe(false);
+  });
+});
+
+describe('tapped heroes', () => {
+  it('a hero ability with {t} in its cost needs an untapped hero, and using it taps the hero', () => {
+    const hero = getDb().cards.find((x) => x.types.includes('Hero') && x.text.startsWith('Instant - {t}: Pitch the top card of your deck'))!;
+    expect(hero).toBeDefined();
+    const mk = (): DeckList => ({ heroId: hero.id, weaponIds: [], equipmentIds: [], cardIds: Array(30).fill(filler()) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk() }, { name: 'P1', isBot: false, deck: mk() }], 3));
+    s.turnPlayer = 0; s.priority = 0;
+    const heroOpt = () => playOptions(s, 0).find((o) => o.uid === s.players[0].hero.uid);
+    expect(heroOpt()).toBeDefined();
+    s.players[0].heroTapped = true;
+    expect(heroOpt()).toBeUndefined();
+    s.players[0].heroTapped = false;
+    s = applyAction(s, { type: 'activate', uid: s.players[0].hero.uid, index: heroOpt()!.index, pitch: [] });
+    expect(s.players[0].heroTapped).toBe(true);
+  });
+});
+
+describe('abilities of the attacking card', () => {
+  it('"Once per Turn Instant - {t} a cog you control: This gets +1{p} or go again" works on the chain', () => {
+    const c = findCard('Cloud Skiff')!;
+    let s = game([c.id]);
+    s.players[0].permanents.push({ inst: { uid: 9993, cardId: findCard('Copper Cog')!.id, owner: 0 }, ward: 0 });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    const l = currentLink(s)!;
+    const opt = playOptions(s, s.priority).find((o) => o.uid === l.inst.uid && o.kind === 'activation');
+    expect(opt).toBeDefined();
+    const power = linkPower(l);
+    s = applyAction(s, { type: 'activate', uid: l.inst.uid, index: opt!.index, pitch: [] });
+    while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9993)?.tapped).toBe(true);
+    const yes = s.pendingChoices?.length ? applyAction(s, { type: 'choose', yes: false }) : s;
+    expect(linkPower(currentLink(yes)!) > power || currentLink(yes)!.goAgain).toBe(true);
+    expect(playOptions(yes, yes.priority).some((o) => o.uid === l.inst.uid && o.kind === 'activation')).toBe(false);
+  });
+});
+
+describe('attack cards on the chain', () => {
+  it('"When the combat chain closes, if this didn\'t hit, the defending hero creates a token"', () => {
+    const c = getDb().cards.find((x) => legal(x) && !!getScript(x).closeMissToken && Number(x.cost ?? 0) <= 3)!;
+    expect(c).toBeDefined();
+    const token = getScript(c).closeMissToken!;
+    let s = game([c.id], [filler(), filler(), filler(), filler()]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s.players[1].life = 40;
+    const blockers = s.players[1].hand.map((h) => h.uid);
+    s = applyAction(s, { type: 'defend', uids: blockers });
+    for (let i = 0; i < 6 && s.chain.length; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.log.some((x) => x.text === `P1 creates a ${token} token.`)).toBe(true);
+  });
+});
+
+describe('meld and transcend', () => {
+  it('a meld card plays its left half, its right half, or both', () => {
+    const c = findCard('Arcane Seeds // Life')!;
+    expect(getScript(c).modes.length).toBe(3);
+    const run = (mode: number) => {
+      let s = game([c.id]);
+      const life = s.players[0].life;
+      s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [], mode });
+      while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+      const runes = s.players[0].permanents.filter((p) => findCard('Runechant')!.name === getDb().cards.find((x) => x.id === p.inst.cardId)?.name).length;
+      return { runes, life: s.players[0].life - life, ap: s.players[0].actionPoints };
+    };
+    expect(run(0)).toEqual({ runes: 2, life: 0, ap: 1 }); // Arcane Seeds: an action with go again
+    expect(run(1)).toEqual({ runes: 0, life: 1, ap: 1 }); // Life: an instant, no action point used
+    expect(run(2)).toEqual({ runes: 2, life: 1, ap: 1 });
+  });
+  it('"If you\'ve played another blue card this turn, transcend" turns on "if you\'ve transcended" payoffs', () => {
+    const sc = getScript(findCard('Homage to Ancestors')!);
+    expect(sc.conditional.some((k) => k.cond?.kind === 'anotherBlue' && k.effects[0]?.kind === 'transcend')).toBe(true);
+    expect(getScript(findCard('Moon Chakra')!).conditional.some((k) => k.when === 'instead' && k.cond?.kind === 'transcended')).toBe(true);
+  });
+});
+
+describe('counts as', () => {
+  it('"This counts as a Runechant": an attack usurps it (its payoff) and it deals 1 arcane like a Runechant', () => {
+    const c = findCard('Runechant of Pride')!;
+    expect(getScript(c).countsAs).toBe('Runechant');
+    let s = game([filler()]);
+    s.players[0].permanents.push({ inst: { uid: 9992, cardId: c.id, owner: 0 }, ward: 0 });
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    expect(linkPower(l)).toBe(Number(findCard('Wounding Blow', 3)!.power) + 1);
+    expect(s.players[1].life).toBe(life - 1);
+    expect(s.players[0].permanents.some((p) => p.inst.uid === 9992)).toBe(false);
+    expect(s.players[0].permanents.some((p) => getDb().cards.find((x) => x.id === p.inst.cardId)?.name === 'Runechant')).toBe(true);
+  });
+  it('"This counts as a Gold" is parsed', () => {
+    expect(getDb().cards.some((x) => getScript(x).countsAs === 'Gold')).toBe(true);
+  });
+});
+
+describe('dice', () => {
+  it('"Roll a 6 sided die. This gets +X{p}, where X is the number rolled" adds 1-6 power', () => {
+    const c = findCard('Reckless Arithmetic')!;
+    expect(getScript(c).onAttack.some((e) => e.kind === 'rollDie' && e.then.length === 1)).toBe(true);
+    let s = game([c.id]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    const rolled = Number(s.log.find((x) => /rolls a \d/.test(x.text))!.text.match(/rolls a (\d)/)![1]);
+    expect(rolled).toBeGreaterThanOrEqual(1);
+    expect(linkPower(l)).toBe(Number(c.power) + rolled);
+  });
+  it('"Gain action points equal to half the number rolled" and "If you\'ve rolled a 6" parse', () => {
+    expect(getScript(findCard('Reckless Charge')!).coverage).toBe('full');
+    expect(getScript(findCard('Bone Head Barrier')!).coverage).toBe('full');
+  });
+});
+
+describe('bots and the new mechanics', () => {
+  it('a bot attacks with its ally when it has nothing better to do', () => {
+    let s = game([]);
+    s.players[0].isBot = true; s.players[0].difficulty = 'hard';
+    s.players[0].permanents.push({ inst: { uid: 9991, cardId: findCard('Barnacle')!.id, owner: 0 }, ward: 0 });
+    const a = chooseAction(s, 0).action;
+    expect(a.type).toBe('activate');
+    expect(a.type === 'activate' && a.uid).toBe(9991);
+  });
+  it('a bot doesn\'t destroy sturdy equipment for a small payoff', () => {
+    let s = game([filler()]);
+    s.players[0].isBot = true;
+    const crackers = findCard('Aether Crackers')!;
+    s.players[0].equipment.push({ inst: { uid: 9990, cardId: crackers.id, owner: 0 }, defenseMod: 2, destroyed: false, usedThisTurn: false });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    for (let i = 0; i < 3 && s.chain.length; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.log.some((x) => /Aether Crackers/.test(x.text))).toBe(true);
+    expect(s.players[0].equipment.find((e) => e.inst.uid === 9990)?.destroyed).toBe(false);
   });
 });
