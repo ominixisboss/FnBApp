@@ -60,7 +60,8 @@ function withInventory(pool: DeckList, chosen?: DeckList): DeckList {
 }
 
 /** Games from a draft/sealed table use the deck the server holds for you; this placeholder is replaced there. */
-export const TABLE_DECK = { heroId: '', weaponIds: [], equipmentIds: [], cardIds: [] };
+export { TABLE_DECK } from '../../online/tableDeck';
+import { TABLE_DECK } from '../../online/tableDeck';
 
 export default function PlayPage({ preselect, tutorial }: { preselect?: string; tutorial?: boolean }) {
   const hashParts = location.hash.slice(1).split('/');

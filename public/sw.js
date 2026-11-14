@@ -25,7 +25,7 @@ async function shell(req) {
       await cache.put(req, res.clone());
       // old builds' files pile up after updates: keep the newest ones only
       const old = (await cache.keys()).filter((k) => k.url.includes('/assets/'));
-      for (let i = 0; i < old.length - 40; i++) await cache.delete(old[i]);
+      for (let i = 0; i < old.length - 90; i++) await cache.delete(old[i]); // room for two builds of every page chunk
     }
     return res;
   }
