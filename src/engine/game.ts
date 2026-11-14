@@ -1143,6 +1143,7 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'lastDraconic': { const prev = s.chain[s.chain.length - 2]; return !!prev && cardOf(prev.inst).types.includes('Draconic'); }
     case 'controls': return p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === cond.name.toLowerCase());
     case 'aurasAtLeast': return p.permanents.filter((pm) => has(cardOf(pm.inst), 'Aura')).length >= cond.n;
+    case 'rolledSix': return !!p.turn.flags.rolledSix;
     case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
     case 'attackingMarked': return opp.marked;
     case 'weaponAttacked': return !!p.turn.weaponAttacked;
@@ -2893,6 +2894,21 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'rollDie': {
+        const n = 1 + Math.floor(rand(s) * 6);
+        if (n === 6) p.turn.flags.rolledSix = 1;
+        log(s, p.id, `${srcName}: ${p.name} rolls a ${n}.`);
+        for (const r of e.then) {
+          const half = Math.floor(n / 2);
+          if (r.kind === 'resources') { p.resources += r.half ? half : n; log(s, p.id, `${p.name} gains ${r.half ? half : n} resource${(r.half ? half : n) === 1 ? '' : 's'}.`); }
+          else if (r.kind === 'actionPoints') { p.actionPoints += r.half ? half : n; log(s, p.id, `${p.name} gains ${r.half ? half : n} action point${(r.half ? half : n) === 1 ? '' : 's'}.`); }
+          else if (r.kind === 'prevent') p.effects.push({ kind: 'preventNext', amount: n, source: srcName });
+          else if (r.kind === 'thisPower') { const link = s.chain.find((x) => x.inst.uid === src.uid); if (link) { link.powerMod += n; log(s, p.id, `${srcName} gets +${n}{p} (${linkPower(link)}).`); } }
+          else if (r.kind === 'nextAttackPower') p.effects.push({ kind: 'nextAttackPower', amount: n, filter: r.filter, source: srcName });
+          else if (r.kind === 'ifAtLeast' && n >= r.min) resolveEffects(s, p, r.effects, src);
+        }
+        break;
+      }
       case 'transcend':
         p.turn.flags.transcended = 1;
         log(s, p.id, `${srcName} transcends.`, 'Transcend: the card turns over. "If you\u2019ve transcended this turn" effects now apply.');

@@ -419,3 +419,21 @@ describe('counts as', () => {
     expect(getDb().cards.some((x) => getScript(x).countsAs === 'Gold')).toBe(true);
   });
 });
+
+describe('dice', () => {
+  it('"Roll a 6 sided die. This gets +X{p}, where X is the number rolled" adds 1-6 power', () => {
+    const c = findCard('Reckless Arithmetic')!;
+    expect(getScript(c).onAttack.some((e) => e.kind === 'rollDie' && e.then.length === 1)).toBe(true);
+    let s = game([c.id]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    const rolled = Number(s.log.find((x) => /rolls a \d/.test(x.text))!.text.match(/rolls a (\d)/)![1]);
+    expect(rolled).toBeGreaterThanOrEqual(1);
+    expect(linkPower(l)).toBe(Number(c.power) + rolled);
+  });
+  it('"Gain action points equal to half the number rolled" and "If you\'ve rolled a 6" parse', () => {
+    expect(getScript(findCard('Reckless Charge')!).coverage).toBe('full');
+    expect(getScript(findCard('Bone Head Barrier')!).coverage).toBe('full');
+  });
+});

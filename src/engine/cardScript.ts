@@ -74,6 +74,8 @@ export type Effect =
   | { kind: 'powerOrGoAgain'; amount: number }
   /** Transcend (a Mystic card turns over: "if you've transcended this turn" payoffs) */
   | { kind: 'transcend' }
+  /** "Roll a 6 sided die." and what the roll does ("Gain {r} equal to half the number rolled") */
+  | { kind: 'rollDie'; then: RollEffect[] }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -179,6 +181,7 @@ export type Condition =
   | { kind: 'controls'; name: string }
   | { kind: 'aurasAtLeast'; n: number }
   | { kind: 'anotherBlue' }
+  | { kind: 'rolledSix' }
   | { kind: 'attackingMarked' }
   | { kind: 'weaponAttacked' }
   | { kind: 'intimidated' }
@@ -443,6 +446,9 @@ export function parseEffect(raw: string): Effect[] | null {
   if (parts.length > 1) {
     const out: Effect[] = [];
     for (const p of parts) {
+      const rollPrev = out[out.length - 1];
+      const rf = rollPrev?.kind === 'rollDie' ? parseRollFollowUp(p) : null;
+      if (rf && rollPrev?.kind === 'rollDie') { rollPrev.then.push(rf); continue; }
       const pt = p.match(/^(?:if|the first time) you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token\.?$/i);
       const prev = out[out.length - 1];
       if (pt && prev?.kind === 'preventNext') { prev.thenToken = pt[1]; continue; }
@@ -658,6 +664,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^roll a 6 sided die$/i.test(s)) return [{ kind: 'rollDie', then: [] }];
   if (/^transcend$/i.test(s)) return [{ kind: 'transcend' }];
   if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];
   if ((m = s.match(/^destroy (?:an|target) (item|aura|ally)( token)? (?:they|that hero) controls?$/i))) return [{ kind: 'oppDestroyPerm', type: m[2] ? 'Token' : ({ item: 'Item', aura: 'Aura', ally: 'Ally' } as const)[m[1].toLowerCase() as 'item'] }];
@@ -723,6 +730,7 @@ export function parseCondition(raw: string): Condition | null {
   if ((m = t.match(/^you control (\d+) or more auras$/))) return { kind: 'aurasAtLeast', n: +m[1] };
   if ((m = t.match(/^you control (?:a|an) ([a-z' ]+)$/))) return { kind: 'controls', name: titleCase(m[1]) };
   if (/^you've played another blue card this turn$/.test(t)) return { kind: 'anotherBlue' };
+  if (/^you've rolled a 6 on a die this turn$/.test(t)) return { kind: 'rolledSix' };
   if (/^this is attacking a marked hero$/.test(t)) return { kind: 'attackingMarked' };
   if (/^you've attacked with a weapon this turn$/.test(t)) return { kind: 'weaponAttacked' };
   if (/^you've intimidated an opponent this turn$/.test(t)) return { kind: 'intimidated' };
@@ -1083,6 +1091,36 @@ function compile(c: Card): CardScript {
   return finish(sc, c);
 }
 
+/** what a die roll does */
+export type RollEffect =
+  | { kind: 'resources'; half: boolean }
+  | { kind: 'actionPoints'; half: boolean }
+  | { kind: 'prevent' }
+  | { kind: 'thisPower' }
+  | { kind: 'nextAttackPower'; filter: AttackFilter }
+  /** "If the number rolled is a 4, 5, or 6, <effects>" */
+  | { kind: 'ifAtLeast'; min: number; effects: Effect[] };
+
+/** "Gain {r} equal to half the number rolled, rounded down" and friends */
+function parseRollFollowUp(sent: string): RollEffect | null {
+  const t = sent.trim().replace(/\.$/, '');
+  let m: RegExpMatchArray | null;
+  if (/^gain \{r\} equal to half the number rolled, rounded down$/i.test(t)) return { kind: 'resources', half: true };
+  if (/^gain action points equal to half the number rolled, rounded down$/i.test(t)) return { kind: 'actionPoints', half: true };
+  if (/^prevent the next x damage that would be dealt to you this turn, where x is the number rolled$/i.test(t)) return { kind: 'prevent' };
+  if (/^this gets \+x\{p\}, where x is the number rolled$/i.test(t)) return { kind: 'thisPower' };
+  if ((m = t.match(/^your next (?:(\w+) )?attack this turn gets \+x\{p\}, where x (?:is )?the number rolled$/i))) {
+    const f = parseFilter(m[1] ?? '');
+    return f ? { kind: 'nextAttackPower', filter: f } : null;
+  }
+  if ((m = t.match(/^if the number rolled is (?:a )?((?:\d, )*\d,? or \d|\d or (?:higher|more)), (.+)$/i))) {
+    const min = Math.min(...(m[1].match(/\d/g) ?? ['7']).map(Number));
+    const e = parseEffect(m[2]);
+    return e ? { kind: 'ifAtLeast', min, effects: e } : null;
+  }
+  return null;
+}
+
 /** what a permanent's "when / whenever / at the beginning of ..." ability waits for */
 export type TriggerEvent =
   | 'startTurn' | 'actionPhase' | 'endPhase' | 'chainClose' | 'leaves'
@@ -1281,6 +1319,11 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if ((m = sent.match(/^while this is in your graveyard, at the start of your turn, you may destroy (\d+) silver you control\.?$/i))) { sc.graveEquip = +m[1]; return; }
   if (/^if you do, equip this\.?$/i.test(sent) && sc.graveEquip) return;
   if (/^when this is equipped from anywhere other than your graveyard, put a -1\{d\} counter on it\.?$/i.test(sent)) { sc.equipCounter = true; return; }
+  {
+    const rf = parseRollFollowUp(sent);
+    const host = rf && [...sc.onAttack, ...sc.onPlay, ...sc.activations.flatMap((a) => a.effects)].reverse().find((e) => e.kind === 'rollDie');
+    if (rf && host && host.kind === 'rollDie') { host.then.push(rf); return; }
+  }
   if ((m = sent.match(/^when an attack usurps this, (.+?)\.?$/i))) {
     const e = parseEffect(m[1].replace(/^it gets/i, 'the attack gets'));
     if (e) return void (sc.onUsurp ??= []).push(...e);
