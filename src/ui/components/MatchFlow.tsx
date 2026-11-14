@@ -1,6 +1,7 @@
 // Pre-game steps of a real match: choosing your loadout (equipment and cards from your pool, i.e. sideboarding)
 // and the die roll for who goes first.
 import { useEffect, useMemo, useState } from 'react';
+import { sfx } from '../sound';
 import { getDb } from '../../data/cardDb';
 import type { Card } from '../../data/types';
 import type { DeckList } from '../../engine/game';
@@ -109,6 +110,7 @@ export function DiceRoll({ names, chooser, onDone }: { names: string[]; chooser?
   const [face, setFace] = useState<number[]>(() => names.map(() => 0));
   useEffect(() => {
     if (chooser !== undefined) return;
+    sfx('dice');
     const spin = setInterval(() => setFace(names.map(() => Math.floor(Math.random() * 6))), 70);
     const stop = setTimeout(() => {
       clearInterval(spin);

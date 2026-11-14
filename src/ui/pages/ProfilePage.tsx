@@ -18,6 +18,7 @@ import { a11y, setA11y } from '../a11y';
 import { applyOrientation, isNative, orientationPref } from '../../native';
 import type { OrientationPref } from '../../native';
 import type { LeaderRow } from '../auth';
+import AudioSettings from '../components/AudioSettings';
 
 const heroName = (id: string) => getDb().byId.get(id)?.name ?? 'Unknown hero';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -214,6 +215,7 @@ export default function ProfilePage() {
         </>
       )}
 
+      <div className="panel col" style={{ gap: ".5rem" }}><b>🎚 Music &amp; sound</b><AudioSettings /></div>
       <AccessibilityPanel />
       {auth.user && auth.available && <NotificationsToggle />}
       {auth.user && auth.available && <FriendsManager />}

@@ -13,10 +13,12 @@ import { getScript } from '../../engine/cardScript';
 import { formatName } from '../../deck/deck';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
+import AudioSettings from './AudioSettings';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
-import { musicEnabled, setMusicEnabled, setMusicMood } from '../music';
+import type { SfxName } from '../sound';
+import { musicEnabled, musicSting, setMusicEnabled, setMusicMood } from '../music';
 import { applyOrientation, isNative, orientationPref } from '../../native';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
@@ -41,18 +43,48 @@ const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fa
 
 const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
+/** Sounds for what just happened: the board changes, plus what the new log lines say (at most a few at once). */
 function playSounds(a: GameState, b: GameState) {
-  if (b.phase === 'gameOver' && a.phase !== 'gameOver') return sfx(b.winner === HUMAN ? 'win' : 'lose');
+  if (b.phase === 'gameOver' && a.phase !== 'gameOver') {
+    sfx(b.winner === HUMAN ? 'win' : 'lose');
+    musicSting(b.winner === HUMAN ? 'victory' : 'defeat');
+    return;
+  }
+  const out: SfxName[] = [];
+  const add = (n: SfxName) => { if (!out.includes(n)) out.push(n); };
   const lifeLoss = Math.max(...b.players.map((p, i) => a.players[i].life - p.life));
-  if (lifeLoss >= 5) sfx('bigHit');
-  else if (lifeLoss > 0) sfx('hit');
-  if (b.chain.length > a.chain.length) sfx('play');
+  if (lifeLoss >= 5) add('bigHit');
+  else if (lifeLoss > 0) add('hit');
+  if (b.chain.length > a.chain.length) add('attack');
   const defA = a.chain[a.chain.length - 1]?.defenders.length ?? 0;
   const lastB = b.chain[b.chain.length - 1];
-  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA) sfx('block');
-  if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) sfx('pitch');
-  if (b.turn !== a.turn) sfx(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
-  else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) sfx('draw');
+  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA) add('block');
+  // what the log says happened
+  const fresh = b.log.length > a.log.length ? b.log.slice(a.log.length).map((e) => e.text) : [];
+  const said = (re: RegExp) => fresh.some((t) => re.test(t));
+  if (said(/is knocked out/)) add('knockout');
+  if (said(/^Event: /)) add('event');
+  if (said(/arcane damage/)) add('arcane');
+  if (said(/breaks \(blade break\)|is destroyed \(temper\)|is destroyed\.$|shatter/)) add('shatter');
+  if (said(/The crowd cheers/)) add('cheer');
+  if (said(/The crowd boos/)) add('boo');
+  if (said(/creates? (?:a|\d+) Gold|Gold token|wins the wager|steals/)) add('gold');
+  else if (said(/creates? .*token/)) add('token');
+  if (said(/gains? \d+ life|gain(?:s)? \d+\{h\}|\+\d+ life/)) add('lifeGain');
+  if (said(/has go again|gains an action point|gets go again/)) add('goAgain');
+  if (said(/Clash!|rolled|rolls/)) add('dice');
+  if (said(/shuffles/)) add('shuffle');
+  if (said(/is banished|banishes/)) add('banish');
+  if (said(/discards/)) add('discard');
+  if (b.stack?.length && (b.stack.length > (a.stack?.length ?? 0))) add('reaction');
+  if (b.players.some((p, i) => p.permanents.length > a.players[i].permanents.length) && !out.includes('token') && !out.includes('gold')) add('aura');
+  if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) add('pitch');
+  if (b.turn !== a.turn) {
+    add(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
+    if (b.turnPlayer === HUMAN && b.players[HUMAN].life <= 5) add('heartbeat');
+  } else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) add('draw');
+  // the most important few, slightly staggered so they don't smear together
+  out.slice(0, 3).forEach((n, i) => (i ? setTimeout(() => sfx(n), i * 90) : sfx(n)));
 }
 
 /** Vibration for the moments that matter to you: being hit, landing hits, blocking, playing, your turn. */
@@ -226,7 +258,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [choosePlay, setChoosePlay] = useState<PlayOption[] | null>(null);
   const [boostSel, setBoostSel] = useState<number[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
-  const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
+  const [drawer, setDrawer] = useState<'log' | 'manual' | 'audio' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
   const [pitchOrderOn, setPitchOrderOn] = useState(() => readSetting('pitchorder', false));
   // manual moves (sandbox): tap any card to move it anywhere
@@ -243,6 +275,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [sound, setSound] = useState(soundEnabled);
   const [music, setMusic] = useState(musicEnabled);
   useEffect(() => { setMusicMood('battle'); return () => setMusicMood('menu'); }, []);
+  // the music turns tense when someone is close to dying
+  const danger = state.phase !== 'gameOver' && state.players.some((p) => !p.eliminated && p.life <= 6);
+  useEffect(() => { if (state.phase !== 'gameOver') setMusicMood(danger ? 'tense' : 'battle'); }, [danger, state.phase]);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
@@ -794,6 +829,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className={`icon-btn ${drawer === 'audio' ? 'on' : ''}`} title="Music and sound volume" onClick={() => setDrawer(drawer === 'audio' ? null : 'audio')}>🎚<span>Audio</span></button>
           <button className={`icon-btn ${music ? 'on' : ''}`} title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span>Music</span></button>
           {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
@@ -954,6 +990,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <button className="small" onClick={() => setDrawer(null)}>✕</button>
           </div>
           {drawer === 'manual' && <ManualTools state={state} act={act} />}
+          {drawer === 'audio' && <><h3 style={{ margin: 0 }}>Audio</h3><AudioSettings compact /></>}
           {drawer === 'log' && (
             <div className="log" ref={logRef}>
               {state.log.slice(-250).map((l, i) => (

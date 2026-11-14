@@ -1726,3 +1726,11 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
   .go-actions { width: 100%; margin-top: .1rem; }
   .go-actions .go-main { padding: .7em 1em; font-size: 1.05rem; }
 }
+/* audio settings */
+.audio-settings { display: flex; flex-direction: column; gap: .55rem; }
+.audio-row { display: grid; grid-template-columns: 7.2rem 1fr 3rem; align-items: center; gap: .6rem; }
+.audio-toggle { padding: .45em .7em; border-radius: 999px; text-align: left; }
+.audio-toggle.on { border-color: var(--accent); color: #f6e6c8; }
+.audio-row input[type=range] { width: 100%; accent-color: #d9a441; }
+.audio-val { font-size: .8rem; color: #a8957a; text-align: right; }
+.audio-settings.compact .audio-row { grid-template-columns: 6.4rem 1fr 2.6rem; }
