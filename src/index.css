@@ -1658,3 +1658,71 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
   .achievements { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
   .achievements > * { padding: .55rem; font-size: .8rem; }
 }
+
+/* ---------------------------------------------------------------- victory / defeat screen */
+.gameover .box { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; scrollbar-width: none; }
+.go-card { --goh: clamp(64px, 12vh, 112px); display: flex; flex-direction: column; align-items: center; gap: .55rem; padding: 1.1rem 1rem 1rem;
+  border-radius: 20px; background: linear-gradient(180deg, #1d1611f0, #0e0b08f5); border: 1px solid #a57c4688; box-shadow: 0 30px 80px #000, inset 0 1px 0 #ffffff14; }
+.gameover.win .go-card { border-color: #f6d58e99; box-shadow: 0 30px 80px #000, 0 0 60px #d9a44133, inset 0 1px 0 #ffffff1c; }
+.go-heroes { display: flex; align-items: center; gap: 1rem; }
+.go-hero { display: flex; flex-direction: column; align-items: center; gap: .25rem; font: 600 .78rem Cinzel, Georgia, serif; color: #e8d9bd; transition: filter .4s; }
+.go-hero.win .card { box-shadow: 0 0 0 2px #f6d58e, 0 0 28px #f0b542aa; animation: goWin 1.6s ease-in-out .4s infinite alternate; }
+.go-hero.lost { filter: grayscale(.85) brightness(.6); }
+.go-hero.lost .card { transform: rotate(-4deg) translateY(4px); }
+@keyframes goWin { to { box-shadow: 0 0 0 2px #fff3c4, 0 0 44px #f0b542; } }
+.go-vs { font: 800 1.1rem Cinzel, Georgia, serif; color: #c9a46a; opacity: .8; }
+.gameover .go-card h1 { margin: .1rem 0 0; line-height: 1; }
+.go-sub { margin: 0; font-size: 1rem; color: #e8d9bd; }
+.go-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .4rem; width: 100%; margin-top: .3rem; }
+.go-stat { display: flex; flex-direction: column; align-items: center; gap: .1rem; padding: .5rem .2rem; border-radius: 12px; background: #00000059; border: 1px solid #ffffff14;
+  animation: fadeUp .4s ease-out both; }
+.go-stat b { font-size: 1.05rem; color: #f6e6c8; white-space: nowrap; }
+.go-stat span { font-size: .66rem; color: #a8957a; text-transform: uppercase; letter-spacing: .04em; text-align: center; }
+.go-actions { display: flex; flex-direction: column; align-items: stretch; gap: .45rem; width: min(380px, 100%); margin-top: .4rem; }
+.go-actions .go-main { font: 700 1.15rem/1 Cinzel, Georgia, serif; padding: .85em 1em; border-radius: 999px; }
+.go-actions > button:not(.go-main) { padding: .65em 1em; border-radius: 999px; }
+.go-secondary { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: .45rem; }
+.go-secondary button { padding: .55em .6em; border-radius: 999px; font-size: .9rem; }
+.go-card .progress-gains, .go-card > :last-child { width: 100%; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .go-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .go-card { --goh: 78px; padding: .9rem .7rem; }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  .go-card { --goh: 54px; gap: .35rem; padding: .7rem .9rem; }
+  .gameover .go-card h1 { font-size: 2.4rem; }
+  .go-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: center; }
+  .go-actions > button, .go-secondary { flex: 1 1 auto; }
+}
+/* format picker: full names normally; on phones short names in an even 4-column grid, and the mode links in 3 even columns */
+.format-seg .fmt-short { display: none; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .format-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 16px; width: 100%; }
+  .format-seg button { padding: .55em .2em; border-radius: 12px; font-size: .82rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .format-seg .fmt-full { display: none; }
+  .format-seg .fmt-short { display: inline; }
+  .more-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .more-modes a { display: flex; align-items: center; justify-content: center; text-align: center; padding: .55em .3em; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+/* the in-game menu never runs off a short (landscape phone) screen: it scrolls instead */
+.bar-more.open { max-height: calc(100dvh - 56px - var(--sa-t, 0px)); overflow-y: auto; overscroll-behavior: contain; }
+/* end screen: the two halves stack normally; stat tiles and format buttons fill their last row */
+.go-left, .go-right { display: flex; flex-direction: column; align-items: center; gap: .55rem; width: 100%; }
+.go-stats { display: flex; flex-wrap: wrap; }
+.go-stat { flex: 1 1 calc(20% - .4rem); min-width: 0; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .go-stat { flex-basis: calc(33.3% - .4rem); }
+  .format-seg { display: flex; flex-wrap: wrap; }
+  .format-seg button { flex: 1 1 calc(25% - 4px); }
+}
+/* short landscape screens (phones on their side): heroes and title on the left, stats and buttons on the right */
+@media (max-height: 520px) and (orientation: landscape) {
+  .gameover .box { width: min(860px, calc(100vw - 24px)); }
+  .go-card { flex-direction: row; align-items: center; gap: 1rem; --goh: 72px; }
+  .go-left { flex: 0 0 38%; }
+  .go-right { flex: 1; gap: .4rem; }
+  .go-stat { padding: .35rem .2rem; }
+  .go-stat b { font-size: .95rem; }
+  .go-actions { width: 100%; margin-top: .1rem; }
+  .go-actions .go-main { padding: .7em 1em; font-size: 1.05rem; }
+}

@@ -44,6 +44,9 @@ interface Setup {
   events?: boolean;
 }
 
+/** format names that fit a phone's format picker */
+const SHORT_FORMAT: Record<string, string> = { blitz: 'Blitz', cc: 'Classic', ll: 'Legend', sage: 'Silver Age', commoner: 'Commoner', upf: 'Pit Fight', casual: 'Casual' };
+
 interface Opponent { heroId: string; name: string; deck: DeckList }
 
 /** The pool cards left out of the chosen loadout are the inventory (Taylor's equipment, The Librarian's Tomes). */
@@ -215,9 +218,11 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       <div className="lobby-main">
         <div className="lobby-head">
           <h1>{tutorial ? 'Guided practice' : 'Play'}</h1>
-          <div className="seg">
+          <div className="seg format-seg">
             {FORMATS.map(([f, label]) => (
-              <button key={f} className={setup.format === f ? 'on' : ''} onClick={() => setSetup({ ...setup, format: f, myDeckId: '', oppHeroId: 'random' })}>{label}</button>
+              <button key={f} className={setup.format === f ? 'on' : ''} onClick={() => setSetup({ ...setup, format: f, myDeckId: '', oppHeroId: 'random' })}>
+                <span className="fmt-full">{label}</span><span className="fmt-short">{SHORT_FORMAT[f] ?? label}</span>
+              </button>
             ))}
           </div>
         </div>

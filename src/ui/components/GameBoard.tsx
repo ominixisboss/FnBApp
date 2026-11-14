@@ -982,19 +982,48 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       {fx.banner && <TurnBanner key={`tb${fx.banner.id}`} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
-          <h1>{state.winner === HUMAN ? 'Victory' : 'Defeat'}</h1>
-          <p style={{ fontSize: '1.1rem' }}>
-            {state.winner === HUMAN ? `You defeated ${opp.name.replace(' (bot)', '')}` : `${opp.name.replace(' (bot)', '')} wins`} on turn {state.turn}
-            {' '}· you finished on {Math.max(0, me.life)} life.
-          </p>
-          <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
-            {onRematch && <button className="primary" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
-            <button className="gold" onClick={onExit}>New game</button>
-            <button onClick={() => setOverlay(false)}>View board</button>
-            {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
-          </div>
-          {extraResult}
-          {onGameOver && <ProgressGains before={progressBefore} />}
+          {(() => {
+            const won = state.winner === HUMAN;
+            const oppName = opp.name.replace(' (bot)', '');
+            const g = gameStats.current;
+            const tiles: [string, string | number, string][] = [
+              ['♥', Math.max(0, me.life), 'life left'],
+              ['⚔', g.damageDealt, 'damage dealt'],
+              ['🔥', g.maxTurnDamage, 'best turn'],
+              ['🃏', g.cardsPlayed, 'cards played'],
+              ['🛡', g.blocks, 'blocks'],
+            ];
+            return (
+              <div className="go-card">
+                <div className="go-left">
+                <div className="go-heroes">
+                  <div className={`go-hero ${won ? 'win' : 'lost'}`}><CardView card={cardOf(me.hero)} width="var(--goh)" tilt={false} noPopout /><span>You</span></div>
+                  <span className="go-vs">VS</span>
+                  <div className={`go-hero ${won ? 'lost' : 'win'}`}><CardView card={cardOf(opp.hero)} width="var(--goh)" tilt={false} noPopout /><span>{oppName}</span></div>
+                </div>
+                <h1>{won ? 'Victory' : 'Defeat'}</h1>
+                <p className="go-sub">{won ? `You defeated ${oppName}` : `${oppName} wins`} on turn {state.turn}</p>
+                </div>
+                <div className="go-right">
+                <div className="go-stats">
+                  {tiles.map(([icon, v, label], i) => (
+                    <div key={label} className="go-stat" style={{ animationDelay: `${0.35 + i * 0.08}s` }}><b>{icon} {v}</b><span>{label}</span></div>
+                  ))}
+                </div>
+                <div className="go-actions">
+                  {onRematch && <button className="primary go-main" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
+                  <button className={onRematch ? 'gold' : 'primary go-main'} onClick={onExit}>New game</button>
+                  <div className="go-secondary">
+                    <button onClick={() => setOverlay(false)}>View board</button>
+                    {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
+                  </div>
+                </div>
+                {extraResult}
+                {onGameOver && <ProgressGains before={progressBefore} />}
+                </div>
+              </div>
+            );
+          })()}
         </GameOverOverlay>
       )}
       {manual && <div className="manual-banner">✋ Manual moves on: tap a card to move it · <button className="small" onClick={() => setManual(false)}>Done</button></div>}
