@@ -1775,3 +1775,6 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .glyph-life { color: #e5484d; }
 .glyph-int { filter: saturate(.7); }
 .glyph-tap, .glyph-chi, .glyph-x { color: var(--accent, #e9c46a); font-weight: 700; }
+
+/* Cloaked equipment while face-down: only you can see it */
+.face-down { filter: grayscale(.85) brightness(.55); }

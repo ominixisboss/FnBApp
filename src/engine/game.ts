@@ -326,7 +326,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
       }
       if (slots.has(slot)) { p.inventory.push(eid); continue; }
       slots.add(slot);
-      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false });
+      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false, faceDown: getScript(e).cloaked || undefined });
     }
     s.players[id] = p;
   });
@@ -430,7 +430,7 @@ function equipCard(s: GameState, p: PlayerState, cid: string) {
   const c = card(cid);
   const slot = ['Head', 'Chest', 'Arms', 'Legs', 'Off-Hand'].find((t) => c.types.includes(t));
   if (slot) p.equipment = p.equipment.filter((e) => !cardOf(e.inst).types.includes(slot));
-  p.equipment.push({ inst: mk(s, cid, p.id), defenseMod: 0, destroyed: false, usedThisTurn: false });
+  p.equipment.push({ inst: mk(s, cid, p.id), defenseMod: 0, destroyed: false, usedThisTurn: false, faceDown: getScript(c).cloaked || undefined });
   log(s, p.id, `${p.name} equips ${c.name}.`);
 }
 
@@ -546,6 +546,7 @@ function runStartTrigger(s: GameState, p: PlayerState, uid: number) {
 
 /** after the start-of-turn triggers: equipment's "at the start of your turn", then "at the beginning of your action phase" */
 function afterStartTriggers(s: GameState, p: PlayerState) {
+  for (const e of p.equipment) if (e.faceDown && !e.destroyed && getScript(cardOf(e.inst)).heirloom && p.life === 1) { e.faceDown = false; log(s, p.id, `${p.name} turns ${cardOf(e.inst).name} face-up (exactly 1 life).`); }
   for (const e of p.equipment.filter((x) => !x.destroyed)) for (const t of getScript(cardOf(e.inst)).triggers ?? []) if (t.on === 'startTurn') { log(s, p.id, `${cardOf(e.inst).name}: ${t.text}.`); resolveEffects(s, p, t.effects, e.inst); }
   fireTriggers(s, p, 'actionPhase');
 }
@@ -566,7 +567,7 @@ function doOrderTriggers(s: GameState, order: number[]) {
 function fireTriggers(s: GameState, p: PlayerState, on: TriggerEvent, link?: { inst: CardInst; fromWeapon: boolean }, createdBefore?: number) {
   if (p.eliminated) return;
   // a card created after the event (a Runechant made while the attack started) doesn't see it
-  const srcs = [...p.permanents.map((pm) => pm.inst), ...p.equipment.filter((e) => !e.destroyed).map((e) => e.inst), ...p.weapons.map((w) => w.inst)]
+  const srcs = [...p.permanents.map((pm) => pm.inst), ...p.equipment.filter((e) => !e.destroyed && !e.faceDown).map((e) => e.inst), ...p.weapons.map((w) => w.inst)]
     .filter((i) => createdBefore === undefined || i.uid < createdBefore);
   for (const inst of srcs) {
     const trs = getScript(cardOf(inst)).triggers;
@@ -1613,7 +1614,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   }
   const sources = [
     ...p.weapons.map((w) => ({ inst: w.inst, used: w.usedThisTurn })),
-    ...p.equipment.filter((e) => !e.destroyed).map((e) => ({ inst: e.inst, used: e.usedThisTurn })),
+    ...p.equipment.filter((e) => !e.destroyed).map((e) => ({ inst: e.inst, used: e.usedThisTurn, faceDown: !!e.faceDown })),
     ...p.permanents.map((pm) => ({ inst: pm.inst, used: false, perm: true })),
     // the attack card on the active chain link: its "Instant - ...: This gets +1{p}" abilities
     ...(() => { const l = currentLink(s); return l && l.attacker === pid && !l.fromWeapon && l.damage === null ? [{ inst: l.inst, used: false, perm: true, chain: true }] : []; })(),
@@ -1622,6 +1623,9 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     const sc = getScript(cardOf(src.inst));
     sc.activations.forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
+      // a face-down (cloaked) equipment: only "turn this face-up" and "only while face-down" abilities work
+      const fd = 'faceDown' in src && src.faceDown;
+      if (fd ? !(a.faceUpCost || a.onlyFaceDown) : (a.faceUpCost || a.onlyFaceDown)) return;
       // an ally's (or other permanent's) once-per-turn ability; allies attack only during your action phase
       if (a.oncePerTurn && 'perm' in src && !a.tapSelf && (p.turn.flags[`act${src.inst.uid}:${index}`] ?? 0) >= (a.perTurn ?? 1)) return;
       if ('chain' in src && !a.instant) return;
@@ -1684,7 +1688,7 @@ export function defendOptions(s: GameState, pid: PlayerId): DefendOption[] {
   }
   for (const e of p.equipment) {
     if (l?.noEquipDefense) break;
-    if (e.destroyed || defenseOf(cardOf(e.inst)) === null) continue;
+    if (e.destroyed || e.faceDown || defenseOf(cardOf(e.inst)) === null) continue;
     const di = getScript(cardOf(e.inst)).defendIf;
     if (di && l) { const atk = s.players[l.attacker]; if (di.token ? !atk.turn.flags[`destroyed:${di.token}`] : !atk.turn.drew) continue; }
     out.push({ uid: e.inst.uid, kind: 'equipment', defense: defenseFor(p, cardOf(e.inst), equipDefense(e)) });
@@ -2005,6 +2009,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     const e = p.equipment.find((e) => e.inst.uid === uid);
     if (e && a.oncePerTurn) e.usedThisTurn = true;
     if (a.oncePerTurn && (p.permanents.some((pm) => pm.inst.uid === uid) || s.chain.some((l) => l.inst.uid === uid))) p.turn.flags[`act${uid}:${index}`] = (p.turn.flags[`act${uid}:${index}`] ?? 0) + 1;
+    if (a.faceUpCost) { const fe = p.equipment.find((x) => x.inst.uid === uid); if (fe) { fe.faceDown = false; log(s, pid, `${p.name} turns ${c.name} face-up.`); } }
     if (a.tapSelf) { const t = untappedOwn(p, 'this', uid); if (t) tapThing(s, p, t); }
     if (a.tapHero) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     if (a.tapCog) { const t = untappedOwn(p, 'cog', uid); if (t) tapThing(s, p, t); }
@@ -2381,6 +2386,16 @@ function resolveDamage(s: GameState) {
     if (sc.hitDestination && !l.fromWeapon) l.destination = sc.hitDestination;
     ability(attacker)?.onHit?.(heroCtx(s, attacker), l);
     fireTriggers(s, attacker, 'hit', l);
+    // Concealed traps: a face-down equipment of the hero who was hit
+    for (const e of defender.equipment) {
+      const cc = e.faceDown && !e.destroyed ? getScript(cardOf(e.inst)).concealed : undefined;
+      if (!cc) continue;
+      const ok = cc.when === 'goAgain' ? l.goAgain : cc.when === 'aboveBase' ? l.powerMod > 0 : (l.reactionCount ?? 0) > 0;
+      if (!ok) continue;
+      e.destroyed = true; e.faceDown = false;
+      log(s, defender.id, `${cardOf(e.inst).name} springs: ${defender.name} destroys it.`);
+      for (const q of s.players) if (q.id !== defender.id && !q.eliminated) createToken(s, q, cc.token, 1);
+    }
     if (defender.marked) { defender.marked = false; log(s, defender.id, `${defender.name} is no longer marked.`); }
   }
   l.damage = dealt;
@@ -2549,7 +2564,7 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
   if (arcane) {
     // spellvoid / arcane barrier (automatic)
     for (const e of p.equipment) {
-      if (dmg <= 0 || e.destroyed) continue;
+      if (dmg <= 0 || e.destroyed || e.faceDown) continue;
       const sc = getScript(cardOf(e.inst));
       if (sc.spellvoid > 0) { dmg -= sc.spellvoid; e.destroyed = true; log(s, target, `${cardOf(e.inst).name} (spellvoid) prevents ${sc.spellvoid}.`); }
     }
@@ -2557,7 +2572,7 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
       const sc = getScript(cardOf(pm.inst));
       if (dmg > 0 && sc.spellvoid > 0) { dmg -= sc.spellvoid; removePermanent(s, p, pm.inst.uid); }
     }
-    const barrier = p.equipment.filter((e) => !e.destroyed).reduce((a, e) => a + getScript(cardOf(e.inst)).arcaneBarrier, 0);
+    const barrier = p.equipment.filter((e) => !e.destroyed && !e.faceDown).reduce((a, e) => a + getScript(cardOf(e.inst)).arcaneBarrier, 0);
     const pay = Math.min(barrier, dmg, p.resources);
     if (pay > 0) { p.resources -= pay; dmg -= pay; log(s, target, `${p.name} pays ${pay} for arcane barrier.`, RULES.arcaneBarrier); }
   }

@@ -294,6 +294,10 @@ export interface Activation {
   /** "Twice / Thrice per Turn" (with oncePerTurn) */
   perTurn?: number;
   destroySelf: boolean;
+  /** "turn this face-up" is part of the cost (a Cloaked equipment) */
+  faceUpCost?: boolean;
+  /** "Activate this only while this is face-down" */
+  onlyFaceDown?: boolean;
   /** {t} costs: this card, your hero, a cog you control */
   tapSelf?: boolean;
   tapHero?: boolean;
@@ -367,6 +371,12 @@ export interface CardScript {
   onClashWin?: Effect[];
   /** "If this would be put into your graveyard from anywhere, instead banish it" */
   banishInsteadOfGrave?: boolean;
+  /** Cloaked: equipped face-down */
+  cloaked?: boolean;
+  /** "While this is equipped face-down, at the start of your turn, if you have exactly 1{h}, you may turn this face-up" */
+  heirloom?: boolean;
+  /** "While this is equipped face-down, when an attack <cond> hits you, destroy this and create a <X> token under each opponent's control" */
+  concealed?: { when: 'goAgain' | 'aboveBase' | 'reaction'; token: string };
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -902,7 +912,6 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^mirage$/i.test(s)) return (sc.mirage = true);
   if (/^guardwell$/i.test(s)) return (sc.guardwell = true);
   if (/^spectra$/i.test(s)) return (sc.spectra = true);
-  if (/^cloaked$/i.test(s)) return true; // equipped face-down: no effect on play here
   if ((m = s.match(/^heave (\d+)$/i))) return !!(sc.heave = +m[1]);
   if ((m = s.match(/^quell (\d+)$/i))) return !!(sc.quell = +m[1]);
   if (/^ephemeral$/i.test(s)) return (sc.ephemeral = true);
@@ -911,6 +920,8 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
   if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
+  if (/^cloaked$/i.test(s)) return (sc.cloaked = true);
+  if (/^while this is equipped face-down, at the start of your turn, if you have exactly 1\{h\}, you may turn this face-up$/i.test(s)) return (sc.heirloom = true);
   if ((m = s.match(/^this counts as an? (Gold|Runechant|Silver|Copper)$/i))) { sc.countsAs = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase(); return true; }
   if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
@@ -1008,7 +1019,9 @@ function compile(c: Card): CardScript {
       const tapHero = /\{t\}(?: this and)? your hero/.test(extra);
       const tapCog = /\{t\} a cog you control/.test(extra);
       const tapSelf = /\{t\}(?! your hero| a cog)/.test(extra.replace(/\{t\} this and your hero/, '{t} this'));
-      const extraOk = extra.replace(/\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
+      const faceUpCost = /turn this face-up/.test(extra);
+      const onlyFaceDown = /activate this only while this is face-down/i.test(act[4]);
+      const extraOk = extra.replace(/turn this face-up|\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
       // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
       let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
@@ -1027,6 +1040,8 @@ function compile(c: Card): CardScript {
           oncePerTurn: !!act[1] || attack,
           perTurn: /^twice/i.test(act[1] ?? '') ? 2 : /^thrice/i.test(act[1] ?? '') ? 3 : undefined,
           destroySelf,
+          faceUpCost: faceUpCost || undefined,
+          onlyFaceDown: onlyFaceDown || undefined,
           tapSelf: tapSelf || undefined,
           tapHero: tapHero || undefined,
           tapCog: tapCog || undefined,
@@ -1378,6 +1393,10 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     if (e) return void (sc.onClashWin ??= []).push(...e);
   }
   if (/^if this would be put into your graveyard from anywhere, instead banish it\.?$/i.test(sent)) { sc.banishInsteadOfGrave = true; return; }
+  if ((m = sent.match(/^while this is equipped face-down, when an attack (with go again|with \{p\} greater than its base|hits you and its controller has played or activated an attack reaction this chain link)(?: hits you)?, destroy this and create (?:a|an) ([A-Z][\w' ]*?) token under each opponent's control\.?$/i))) {
+    sc.concealed = { when: /go again/.test(m[1]) ? 'goAgain' : /greater/.test(m[1]) ? 'aboveBase' : 'reaction', token: m[2] };
+    return;
+  }
   if ((m = sent.match(/^when an attack usurps this, (.+?)\.?$/i))) {
     const e = parseEffect(m[1].replace(/^it gets/i, 'the attack gets'));
     if (e) return void (sc.onUsurp ??= []).push(...e);

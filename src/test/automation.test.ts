@@ -460,3 +460,19 @@ describe('bots and the new mechanics', () => {
     expect(s.players[0].equipment.find((e) => e.inst.uid === 9990)?.destroyed).toBe(false);
   });
 });
+
+describe('cloaked equipment', () => {
+  it('is equipped face-down: it can\'t defend, and "turn this face-up" abilities work only while face-down', () => {
+    const c = findCard('Waves of Aqua Marine')!;
+    expect(getScript(c).cloaked).toBe(true);
+    const mk = (eq: string[]): DeckList => ({ heroId: findCard('Dorinthea')!.id, weaponIds: [], equipmentIds: eq, cardIds: Array(30).fill(filler()) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk([c.id]) }, { name: 'P1', isBot: false, deck: mk([]) }], 5));
+    const e = s.players[0].equipment.find((x) => x.inst.cardId === c.id)!;
+    expect(e.faceDown).toBe(true);
+    // P1 attacks P0: the face-down equipment isn't a defend option
+    s.turnPlayer = 1; s.priority = 1; s.players[1].actionPoints = 1; s.players[1].resources = 10;
+    s = applyAction(s, { type: 'play', uid: s.players[1].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    expect(defendOptions(s, 0).some((o) => o.uid === e.inst.uid)).toBe(false);
+  });
+});

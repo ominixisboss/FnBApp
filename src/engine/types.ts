@@ -24,6 +24,8 @@ export interface EquipState {
   usedThisTurn: boolean;
   /** quell was used: destroyed at the beginning of the end phase */
   quelled?: boolean;
+  /** Cloaked: equipped face-down (can't defend, abilities off, opponents can't see it) */
+  faceDown?: boolean;
 }
 
 export interface WeaponState {
