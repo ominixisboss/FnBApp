@@ -1301,7 +1301,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className={`hero-box hero-aura aura-${themeOf(cardOf(p.hero))}`}>
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
-          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
+          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${p.heroTapped ? 'is-tapped' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
+        {p.heroTapped && <span className="tapped-badge" title="Tapped: untaps at the start of their turn">⟲</span>}
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} theme={fx.theme[p.id]} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -1334,10 +1335,11 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
       </div>
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
-        {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
+        {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed, tapped: false })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false, tapped: !!pm.tapped }))].map(({ inst, destroyed, tapped }) => (
           <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop perm-card">
             <span className="materialize" aria-hidden />
-            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
+            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${tapped ? 'is-tapped' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
+            {tapped && <span className="tapped-badge" title="Tapped: untaps at the start of its controller's turn">⟲</span>}
           </div>
         ))}
       </div>

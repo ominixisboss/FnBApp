@@ -69,6 +69,10 @@ export type Effect =
   | { kind: 'clearWeaponCounters'; sub?: string }
   /** "destroy all Runechants you control" */
   | { kind: 'destroyAllOwn'; name: string }
+  /** {t} the opposing hero ("{t} them", "{t} target hero or ally") */
+  | { kind: 'tapOpp' }
+  /** {u} your hero / a cog / all cogs you control */
+  | { kind: 'untap'; what: 'hero' | 'cog' | 'allCogs' | 'ally' | 'weapon' }
   | { kind: 'mayThen'; cost: OptionalCostKind; then: Effect[]; text: string }
   | { kind: 'banishTopSelf'; amount: number }
   /** create a card (e.g. Crouching Tiger) in your hand */
@@ -188,7 +192,9 @@ export type Condition =
   | { kind: 'phantasmDestroyed' }
   | { kind: 'createdToken'; name: string }
   | { kind: 'lastAttackColor'; pitch: number }
-  | { kind: 'lastAttackName'; name: string };
+  | { kind: 'lastAttackName'; name: string }
+  /** the last arcane damage effect of this card dealt damage */
+  | { kind: 'dealtArcane' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
@@ -199,6 +205,12 @@ export type OptionalCostKind =
   | { kind: 'discard'; pitch?: number; power?: number; type?: string }
   /** destroy the card that has the ability (an equipment, aura or item) */
   | { kind: 'destroySelf' }
+  /** {t} your hero */
+  | { kind: 'tapHero' }
+  /** {t} a cog / an ally you control, or {t} this */
+  | { kind: 'tapOwn'; what: 'cog' | 'ally' | 'this' }
+  /** "X and Y": pay every part (only in "you may ... If you do" abilities) */
+  | { kind: 'all'; costs: OptionalCostKind[] }
   | { kind: 'pay'; amount: number }
   | { kind: 'banishGrave'; n: number }
   | { kind: 'destroyTop' }
@@ -240,6 +252,10 @@ export interface Activation {
   instant: boolean;
   oncePerTurn: boolean;
   destroySelf: boolean;
+  /** {t} costs: this card, your hero, a cog you control */
+  tapSelf?: boolean;
+  tapHero?: boolean;
+  tapCog?: boolean;
   goAgain: boolean;
   effects: Effect[];
   text: string;
@@ -602,6 +618,12 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^\{t\} (?:them|target hero|target opposing hero|target hero or ally|target [A-Z]\w+ hero(?: or ally)?|them or an ally they control|them or a weapon they control|them and all allies they control)$/.test(s)) return [{ kind: 'tapOpp' }];
+  if (/^(?:you may )?\{u\} your hero$/i.test(s)) return [{ kind: 'untap', what: 'hero' }];
+  if (/^(?:you may )?\{u\} (?:a|target) cog you control$/i.test(s)) return [{ kind: 'untap', what: 'cog' }];
+  if (/^(?:you may )?\{u\} (?:all|up to \d+) cogs you control$/i.test(s)) return [{ kind: 'untap', what: 'allCogs' }];
+  if (/^(?:you may )?\{u\} (?:a|target) (?:gun|bow|staff|weapon) you control$/i.test(s)) return [{ kind: 'untap', what: 'weapon' }];
+  if (/^\{u\} (?:an|target) ally you control$/i.test(s)) return [{ kind: 'untap', what: 'ally' }];
   if ((m = s.match(/^destroy (?:this|it) unless you remove (?:a|an) (\w+) counter from (?:it|this)$/i))) return [{ kind: 'counterUpkeep', counter: m[1].toLowerCase() }];
   if ((m = s.match(/^remove (?:a|an) (\w+) counter from this$/i))) return [{ kind: 'removeCounter', counter: m[1].toLowerCase() }];
   if (/^put this into your (?:hero's )?soul$/i.test(s)) return [{ kind: 'selfToSoul' }];
@@ -700,6 +722,14 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
   if ((m = t.match(/^discard (?:a|an) (?:(red|yellow|blue) )?card$/))) return { kind: 'discard', pitch: m[1] ? { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] : undefined };
   if ((m = t.match(/^pay ((?:\{r\})+)$/))) return { kind: 'pay', amount: m[1].length / 3 };
   if (/^destroy this$/.test(t)) return { kind: 'destroySelf' };
+  if (/^\{t\} your hero$/.test(t)) return { kind: 'tapHero' };
+  if (/^\{t\} this$/.test(t)) return { kind: 'tapOwn', what: 'this' };
+  if ((m = t.match(/^\{t\} (?:a|an) (cog|ally) you control$/))) return { kind: 'tapOwn', what: m[1] as 'cog' | 'ally' };
+  if ((m = t.match(/^(.+?) and (.+)$/))) {
+    const a = parseOptionalCost(m[1]);
+    const b = a && parseOptionalCost(m[2]);
+    if (a && b) return { kind: 'all', costs: [a, b] };
+  }
   if ((m = t.match(/^discard (?:a|an) (instant|attack action|action|non-attack action) card$/))) return { kind: 'discard', type: { instant: 'Instant', 'attack action': 'Attack', action: 'Action', 'non-attack action': 'NonAttack' }[m[1]] };
   if ((m = t.match(/^banish (a|an|two|three|\d+) cards? from your graveyard$/))) return { kind: 'banishGrave', n: toNum(m[1]) };
   if (/^destroy the top card of your deck$/.test(t)) return { kind: 'destroyTop' };
@@ -724,7 +754,7 @@ export function parseOptional(a: string, b: string): OptionalCost | null {
   const ma = a.replace(/^(galvanize|decompose) - /i, '').match(/^(when this attacks|when you play this|as an additional cost to play this|when this defends),? you may (.+?)\.?$/i);
   if (!ma) return null;
   const cost = parseOptionalCost(ma[2]);
-  if (!cost) return null;
+  if (!cost || cost.kind === 'all') return null; // combined costs only in "you may ... If you do" abilities
   const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}|an? (red|yellow|blue) card is charged this way|you charged your (?:hero's )?soul this way),? (.+?)\.?$/i);
   if (!mb) return null;
   const effectText = mb[5];
@@ -873,7 +903,10 @@ function compile(c: Card): CardScript {
           continue;
         }
       }
-      const extraOk = ['', 'destroy this', '{t}', '{t} your hero', '{t} your hero destroy this', '{t} destroy this', '0'].includes(extra);
+      const tapHero = /\{t\}(?: this and)? your hero/.test(extra);
+      const tapCog = /\{t\} a cog you control/.test(extra);
+      const tapSelf = /\{t\}(?! your hero| a cog)/.test(extra.replace(/\{t\} this and your hero/, '{t} this'));
+      const extraOk = extra.replace(/\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
       // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
       let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
@@ -891,6 +924,9 @@ function compile(c: Card): CardScript {
           instant: /instant/i.test(act[2]),
           oncePerTurn: !!act[1] || attack,
           destroySelf,
+          tapSelf: tapSelf || undefined,
+          tapHero: tapHero || undefined,
+          tapCog: tapCog || undefined,
           goAgain: goAgain || /go again/i.test(tail),
           effects: effects ?? [],
           text: line,
@@ -943,6 +979,15 @@ function compile(c: Card): CardScript {
       const opt = i + 1 < sentences.length ? parseOptional(sentences[i], sentences[i + 1]) : null;
       if (opt && !sc.optional) {
         sc.optional = opt;
+        i++;
+        continue;
+      }
+      // "If this deals damage, you may <cost>." + "If you do, <effect>." (an attack: when it hits; a spell: if its arcane damage got through)
+      const dd = i + 1 < sentences.length ? sentences[i].match(/^if this deals damage, (you may .+)$/i) : null;
+      const ddMay = dd && parseMayThen(dd[1], sentences[i + 1]);
+      if (ddMay) {
+        if (isAttack) sc.onHit.push(ddMay.effect);
+        else sc.conditional.push({ when: 'if', cond: { kind: 'dealtArcane' }, effects: [ddMay.effect] });
         i++;
         continue;
       }

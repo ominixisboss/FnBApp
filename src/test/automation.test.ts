@@ -260,3 +260,30 @@ describe('triggered abilities of permanents', () => {
     expect(s.players[0].permanents.some((p) => p.inst.uid === 9997)).toBe(false);
   });
 });
+
+describe('tapping', () => {
+  it('an "Instant - {t}: ..." permanent can be used once, then untaps at its controller\'s next turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && !x.types.includes('Equipment') && !x.types.includes('Weapon') && getScript(x).activations.some((a) => a.tapSelf && a.instant && a.cost === 0 && !a.destroySelf))!;
+    expect(c).toBeDefined();
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9996, cardId: c.id, owner: 0 }, ward: 0 });
+    const opt = () => playOptions(s, 0).find((o) => o.uid === 9996 && o.kind === 'activation');
+    expect(opt()).toBeDefined();
+    s = applyAction(s, { type: 'activate', uid: 9996, index: opt()!.index, pitch: [] } as never);
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9996)?.tapped).toBe(true);
+    while (s.stack?.length || s.pendingChoices?.length) s = applyAction(s, s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(opt()).toBeUndefined();
+    s.players[0].heroTapped = true;
+    for (let i = 0; i < 12 && !(s.turnPlayer === 0 && s.turn > 1); i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(s.turnPlayer).toBe(0);
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9996)?.tapped).toBe(false);
+    expect(s.players[0].heroTapped).toBe(false);
+  });
+  it('"If this deals damage, you may {t} your hero. If you do, ..." on a spell', () => {
+    const sc = getScript(findCard('Aethersling')!);
+    const k = sc.conditional.find((x) => x.cond?.kind === 'dealtArcane');
+    expect(k?.effects[0]?.kind).toBe('mayThen');
+    expect(k?.effects[0]?.kind === 'mayThen' && k.effects[0].cost.kind).toBe('tapHero');
+    expect(sc.coverage).toBe('full');
+  });
+});

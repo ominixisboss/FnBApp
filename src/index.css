@@ -1758,3 +1758,8 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
   .arena-board { top: var(--top-strip); }
   .arena:has(.pit-strip) .arena-board { top: calc(var(--top-strip) + 36px); }
 }
+
+/* {t}: tapped heroes and permanents tilt and dim until they untap */
+.is-tapped { transform: rotate(14deg); filter: saturate(.5) brightness(.78); transition: transform .25s ease, filter .25s ease; }
+.tapped-badge { position: absolute; top: 2px; right: 2px; z-index: 3; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 8px; background: rgba(20, 16, 10, .85); color: #f2e14e; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .is-tapped { transition: none; } }

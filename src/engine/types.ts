@@ -44,6 +44,8 @@ export interface PermanentState {
   damage?: number;
   /** stolen: goes back to this player at the end of the action phase */
   returnTo?: PlayerId;
+  /** {t}: tapped until its controller's next turn */
+  tapped?: boolean;
 }
 
 export type TurnEffect =
@@ -79,6 +81,8 @@ export interface PlayerState {
   graveyard: CardInst[];
   banished: CardInst[];
   intimidated: CardInst[];
+  /** {t} your hero: tapped until this player's next turn */
+  heroTapped?: boolean;
   /** counters on the hero card (e.g. Blaze's energy counters) */
   heroCounters?: number;
   /** knocked out of a multiplayer game */

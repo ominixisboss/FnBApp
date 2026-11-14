@@ -89,6 +89,7 @@ function log(s: GameState, player: PlayerId | null, text: string, rule?: string)
 
 /** Short rule explanations attached to log lines, so players learn why things happen. */
 export const RULES = {
+  tap: '{t} (tap): turn the card sideways. A tapped hero or permanent can\u2019t pay another {t} cost until it untaps at the start of its controller\u2019s turn.',
   wager: 'Wager: when this chain link resolves, if the attack hit, its attacker wins the wager; otherwise the defending hero does. The winner gets what was wagered.',
   crowd: 'The crowd cheering or booing does nothing by itself, but some cards and heroes react to it.',
   triggerOrder: 'When several of your effects trigger at the same time, you choose the order they resolve in.',
@@ -368,6 +369,9 @@ function startTurn(s: GameState) {
   p.effects = [];
   p.weapons.forEach((w) => (w.usedThisTurn = false));
   p.equipment.forEach((e) => (e.usedThisTurn = false));
+  // untap step: the hero and its permanents untap
+  p.heroTapped = false;
+  for (const pm of p.permanents) pm.tapped = false;
   for (const pl of s.players) { pl.turn = newTurnInfo(); pl.redirectTo = undefined; }
   // grudges fade: halve how much each opponent attacked this player
   if (p.attackedBy) for (const k of Object.keys(p.attackedBy)) p.attackedBy[+k as PlayerId] = Math.floor((p.attackedBy[+k as PlayerId] ?? 0) / 2);
@@ -1103,6 +1107,7 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'lessLife': return p.life < opp.life;
     case 'draconicLinks': return chainBy.filter((l) => cardOf(l.inst).types.includes('Draconic')).length >= cond.n;
     case 'arcaneThisTurn': return !!p.turn.arcaneDealt;
+    case 'dealtArcane': return (p.turn.flags.lastArcane ?? 0) > 0;
     case 'powerAboveBase': return !!link && link.powerMod > 0;
     case 'instantThisLink': return !!link && (link.instants ?? 0) > 0;
     case 'defendedByFewer': return !!link && link.defenders.filter((d) => d.kind !== 'equipment').length < cond.n;
@@ -1182,6 +1187,9 @@ export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: nu
   switch (oc.cost.kind) {
     case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (!oc.cost.power || powerOf(cardOf(h)) >= oc.cost.power) && typeMatches(cardOf(h), oc.cost.type));
     case 'destroySelf': return p.permanents.some((pm) => pm.inst.uid === playingUid) || p.equipment.some((e) => e.inst.uid === playingUid && !e.destroyed);
+    case 'tapHero': return !p.heroTapped;
+    case 'tapOwn': return !!untappedOwn(p, oc.cost.what, playingUid);
+    case 'all': return oc.cost.costs.every((k) => k.kind === 'pay' || optionalPayable(p, { ...oc, cost: k }, playingUid));
     case 'pay': return true;
     case 'banishGrave': return p.graveyard.length >= oc.cost.n;
     case 'destroyTop': return p.deck.length > 0;
@@ -1348,6 +1356,25 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
     }
     case 'pay':
       return null; // paid together with the card's cost
+    case 'tapHero':
+      if (p.heroTapped) throw new Error('Your hero is already tapped.');
+      p.heroTapped = true;
+      log(s, p.id, `${p.name} taps their hero.`, RULES.tap);
+      return null;
+    case 'tapOwn': {
+      const t = untappedOwn(p, cost.what, playingUid);
+      if (!t) throw new Error('You have nothing untapped to tap for that.');
+      tapThing(s, p, t);
+      return cardOf(t.inst);
+    }
+    case 'all': {
+      let used: Card | null = null;
+      for (const k of cost.costs) {
+        if (k.kind === 'pay') { pay(s, p, k.amount, autoPitch(p, Math.max(0, k.amount - p.resources)) ?? []); continue; }
+        used = payOptional(s, p, { ...oc, cost: k }, choice, playingUid) ?? used;
+      }
+      return used;
+    }
     case 'destroySelf': {
       const pm = p.permanents.find((x) => x.inst.uid === playingUid);
       const eq = !pm && p.equipment.find((e) => e.inst.uid === playingUid && !e.destroyed);
@@ -1359,9 +1386,27 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
   }
 }
 
+/** An untapped cog / ally `p` controls, or the card `uid` itself ('this'): a permanent, equipment or weapon. */
+function untappedOwn(p: PlayerState, what: 'cog' | 'ally' | 'this', uid: number): { inst: CardInst; tapped?: boolean; usedThisTurn?: boolean } | undefined {
+  if (what === 'this') {
+    return p.permanents.find((pm) => pm.inst.uid === uid && !pm.tapped)
+      ?? p.equipment.find((e) => e.inst.uid === uid && !e.destroyed && !e.usedThisTurn)
+      ?? p.weapons.find((w) => w.inst.uid === uid && !w.usedThisTurn);
+  }
+  const type = what === 'cog' ? 'Cog' : 'Ally';
+  return p.permanents.find((pm) => !pm.tapped && cardOf(pm.inst).types.includes(type));
+}
+/** {t} it: a permanent stays tapped until its controller's turn; equipment and weapons count as used this turn. */
+function tapThing(s: GameState, p: PlayerState, t: { inst: CardInst; tapped?: boolean; usedThisTurn?: boolean }) {
+  if ('usedThisTurn' in t && !p.permanents.some((pm) => pm.inst.uid === t.inst.uid)) t.usedThisTurn = true;
+  else t.tapped = true;
+  log(s, p.id, `${p.name} taps ${cardOf(t.inst).name}.`, RULES.tap);
+}
+
 /** "You may <cost>. If you do, <then>": can it be paid, and pay it (the ability's card is `src`). */
 function mayPayable(p: PlayerState, cost: OptionalCostKind, src: CardInst): boolean {
   if (cost.kind === 'pay') return availableResources(p) >= cost.amount;
+  if (cost.kind === 'all') return cost.costs.every((k) => mayPayable(p, k, src)) && availableResources(p) >= cost.costs.reduce((a, k) => a + (k.kind === 'pay' ? k.amount : 0), 0);
   return optionalPayable(p, { timing: 'play', cost, effects: [], costText: '', effectText: '' }, src.uid);
 }
 function payMay(s: GameState, p: PlayerState, cost: OptionalCostKind, src: CardInst) {
@@ -1528,6 +1573,9 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     const sc = getScript(cardOf(src.inst));
     sc.activations.forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
+      if (a.tapSelf && !untappedOwn(p, 'this', src.inst.uid)) return;
+      if (a.tapHero && p.heroTapped) return;
+      if (a.tapCog && !untappedOwn(p, 'cog', src.inst.uid)) return;
       if (a.instant) {
         if (!['action', 'reaction'].includes(s.phase)) return;
       } else if (s.phase !== 'action' || s.turnPlayer !== pid || p.actionPoints < 1 || s.stack?.length) return;
@@ -1895,6 +1943,9 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     if (w && a.oncePerTurn) w.usedThisTurn = true;
     const e = p.equipment.find((e) => e.inst.uid === uid);
     if (e && a.oncePerTurn) e.usedThisTurn = true;
+    if (a.tapSelf) { const t = untappedOwn(p, 'this', uid); if (t) tapThing(s, p, t); }
+    if (a.tapHero) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
+    if (a.tapCog) { const t = untappedOwn(p, 'cog', uid); if (t) tapThing(s, p, t); }
     label = c.name;
     log(s, pid, `${p.name} activates ${c.name}.`);
     if (p.permanents.some((pm) => pm.inst.uid === uid)) ability(p)?.onActivatePermanent?.(heroCtx(s, p), c);
@@ -2766,6 +2817,21 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       case 'destroyAllOwn':
         for (const pm of [...p.permanents]) if (cardOf(pm.inst).name.toLowerCase() === e.name.toLowerCase()) removePermanent(s, p, pm.inst.uid);
+        break;
+      case 'tapOpp': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        t.heroTapped = true;
+        log(s, t.id, `${t.name}'s hero is tapped.`, RULES.tap);
+        break;
+      }
+      case 'untap':
+        if (e.what === 'hero') { p.heroTapped = false; log(s, p.id, `${p.name}'s hero untaps.`); }
+        else if (e.what === 'weapon') { const w = p.weapons.find((x) => x.usedThisTurn); if (w) { w.usedThisTurn = false; log(s, p.id, `${cardOf(w.inst).name} untaps: it can attack again.`); } }
+        else {
+          const type = e.what === 'ally' ? 'Ally' : 'Cog';
+          const tapped = p.permanents.filter((pm) => pm.tapped && cardOf(pm.inst).types.includes(type));
+          for (const pm of e.what === 'allCogs' ? tapped : tapped.slice(0, 1)) { pm.tapped = false; log(s, p.id, `${cardOf(pm.inst).name} untaps.`); }
+        }
         break;
       case 'destroySelf': {
         if (p.permanents.some((pm) => pm.inst.uid === src.uid)) removePermanent(s, p, src.uid);
