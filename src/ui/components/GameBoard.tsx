@@ -38,6 +38,8 @@ interface Pending { opt: PlayOption; pitch: number[]; mode?: number; optional?: 
 interface Floater { id: number; player: PlayerId; amount: number }
 interface Fx { floaters: Floater[]; lifeAnim: string[]; lifeKey: number[]; theme: Theme[]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
 
+/** Card-text symbols in plain words for buttons: "Gain 1{h}" -> "Gain 1 ♥" */
+const readable = (t: string) => t.replace(/\{r\}/g, '⛀').replace(/\{h\}/g, ' ♥').replace(/\{p\}/g, ' power').replace(/\{d\}/g, ' defense').replace(/\{i\}/g, ' intellect').replace(/\{t\}/g, 'tap').replace(/\{u\}/g, 'untap').replace(/ {2,}/g, ' ');
 const readSetting = (k: string, def: boolean) => { try { const v = localStorage.getItem(`fab-trainer.${k}`); return v === null ? def : v === '1'; } catch { return def; } };
 const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fab-trainer.${k}`, v ? '1' : '0'); } catch { /* ignore */ } };
 
@@ -1081,7 +1083,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <h3 style={{ margin: 0 }}>{cardOf(actMenu.inst).name}</h3>
             {actMenu.opts.map((o) => (
               <button key={o.index} className="primary" onClick={() => { setActMenu(null); startPlay(o); }}>
-                {o.label.split(': ').slice(1).join(': ') || o.label}{o.cost ? ` (${o.cost})` : ''}
+                {readable(o.label.split(': ').slice(1).join(': ') || o.label)}{o.cost ? ` (${o.cost} ⛀)` : ''}
               </button>
             ))}
             <button onClick={() => { setActMenu(null); setDetail(cardOf(actMenu.inst)); }}>Card details</button>

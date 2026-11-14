@@ -1763,3 +1763,6 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .is-tapped { transform: rotate(14deg); filter: saturate(.5) brightness(.78); transition: transform .25s ease, filter .25s ease; }
 .tapped-badge { position: absolute; top: 2px; right: 2px; z-index: 3; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 8px; background: rgba(20, 16, 10, .85); color: #f2e14e; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .is-tapped { transition: none; } }
+
+/* a tapped hero tilts less, so it stays inside its slot */
+.hero-box .is-tapped { transform: rotate(8deg); }
