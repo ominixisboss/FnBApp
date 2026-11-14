@@ -3,14 +3,14 @@
 import type { Card } from '../data/types';
 import { getDb, has } from '../data/cardDb';
 import { getScript } from '../engine/cardScript';
-import type { Effect } from '../engine/cardScript';
+import type { Effect, OptionalCostKind } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
   defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, pitchOf,
-  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf, typeMatches,
+  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf, typeMatches, setBotMayJudge,
 } from '../engine/game';
 import type { PlayOption } from '../engine/game';
-import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
+import type { Action, CardInst, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
 import { chooseMythic } from './mythic';
 
 export interface BotDecision {
@@ -38,11 +38,42 @@ function effectValue(effects: Effect[]): number {
       case 'weakenAttack': v += e.amount; break;
       case 'banishTopOpp': v += 0.3; break;
       case 'oppDiscardRandom': case 'intimidate': v += 1.5; break;
+      case 'gainAP': v += 2; break;
+      case 'thisOverpower': case 'thisDominate': case 'nextAttackDominate': v += 1.2; break;
+      case 'turnAttackPower': v += e.amount * 1.5; break;
+      case 'turnAttackGoAgain': v += 2; break;
+      case 'oppMill': v += 0.4 * e.amount; break;
+      case 'oppDestroyPerm': v += 1.5; break;
+      case 'oppCreateToken': v += /^(Frailty|Inertia|Bloodrot Pox|Frostbite)$/.test(e.name) ? 1 : -0.8; break;
+      case 'mayThen': v += Math.max(0, effectValue(e.then) - 0.5); break;
+      case 'rollDie': v += e.then.length * 2; break;
+      case 'destroySelf': v -= 1; break;
       default: v += 0.3;
     }
   }
   return v;
 }
+
+/** What paying a "you may <cost>" costs a bot, in the same units as effectValue. */
+function mayCostValue(s: GameState, p: PlayerState, cost: OptionalCostKind, src: CardInst): number {
+  switch (cost.kind) {
+    case 'pay': return cost.amount * 1.1;
+    case 'tapHero': case 'tapOwn': return 0.3;
+    case 'banishSoul': return 1.2;
+    case 'destroyOwn': return 1;
+    case 'destroySelf': {
+      const eq = p.equipment.find((x) => x.inst.uid === src.uid);
+      return eq ? 0.5 + Math.max(0, (defenseOf(cardOf(eq.inst)) ?? 0) + eq.defenseMod) * 0.9 : 1.5;
+    }
+    case 'discard': case 'handToBottom': case 'banishHand': {
+      const cheapest = [...p.hand].sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
+      return cheapest ? cardPlayValue(cardOf(cheapest)) * (cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4 : 99;
+    }
+    case 'all': return cost.costs.reduce((a, k) => a + mayCostValue(s, p, k, src), 0);
+    default: return 0.6;
+  }
+}
+setBotMayJudge((s, p, e, src) => effectValue(e.then) > mayCostValue(s, p, e.cost, src));
 
 /** Value of playing card c now (expected damage / advantage). */
 /** Best "Choose 1" mode for a card, by heuristic value. */

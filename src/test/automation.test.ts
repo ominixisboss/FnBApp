@@ -6,7 +6,7 @@ import { getScript } from '../engine/cardScript';
 import { applyAction, createGame, currentLink, defendOptions, HAND_INDEX, linkPower, playOptions } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import type { GameState } from '../engine/types';
-import { decideOptional } from '../ai/bot';
+import { chooseAction, decideOptional } from '../ai/bot';
 
 const filler = () => findCard('Wounding Blow', 3)!.id;
 const legal = (c: Card) => c.legal.includes('blitz') || c.legal.includes('cc');
@@ -435,5 +435,28 @@ describe('dice', () => {
   it('"Gain action points equal to half the number rolled" and "If you\'ve rolled a 6" parse', () => {
     expect(getScript(findCard('Reckless Charge')!).coverage).toBe('full');
     expect(getScript(findCard('Bone Head Barrier')!).coverage).toBe('full');
+  });
+});
+
+describe('bots and the new mechanics', () => {
+  it('a bot attacks with its ally when it has nothing better to do', () => {
+    let s = game([]);
+    s.players[0].isBot = true; s.players[0].difficulty = 'hard';
+    s.players[0].permanents.push({ inst: { uid: 9991, cardId: findCard('Barnacle')!.id, owner: 0 }, ward: 0 });
+    const a = chooseAction(s, 0).action;
+    expect(a.type).toBe('activate');
+    expect(a.type === 'activate' && a.uid).toBe(9991);
+  });
+  it('a bot doesn\'t destroy sturdy equipment for a small payoff', () => {
+    let s = game([filler()]);
+    s.players[0].isBot = true;
+    const crackers = findCard('Aether Crackers')!;
+    s.players[0].equipment.push({ inst: { uid: 9990, cardId: crackers.id, owner: 0 }, defenseMod: 2, destroyed: false, usedThisTurn: false });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    for (let i = 0; i < 3 && s.chain.length; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.log.some((x) => /Aether Crackers/.test(x.text))).toBe(true);
+    expect(s.players[0].equipment.find((e) => e.inst.uid === 9990)?.destroyed).toBe(false);
   });
 });

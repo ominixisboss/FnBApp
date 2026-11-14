@@ -1438,6 +1438,10 @@ function tapThing(s: GameState, p: PlayerState, t: { inst: CardInst; tapped?: bo
   log(s, p.id, `${p.name} taps ${cardOf(t.inst).name}.`, RULES.tap);
 }
 
+/** How a bot decides a "you may <cost>. If you do, <then>" (set by the AI module; without it bots pay when they can). */
+let botMayJudge: ((s: GameState, p: PlayerState, e: Extract<Effect, { kind: 'mayThen' }>, src: CardInst) => boolean) | null = null;
+export function setBotMayJudge(fn: typeof botMayJudge) { botMayJudge = fn; }
+
 /** "You may <cost>. If you do, <then>": can it be paid, and pay it (the ability's card is `src`). */
 function mayPayable(p: PlayerState, cost: OptionalCostKind, src: CardInst): boolean {
   if (cost.kind === 'pay') return availableResources(p) >= cost.amount;
@@ -2985,7 +2989,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         if (p.isBot) {
           // a sturdy piece of equipment is worth more as a blocker than most of these payoffs
           const eq = e.cost.kind === 'destroySelf' ? p.equipment.find((x) => x.inst.uid === src.uid) : undefined;
-          if (eq && equipDefense(eq) >= 2) { log(s, p.id, `${srcName}: ${p.name} keeps it.`); break; }
+          if (botMayJudge ? !botMayJudge(s, p, e, src) : eq && equipDefense(eq) >= 2) { log(s, p.id, `${srcName}: ${p.name} doesn't ${e.text.split(' to ')[0]}.`); break; }
           payMay(s, p, e.cost, src); log(s, p.id, `${srcName}: ${p.name} chooses to ${e.text}.`); resolveEffects(s, p, e.then, src); break;
         }
         ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: ${e.text}?`, options: [{ uid: src.uid, cardId: src.cardId }], resume: { type: 'mayThen', cost: e.cost, then: e.then, src, text: e.text } });
