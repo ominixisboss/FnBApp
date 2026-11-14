@@ -53,6 +53,7 @@ export type TurnEffect =
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
   | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'preventNext'; amount: number; source: string; thenToken?: string }
+  | { kind: 'preventArcane'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string }
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }

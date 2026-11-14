@@ -280,6 +280,8 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
     case 'runeGated': return !l.fromWeapon && !!(l as { runeGated?: boolean }).runeGated;
     case 'classAttackAction': return !l.fromWeapon && c.types.includes(f.value) && has(c, 'Attack') && has(c, 'Action');
     case 'keyword': return c.keywords.includes(f.value);
+    case 'color': return c.pitch === f.pitch;
+    case 'word': return (!f.ally || !!l.ally) && (c.types.some((t) => t.toLowerCase() === f.value.toLowerCase()) || c.name.toLowerCase().includes(f.value.toLowerCase()));
   }
 }
 
@@ -1089,7 +1091,9 @@ function graveFromArena(p: PlayerState, inst: CardInst) {
 
 /** Put a card into its owner's graveyard; ephemeral cards cease to exist instead. */
 function toGraveyard(p: PlayerState, inst: CardInst) {
-  if (getScript(cardOf(inst)).ephemeral) return;
+  const sc = getScript(cardOf(inst));
+  if (sc.ephemeral) return;
+  if (sc.banishInsteadOfGrave) { p.banished.push(inst); return; }
   p.graveyard.push(inst);
 }
 
@@ -1104,6 +1108,7 @@ function clash(s: GameState, a: PlayerId = s.turnPlayer, b: PlayerId = oppOf(s, 
   log(s, null, `Clash! ${names.join(' vs ')} — ${winner === null ? 'no winner' : `${s.players[winner].name} wins`}.`, 'Clash: each hero reveals the top card of their deck. The hero who revealed the card with the greatest {p} wins.');
   if (winner !== null) {
     s.players[winner].turn.clashesWon = (s.players[winner].turn.clashesWon ?? 0) + 1;
+    { const wt = tops[winner === a ? 0 : 1]; const w = wt && getScript(cardOf(wt)).onClashWin; if (wt && w?.length) resolveEffects(s, s.players[winner], w, wt); }
     if (s.players[s.turnPlayer].turn.flags.clashDraw) draw(s, s.players[winner], 1); // Big Hits, Big Applause
   }
   return winner;
@@ -1144,6 +1149,8 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'controls': return p.permanents.some((pm) => cardOf(pm.inst).name.toLowerCase() === cond.name.toLowerCase());
     case 'aurasAtLeast': return p.permanents.filter((pm) => has(cardOf(pm.inst), 'Aura')).length >= cond.n;
     case 'rolledSix': return !!p.turn.flags.rolledSix;
+    case 'linkGoAgain': { const l = link ?? currentLink(s); return !!l && l.goAgain; }
+    case 'linkClass': { const l = link ?? currentLink(s); return !!l && cardOf(l.inst).types.includes(cond.cls); }
     case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
     case 'attackingMarked': return opp.marked;
     case 'weaponAttacked': return !!p.turn.weaponAttacked;
@@ -1280,6 +1287,7 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
       (p.soul ??= []).push(inst);
       p.turn.charged = true;
       log(s, p.id, `${p.name} charges their soul with ${cardOf(inst).name}.`, 'Charge: put a card from your hand into your hero’s soul (Light heroes draw power from it).');
+      { const oc = getScript(cardOf(inst)).onCharge; if (oc?.length) { log(s, p.id, `${cardOf(inst).name}: solflare!`); resolveEffects(s, p, oc, inst); } }
       return cardOf(inst);
     }
     case 'discard': {
@@ -2553,6 +2561,12 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
     const pay = Math.min(barrier, dmg, p.resources);
     if (pay > 0) { p.resources -= pay; dmg -= pay; log(s, target, `${p.name} pays ${pay} for arcane barrier.`, RULES.arcaneBarrier); }
   }
+  // "prevent the next N arcane damage"
+  if (arcane) for (const e of p.effects) {
+    if (dmg <= 0) break;
+    if (e.kind === 'preventArcane' && e.amount > 0) { const pr = Math.min(e.amount, dmg); dmg -= pr; e.amount -= pr; log(s, target, `${pr} arcane damage prevented (${e.source}).`); }
+  }
+  p.effects = p.effects.filter((e) => !(e.kind === 'preventArcane' && e.amount <= 0));
   // prevention effects
   for (const e of p.effects) {
     if (dmg <= 0) break;
@@ -2898,6 +2912,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'preventArcane': p.effects.push({ kind: 'preventArcane', amount: e.amount, source: srcName }); log(s, p.id, `The next ${e.amount} arcane damage to ${p.name} this turn will be prevented.`); break;
       case 'rollDie': {
         const n = 1 + Math.floor(rand(s) * 6);
         if (n === 6) p.turn.flags.rolledSix = 1;

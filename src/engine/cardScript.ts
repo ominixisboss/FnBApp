@@ -16,7 +16,10 @@ export type AttackFilter =
   | { kind: 'boosted' } // "the next attack you boost"
   | { kind: 'runeGated' } // "the next attack action card you rune gate"
   | { kind: 'classAttackAction'; value: string } // "your next Guardian attack action card"
-  | { kind: 'keyword'; value: string }; // "the next attack with stealth"
+  | { kind: 'keyword'; value: string } // "the next attack with stealth"
+  | { kind: 'color'; pitch: number } // "your next blue attack"
+  /** any other word: a card type ("angel") or part of the name ("Dawnblade"); ally: only an ally's attack ("Pirate ally attack") */
+  | { kind: 'word'; value: string; ally?: boolean };
 
 export type Effect =
   /** any: "to any target" (allies too), otherwise a hero */
@@ -76,6 +79,8 @@ export type Effect =
   | { kind: 'transcend' }
   /** "Roll a 6 sided die." and what the roll does ("Gain {r} equal to half the number rolled") */
   | { kind: 'rollDie'; then: RollEffect[] }
+  /** prevent the next N arcane damage that would be dealt to you this turn */
+  | { kind: 'preventArcane'; amount: number }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -182,6 +187,10 @@ export type Condition =
   | { kind: 'aurasAtLeast'; n: number }
   | { kind: 'anotherBlue' }
   | { kind: 'rolledSix' }
+  /** the current attack has go again */
+  | { kind: 'linkGoAgain' }
+  /** the current attack is a <Class> attack ("defends a Guardian attack") */
+  | { kind: 'linkClass'; cls: string }
   | { kind: 'attackingMarked' }
   | { kind: 'weaponAttacked' }
   | { kind: 'intimidated' }
@@ -347,6 +356,12 @@ export interface CardScript {
   countsAs?: string;
   /** "When an attack usurps this, <effects>" (a card that counts as a Runechant) */
   onUsurp?: Effect[];
+  /** "Solflare - When this is charged to your soul, ..." */
+  onCharge?: Effect[];
+  /** "When you win a clash revealing this, ..." */
+  onClashWin?: Effect[];
+  /** "If this would be put into your graveyard from anywhere, instead banish it" */
+  banishInsteadOfGrave?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -429,6 +444,11 @@ function parseFilter(words: string): AttackFilter | null {
   if (cls) return { kind: 'class', value: cls };
   const either = w.split(/\s+or\s+/);
   if (either.length > 1 && either.every((x) => CLASS_WORDS.includes(x))) return { kind: 'anyClass', values: either };
+  const color = ({ red: 1, yellow: 2, blue: 3 } as Record<string, number>)[w.toLowerCase()];
+  if (color) return { kind: 'color', pitch: color };
+  // "Pirate ally", "angel", "Dawnblade", "Herald": one word (plus "ally"), matched against card types and names
+  const am = w.match(/^([A-Za-z]+)( ally)?$/);
+  if (am && !/^(attack|action|card|cards|non|next|first|this|that|opposing|defending|attacking|other|another|chosen|named|each|stealth|combo)$/i.test(am[1])) return { kind: 'word', value: am[1][0].toUpperCase() + am[1].slice(1).toLowerCase(), ally: !!am[2] || undefined };
   return null;
 }
 
@@ -442,6 +462,8 @@ export function parseEffect(raw: string): Effect[] | null {
   // "wager with the defending hero. The winner draws a card" is one effect, not two
   const wm = s.match(/^(you may )?wager with (?:them|the defending hero)\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token)$/i);
   if (wm) return [{ kind: 'wager', tokens: wm[4] ? [wm[4]] : [], winnerDraw: wm[3] ? toNum(wm[3].toLowerCase()) : undefined, optional: !!wm[1] }];
+  if ((m = s.match(/^search your deck for (?:a|an) ([A-Z][\w' ,:-]+?), reveal it, put it into your hand,? (?:and|then) shuffle$/i)))
+    return [{ kind: 'tutor', name: m[1].trim() }];
   const parts = /"/.test(s) ? [s] : s.split(/,? then |\. Then |\.\s+(?=[A-Z])/i); // never split inside a quoted grant
   if (parts.length > 1) {
     const out: Effect[] = [];
@@ -507,6 +529,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^amp (\d+)$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
   if (/^mark target opposing hero$/i.test(s)) return [{ kind: 'mark' }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\}(?: until end of turn)?$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
+  if ((m = s.match(/^prevent the next (\d+) arcane damage that would be dealt to you this turn$/i))) return [{ kind: 'preventArcane', amount: +m[1] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage\. if you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token$/i)))
     return [{ kind: 'preventNext', amount: +m[1], thenToken: m[2] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage$/i)))
@@ -903,7 +926,7 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
 function compile(c: Card): CardScript {
   const sc = emptyScript();
   const isAttack = c.types.includes('Attack') && c.types.includes('Action');
-  const isPermanentLike = ['Equipment', 'Weapon', 'Hero', 'Token', 'Aura', 'Item', 'Ally'].some((t) =>
+  const isPermanentLike = ['Equipment', 'Weapon', 'Hero', 'Token', 'Aura', 'Item', 'Ally', 'Figment', 'Landmark', 'Construct'].some((t) =>
     c.types.includes(t),
   );
   // the keyword list repeats effect keywords that are also in the text (intimidate, opt, amp, reload): only take static ones from it
@@ -1324,6 +1347,29 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const host = rf && [...sc.onAttack, ...sc.onPlay, ...sc.activations.flatMap((a) => a.effects)].reverse().find((e) => e.kind === 'rollDie');
     if (rf && host && host.kind === 'rollDie') { host.then.push(rf); return; }
   }
+  // "When this defends an attack with go again / with {p} greater than its base / a Guardian attack, ..."
+  if ((m = sent.match(/^when this defends (an attack with go again|an attack with \{p\} greater than its base|an? ([A-Z][a-z]+) attack), (.+?)\.?$/))) {
+    const cond: Condition = /go again/.test(m[1]) ? { kind: 'linkGoAgain' } : /greater than its base/.test(m[1]) ? { kind: 'powerAboveBase' } : { kind: 'linkClass', cls: m[2] };
+    const e = parseEffect(m[3]);
+    if (e) return void sc.onDefend.push({ kind: 'ifCond', cond, effects: e });
+  }
+  if ((m = sent.match(/^crush - when this deals (\d+) or more damage to an? ([A-Z][a-z]+) hero, (.+?)\.?$/)) && isAttack) {
+    const e = parseEffect(m[3]);
+    if (e && +m[1] === 4) return void sc.conditional.push({ when: 'crush', effects: [{ kind: 'ifOppClass', cls: m[2], then: e }] });
+  }
+  if ((m = sent.match(/^[Tt]ower - if this has (\d+) or more \{p\}, it gets "when this hits(?: a hero)?, (.+?)\.?"\.?$/)) && isAttack) {
+    const e = parseEffect(m[2]);
+    if (e) return void sc.conditional.push({ when: 'ifLink', cond: { kind: 'powerAtLeast', n: +m[1] }, effects: [{ kind: 'thisGrantOnHit', effects: e }] });
+  }
+  if ((m = sent.match(/^solflare - when this is charged to your soul, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void (sc.onCharge ??= []).push(...e);
+  }
+  if ((m = sent.match(/^when you win a clash revealing this, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void (sc.onClashWin ??= []).push(...e);
+  }
+  if (/^if this would be put into your graveyard from anywhere, instead banish it\.?$/i.test(sent)) { sc.banishInsteadOfGrave = true; return; }
   if ((m = sent.match(/^when an attack usurps this, (.+?)\.?$/i))) {
     const e = parseEffect(m[1].replace(/^it gets/i, 'the attack gets'));
     if (e) return void (sc.onUsurp ??= []).push(...e);
@@ -1553,5 +1599,7 @@ export function describeFilter(f: AttackFilter): string {
     case 'boosted': return 'attack you boost';
     case 'runeGated': return 'attack action card you rune gate';
     case 'classAttackAction': return `${f.value} attack action card`;
+    case 'color': return `${['', 'red', 'yellow', 'blue'][f.pitch]} attack`;
+    case 'word': return `${f.value}${f.ally ? ' ally' : ''} attack`;
   }
 }
