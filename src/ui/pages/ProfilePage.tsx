@@ -25,14 +25,8 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 const FORMAT: Record<string, string> = { blitz: 'Blitz', cc: 'Classic Constructed', casual: 'Casual' };
 const DIFF: Record<string, string> = { easy: 'Easy bot', normal: 'Normal bot', hard: 'Hard bot', online: 'Online players' };
 
-export function Avatar({ heroId, size = 64, frame }: { heroId: string | null; size?: number; frame?: string }) {
-  const hero = heroId ? getDb().byId.get(heroId) : undefined;
-  return (
-    <div className={`avatar frame-${frame ?? 'none'}`} style={{ width: size, height: size, backgroundImage: hero?.image ? `url(${hero.image})` : undefined }}>
-      {!hero && <span>?</span>}
-    </div>
-  );
-}
+export { Avatar } from '../components/Avatar';
+import { Avatar } from '../components/Avatar';
 
 /** Single-series horizontal bars: one hue, values labelled, full numbers in the table beside. */
 function WinRateBars({ lines, label }: { lines: StatLine[]; label: (k: string) => string }) {

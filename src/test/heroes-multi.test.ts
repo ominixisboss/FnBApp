@@ -2,10 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import './setup';
 import { findCard, getDb } from '../data/cardDb';
-import { applyAction, cardOf, createGame, HERO_INDEX, playOptions } from '../engine/game';
+import { applyAction, cardOf, createGame, defendOptions, HERO_INDEX, playOptions, targetableOpponents } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import { chooseAction } from '../ai/bot';
 import { getHeroAbility } from '../engine/heroes';
+import { getScript } from '../engine/cardScript';
 import type { GameState, PlayerId } from '../engine/types';
 
 const filler = () => findCard('Wounding Blow', 3)!.id;
@@ -199,5 +200,35 @@ describe('dragon attacks', () => {
     expect(l.ally).toBe(true);
     expect(l.goAgain).toBe(true);
     expect(playOptions(s, 0).some((o) => o.uid === 9989 && o.kind === 'activation')).toBe(false);
+  });
+});
+
+describe('more hero abilities', () => {
+  const filler = () => findCard('Wounding Blow', 3)!.id;
+  const mk = (hero: string, extra: string[] = []) => ({ heroId: findCard(hero)!.id, weaponIds: [], equipmentIds: [], cardIds: [...extra, ...Array(30).fill(filler())] });
+  it('Killjoy may attack any opposing hero in a Pit Fight', () => {
+    const s = createGame(['Killjoy, the Crooked Blade', 'Dorinthea', 'Dorinthea', 'Dorinthea'].map((h, i) => ({ name: 'P' + i, isBot: true, deck: mk(h) })), 3, 'upf');
+    expect([...targetableOpponents(s, 0)].sort()).toEqual([1, 2, 3]);
+  });
+  it('Levia: when blood debt brings her to 13 life, she transforms into Blasmophet from her inventory', () => {
+    const blas = findCard('Blasmophet, Levia Consumed')!;
+    const levia = getDb().cards.find((c) => c.types.includes('Hero') && c.text.startsWith('If a card with 6 or more {p} has been put into your banished zone this turn, cards you own lose blood debt'))!;
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk(levia.name, [blas.id]) }, { name: 'P1', isBot: false, deck: mk('Dorinthea') }], 4, 'cc', 0));
+    expect(s.players[0].inventory).toContain(blas.id);
+    const debt = getDb().cards.find((c) => getScript(c).bloodDebt && Number(c.power ?? 0) < 6)!;
+    s.players[0].banished.push({ uid: 8801, cardId: debt.id, owner: 0 }, { uid: 8802, cardId: debt.id, owner: 0 });
+    s.players[0].life = 14;
+    for (let i = 0; i < 6 && s.phase !== 'arsenal'; i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'arsenal', uid: null });
+    expect(cardOf(s.players[0].hero).name).toBe('Blasmophet, Levia Consumed');
+  });
+  it('Lyath: after her ability, defending action cards get +1{d}', () => {
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk('Dorinthea') }, { name: 'P1', isBot: false, deck: mk('Lyath Goldmane') }], 6, 'blitz', 0));
+    s.players[0].resources = 10;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !s.chain.length; i++) s = applyAction(s, { type: 'pass' });
+    const before = defendOptions(s, 1).find((o) => o.kind === 'hand')!.defense;
+    s.players[1].turn.flags.lyathDef = 1;
+    expect(defendOptions(s, 1).find((o) => o.kind === 'hand')!.defense).toBe(before + 1);
   });
 });

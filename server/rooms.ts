@@ -4,7 +4,7 @@ import type { WebSocket } from 'ws';
 import { getDb, isHero } from '../src/data/cardDb';
 import { applyAction, concedeSeat, createGame, placements } from '../src/engine/game';
 import type { DeckList } from '../src/engine/game';
-import type { Action, GameState, PlayerId } from '../src/engine/types';
+import type { Action, GameState, Macro, PlayerId } from '../src/engine/types';
 import { formatName, validateDeck } from '../src/deck/deck';
 import type { Deck, DeckFormat } from '../src/deck/deck';
 import { fromView, viewFor } from '../src/online/view';
@@ -17,7 +17,7 @@ import { createPod, joinPod, leavePod, pick as podPick, podDeck, startPod, submi
 import type { PodView } from './pods';
 
 export type ClientMsg =
-  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number; events?: boolean }
+  | { t: 'host'; deck: DeckList; format: DeckFormat; sandbox?: boolean; size?: number; events?: boolean; macro?: Macro }
   | { t: 'fillBots' }
   | { t: 'join'; code: string; deck: DeckList }
   | { t: 'queue'; deck: DeckList; format: DeckFormat }
@@ -85,6 +85,8 @@ interface Room {
   size: number;
   /** Smash Palace event deck */
   events?: boolean;
+  /** a table-wide macro card (Treasure Island, Omens of Arcana), set by the host */
+  macro?: Macro;
   /** Pit Fight queue: when the waiting players get bots and start */
   fillTimer?: ReturnType<typeof setTimeout>;
   /** a bot's next move is scheduled */
@@ -307,7 +309,7 @@ function finish(room: Room) {
 function start(room: Room) {
   if (room.fillTimer) clearTimeout(room.fillTimer);
   if (queues.get(queueKey(room.format)) === room) queues.delete(queueKey(room.format));
-  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format, undefined, { events: !!room.events });
+  room.state = createGame(room.seats.map((x) => ({ name: x.name, isBot: !!x.bot, difficulty: 'normal' as const, deck: x.deck })), Math.floor(Math.random() * 2 ** 31), room.format, undefined, { events: !!room.events, macro: room.macro });
   room.initial = room.state;
   room.actions = [];
   broadcast(room);
@@ -462,7 +464,8 @@ export async function onMessage(ws: WebSocket, user: { id: number; username: str
           return;
         }
       }
-      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox, events: msg.t === 'host' && format === 'upf' && !!(msg as { events?: boolean }).events };
+      const room: Room = { code: newCode(), format, size, seats: [seat], state: null, isPrivate: msg.t === 'host', ended: false, actions: [], sandbox: msg.t === 'host' && !!msg.sandbox, events: msg.t === 'host' && format === 'upf' && !!(msg as { events?: boolean }).events,
+        macro: msg.t === 'host' && ['Treasure Island', 'Omens of Arcana'].includes((msg as { macro?: string }).macro ?? '') ? (msg as { macro?: Macro }).macro : undefined };
       rooms.set(room.code, room);
       userRoom.set(user.id, room.code);
       if (msg.t === 'queue') queues.set(queueKey(format), room);

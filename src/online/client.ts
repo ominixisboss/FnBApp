@@ -1,7 +1,7 @@
 // WebSocket client for online games. A single connection, shared by the UI through a tiny store.
 import { useSyncExternalStore } from 'react';
 import type { DeckList } from '../engine/game';
-import type { Action, GameState } from '../engine/types';
+import type { Action, GameState, Macro } from '../engine/types';
 import type { DeckFormat } from '../deck/deck';
 import { wsUrl } from '../ui/auth';
 import type { PodView } from './podTypes';
@@ -94,7 +94,7 @@ export const online = {
     ws?.close();
     set({ status: 'offline', game: null, code: null, opponent: null });
   },
-  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number, events?: boolean) => sendMsg({ t: 'host', deck, format, sandbox, size, events }),
+  host: (deck: DeckList, format: DeckFormat, sandbox = false, size?: number, events?: boolean, macro?: Macro) => sendMsg({ t: 'host', deck, format, sandbox, size, events, macro }),
   /** Ultimate Pit Fight: start now, with bots in the empty seats */
   fillBots: () => sendMsg({ t: 'fillBots' }),
   queue: (deck: DeckList, format: DeckFormat) => sendMsg({ t: 'queue', deck, format }),

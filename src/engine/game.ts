@@ -2,7 +2,7 @@
 import type { Card } from '../data/types';
 import { card, findCard, getDb, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
-import { getHeroAbility } from './heroes';
+import { getHeroAbility, transformInto } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
 import type { Activation, AttackFilter, Condition, Effect, Mode, OptionalCost, OptionalCostKind, TriggerEvent } from './cardScript';
 import type { Macro, Layer, PermanentState } from './types';
@@ -45,7 +45,7 @@ export function nextAlive(s: GameState, pid: PlayerId): PlayerId {
 export function targetableOpponents(s: GameState, pid: PlayerId): PlayerId[] {
   const n = s.players.length;
   // events: "you may attack any opposing hero"
-  if (s.players[pid].turn?.flags.anyTarget) return s.players.filter((q) => q.id !== pid && !q.eliminated).map((q) => q.id);
+  if (s.players[pid].turn?.flags.anyTarget || heroAbilityOf(s.players[pid])?.attackAny) return s.players.filter((q) => q.id !== pid && !q.eliminated).map((q) => q.id);
   const out: PlayerId[] = [];
   const step = (dir: 1 | -1) => { for (let i = 1; i < n; i++) { const q = ((pid + dir * i + n * 4) % n) as PlayerId; if (!s.players[q].eliminated) return q; } return null; };
   for (const q of [step(1), step(-1)]) if (q !== null && q !== pid && !out.includes(q)) out.push(q);
@@ -209,8 +209,9 @@ function basePowerFor(p: PlayerState, c: Card): number {
 }
 
 /** Defense value of a card for its controller. */
-export function defenseFor(p: PlayerState, _c: Card, base: number): number {
-  return ability(p)?.halveStats ? Math.ceil(base / 2) : base;
+export function defenseFor(p: PlayerState, c: Card, base: number): number {
+  const v = ability(p)?.halveStats ? Math.ceil(base / 2) : base;
+  return v + (p.turn?.flags.lyathDef && has(c, 'Action') ? 1 : 0); // Lyath: defending action cards get +1{d} this turn
 }
 
 export function costOf(c: Card): number {
@@ -288,6 +289,9 @@ export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: 
 // ---------------------------------------------------------------- setup
 
 /** `first`: who takes the first turn (decided by a die roll before the game); random if not given. */
+/** a demi-hero (Blasmophet, Levia Redeemed) in a deck list belongs in the inventory */
+const isDemiHero = (cid: string) => !!getDb().byId.get(cid)?.types.includes('Demi-Hero');
+
 export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff, format = 'blitz', first?: PlayerId, opts: { events?: boolean; macro?: Macro } = {}): GameState {
   const s: GameState = {
     seed, nextUid: 1, turn: 1, turnPlayer: 0, phase: 'action', priority: 0, passes: 0,
@@ -299,7 +303,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
     const p: PlayerState = {
       id, name: ps.name, isBot: ps.isBot, difficulty: ps.difficulty ?? 'normal',
       hero: mk(s, hero.id, id), life: hero.health ?? 20, intellect: hero.intellect ?? 4,
-      deck: shuffle(s, ps.deck.cardIds.map((cid) => mk(s, cid, id))),
+      deck: shuffle(s, ps.deck.cardIds.filter((cid) => !isDemiHero(cid)).map((cid) => mk(s, cid, id))),
       hand: [], arsenal: [], pitch: [], graveyard: [], banished: [], intimidated: [], soul: [],
       weapons: [], equipment: [], permanents: [], resources: 0, actionPoints: 0, effects: [], marked: false,
       turn: newTurnInfo(),
@@ -307,7 +311,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
     // equip one item per slot, weapons up to two hands
     const slots = new Set<string>();
     let hands = 0;
-    p.inventory = [...(ps.deck.inventoryIds ?? [])];
+    p.inventory = [...(ps.deck.inventoryIds ?? []), ...ps.deck.cardIds.filter(isDemiHero)];
     const noWeapons = !!getHeroAbility(hero)?.noWeapons;
     for (const wid of noWeapons ? [] : ps.deck.weaponIds) {
       const w = card(wid);
@@ -2274,7 +2278,10 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
   // "When this defends, <effect>"
   for (const x of [...l.defenders]) {
     const od = getScript(cardOf(x.inst)).onDefend;
-    if (od.length && (s.phase as string) !== 'gameOver') resolveEffects(s, d, od, x.inst);
+    if (!od.length || (s.phase as string) === 'gameOver') continue;
+    const trap = cardOf(x.inst).types.includes('Trap') && od.some((e) => e.kind !== 'ifCond' || evalCondition(s, d, e.cond));
+    resolveEffects(s, d, od, x.inst);
+    if (trap) ability(d)?.onTrap?.(heroCtx(s, d), l);
   }
   // "When this defends, you may <cost>. If you do, <effect>" for the blockers the player opted into
   const boostDefs = l.defenders.filter((x) => boosts.includes(x.inst.uid));
@@ -2527,10 +2534,24 @@ function endTurn(s: GameState) {
   if ((s.phase as string) === 'gameOver') return;
   { const tp = s.players[s.turnPlayer]; for (const pm of [...tp.permanents]) if (getScript(cardOf(pm.inst)).destroyAtEnd) removePermanent(s, tp, pm.inst.uid); }
   for (const e of s.players[s.turnPlayer].equipment) if (!e.destroyed && getScript(cardOf(e.inst)).endPhaseWear) { e.defenseMod -= 1; log(s, s.turnPlayer, `${cardOf(e.inst).name} gets a -1{d} counter (${equipDefense(e)}).`); }
+  // cards stolen "until the end of this action phase" go back
+  for (const pl of s.players) for (const pm of [...pl.permanents]) {
+    if (pm.returnTo === undefined || pm.returnTo === pl.id) continue;
+    const back = s.players[pm.returnTo];
+    pl.permanents = pl.permanents.filter((x) => x !== pm);
+    const to = pm.returnTo; pm.returnTo = undefined;
+    if (!back.eliminated) { back.permanents.push(pm); log(s, to, `${cardOf(pm.inst).name} returns to ${back.name}.`); }
+  }
   for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
   const debt = ability(p)?.skipBloodDebt?.(heroCtx(s, p)) ? 0 : p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
-  if (debt > 0) { p.life -= debt; log(s, p.id, `Blood debt: ${p.name} loses ${debt} life (${p.life}).`); checkWin(s); if (s.phase === 'gameOver') return; }
+  if (debt > 0 && !ability(p)?.bloodDebtInstead?.(heroCtx(s, p), debt)) {
+    const before = p.life;
+    p.life -= debt; log(s, p.id, `Blood debt: ${p.name} loses ${debt} life (${p.life}).`); checkWin(s); if (s.phase === 'gameOver') return;
+    // Levia: "when blood debt reduces your {h} to 13, you may transform into Blasmophet, Levia Consumed"
+    const blas = p.inventory?.find((id) => card(id).name === 'Blasmophet, Levia Consumed');
+    if (blas && before > 13 && p.life <= 13 && ability(p)?.id === 'levia') transformInto(p, blas, heroCtx(s, p).api);
+  }
   // end phase token triggers
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
@@ -2723,6 +2744,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         if (l && l.attacker === p.id && matchesFilter(e.filter, l)) { l.powerMod += e.amount; log(s, p.id, `${cardOf(l.inst).name} gets +${e.amount} power (${linkPower(l)}).`); }
         break;
       case 'targetAttackGoAgain': if (l && matchesFilter(e.filter, l)) l.goAgain = true; break;
+      case 'targetAttackOnHit': if (l && l.attacker === p.id && matchesFilter(e.filter, l)) l.extraOnHit = [...l.extraOnHit, ...e.effects]; break;
+      case 'targetAttackKeyword':
+        if (l && l.attacker === p.id && matchesFilter(e.filter, l)) {
+          if (e.keyword === 'dominate') l.dominate = true; else if (e.keyword === 'overpower') l.overpower = true; else l.unpreventable = true;
+          log(s, p.id, `${cardOf(l.inst).name} gets ${e.keyword === 'unpreventable' ? '"damage can\u2019t be prevented"' : e.keyword}.`);
+        }
+        break;
       case 'thisPower': if (l && l.inst.uid === src.uid) l.powerMod += e.amount; break;
       case 'thisGoAgain': if (l && l.inst.uid === src.uid) l.goAgain = true; break;
       case 'thisGrantOnHit': if (l && l.inst.uid === src.uid) l.extraOnHit = [...l.extraOnHit, ...e.effects]; break;
@@ -3123,6 +3151,18 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'perEvoPower': {
         const n = evoCount(p);
         if (l && l.inst.uid === src.uid && n) { l.powerMod += e.amount * n; log(s, p.id, `${srcName} gets +${e.amount * n} power (${n} Evo${n > 1 ? 's' : ''} equipped).`); }
+        break;
+      }
+      case 'steal': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const ok = (c: Card) => e.what === 'gold' ? c.name === 'Gold' || getScript(c).countsAs === 'Gold' : e.what === 'auraToken' ? has(c, 'Aura') && has(c, 'Token') : e.what === 'item' ? has(c, 'Item') : has(c, 'Ally');
+        const pm = [...t.permanents].filter((x) => ok(cardOf(x.inst))).sort((a, b) => Number(cardOf(b.inst).cost ?? 0) - Number(cardOf(a.inst).cost ?? 0))[0];
+        if (!pm) break;
+        t.permanents = t.permanents.filter((x) => x !== pm);
+        if (e.temporary) pm.returnTo = t.id;
+        p.permanents.push(pm);
+        log(s, p.id, `${p.name} steals ${cardOf(pm.inst).name} from ${t.name}${e.temporary ? ' until the end of the turn' : ''}.`, 'To steal a card is to gain control of it.');
+        ability(p)?.onSteal?.(heroCtx(s, p), cardOf(pm.inst));
         break;
       }
       case 'stealGold': {
