@@ -4,7 +4,7 @@ import { card, findCard, getDb, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
 import { getHeroAbility } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
-import type { AttackFilter, Condition, Effect, Mode, OptionalCost, OptionalCostKind, TriggerEvent } from './cardScript';
+import type { Activation, AttackFilter, Condition, Effect, Mode, OptionalCost, OptionalCostKind, TriggerEvent } from './cardScript';
 import type { Macro, Layer, PermanentState } from './types';
 import type {
   Action, CardInst, ChainLink, Difficulty, GameState, OptionalChoice, PendingChoice, PlayerId, PlayerState, TurnEffect,
@@ -599,6 +599,19 @@ function fireTriggers(s: GameState, p: PlayerState, on: TriggerEvent, link?: { i
       resolveEffects(s, p, t.effects, inst);
     });
   }
+}
+
+/** A dragon ally's attack when a weapon grants it ("Dragon allies you control get 'Once per Turn Action - 0: Attack'") */
+const DRAGON_ATTACK: Activation = { cost: 0, attack: true, instant: false, oncePerTurn: true, destroySelf: false, goAgain: false, effects: [], text: 'Once per Turn Action - 0: Attack' };
+
+/** A card's activated abilities: its printed ones, plus ones other cards give it (a dragon ally's attack). */
+export function activationsOf(p: PlayerState | undefined, inst: CardInst): Activation[] {
+  const c = cardOf(inst);
+  const own = getScript(c).activations;
+  const dragon = !!p && c.types.includes('Dragon') && c.types.includes('Ally') && p.permanents.some((pm) => pm.inst.uid === inst.uid)
+    && [...p.weapons.map((w) => w.inst), ...p.equipment.filter((e) => !e.destroyed).map((e) => e.inst)].some((x) => getScript(cardOf(x)).grantsDragonAttack)
+    && !own.some((a) => a.attack);
+  return dragon ? [...own, DRAGON_ATTACK] : own;
 }
 
 /** Is it a <name> ("Gold", "Runechant"), or does it count as one ("This counts as a Gold")? */
@@ -1636,7 +1649,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   ];
   for (const src of sources) {
     const sc = getScript(cardOf(src.inst));
-    sc.activations.forEach((a, index) => {
+    activationsOf(p, src.inst).forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
       // a face-down (cloaked) equipment: only "turn this face-up" and "only while face-down" abilities work
       const fd = 'faceDown' in src && src.faceDown;
@@ -2016,7 +2029,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     const found = findInst(s, uid)!;
     inst = found.inst;
     const c = cardOf(inst);
-    const a = getScript(c).activations[index];
+    const a = activationsOf(p, inst)[index];
     pay(s, p, opt.cost, pitch);
     if (!a.instant) p.actionPoints -= 1;
     const w = p.weapons.find((w) => w.inst.uid === uid);
@@ -2060,7 +2073,7 @@ function resolveActivation(s: GameState, p: PlayerState, inst: CardInst, index: 
     return;
   }
   const c = cardOf(inst);
-  const a = getScript(c).activations[index];
+  const a = activationsOf(p, inst)[index];
   if (a.attack) {
     startAttack(s, p, inst, true, false);
     if (a.goAgain) currentLink(s)!.goAgain = true;

@@ -689,10 +689,12 @@ HERO_ABILITIES.push(
   },
   {
     id: 'dromai',
-    summary: 'Whenever you pitch a red card, create an Ash token.',
-    partial: true,
+    summary: 'Whenever you pitch a red card, create an Ash token. If you’ve played a red card this turn, your dragon attacks get go again.',
     match: (t) => t.startsWith('Whenever you pitch a red card, create an Ash token'),
     onPitch({ p, api }, c) { if (c.pitch === 1) api.createToken(p, 'Ash', 1); },
+    onAttack({ p }, l) {
+      if (l.attacker === p.id && cardOf(l.inst).types.includes('Dragon') && p.turn.played.some((id) => card(id).pitch === 1)) l.goAgain = true;
+    },
   },
   {
     id: 'aurora-emissary',

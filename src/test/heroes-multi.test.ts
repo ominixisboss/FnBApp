@@ -181,3 +181,23 @@ describe('Arakni, Marionette and the Agents of Chaos', () => {
     expect(s.players[0].broodOf).toBeUndefined();
   });
 });
+
+describe('dragon attacks', () => {
+  it('Storm of Sandikai lets a dragon ally attack once per turn; Dromai gives it go again after a red card', () => {
+    const filler = findCard('Wounding Blow', 1)!.id;
+    const mk = (heroId: string, weaponIds: string[] = []) => ({ heroId, weaponIds, equipmentIds: [], cardIds: Array(30).fill(filler) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk(findCard('Dromai, Ash Artist')!.id, [findCard('Storm of Sandikai')!.id]) }, { name: 'P1', isBot: false, deck: mk(findCard('Dorinthea')!.id) }], 12, 'cc', 0));
+    const p = s.players[0];
+    p.permanents.push({ inst: { uid: 9989, cardId: findCard('Aether Ashwing')!.id, owner: 0 }, ward: 0 });
+    p.turn.played.push(filler); // a red card was played this turn
+    p.actionPoints = 2;
+    const opt = playOptions(s, 0).find((o) => o.uid === 9989 && o.kind === 'activation');
+    expect(opt).toBeDefined();
+    s = applyAction(s, { type: 'activate', uid: 9989, index: opt!.index, pitch: [] });
+    for (let i = 0; i < 3 && !s.chain.length; i++) s = applyAction(s, { type: 'pass' });
+    const l = s.chain[s.chain.length - 1];
+    expect(l.ally).toBe(true);
+    expect(l.goAgain).toBe(true);
+    expect(playOptions(s, 0).some((o) => o.uid === 9989 && o.kind === 'activation')).toBe(false);
+  });
+});

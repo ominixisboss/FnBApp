@@ -381,6 +381,10 @@ export interface CardScript {
   heirloom?: boolean;
   /** "While this is equipped face-down, when an attack <cond> hits you, destroy this and create a <X> token under each opponent's control" */
   concealed?: { when: 'goAgain' | 'aboveBase' | 'reaction'; token: string };
+  /** "Dragon allies you control get 'Once per Turn Action - 0: Attack'" (Storm of Sandikai) */
+  grantsDragonAttack?: boolean;
+  /** "If you've played a red card this turn, your dragon attacks get go again" (Dromai) */
+  dragonGoAgainIfRed?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -934,6 +938,7 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
   if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
   if (/^cloaked$/i.test(s)) return (sc.cloaked = true);
+  if (/^dragon allies you control get "once per turn action - 0: attack"$/i.test(s)) return (sc.grantsDragonAttack = true);
   if (/^while this is equipped face-down, at the start of your turn, if you have exactly 1\{h\}, you may turn this face-up$/i.test(s)) return (sc.heirloom = true);
   if ((m = s.match(/^this counts as an? (Gold|Runechant|Silver|Copper)$/i))) { sc.countsAs = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase(); return true; }
   if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
