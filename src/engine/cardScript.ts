@@ -20,10 +20,11 @@ export type AttackFilter =
 
 export type Effect =
   /** any: "to any target" (allies too), otherwise a hero */
-  | { kind: 'arcane'; amount: number; any?: boolean }
-  | { kind: 'damage'; amount: number; any?: boolean }
+  /** all: each opposing hero (Pit Fight: every opponent) */
+  | { kind: 'arcane'; amount: number; any?: boolean; all?: boolean }
+  | { kind: 'damage'; amount: number; any?: boolean; all?: boolean }
   | { kind: 'gainLife'; amount: number }
-  | { kind: 'loseLifeOpp'; amount: number }
+  | { kind: 'loseLifeOpp'; amount: number; all?: boolean }
   | { kind: 'draw'; amount: number }
   | { kind: 'gainResource'; amount: number }
   | { kind: 'nextAttackPower'; amount: number; filter: AttackFilter }
@@ -59,6 +60,8 @@ export type Effect =
   /** destroy the permanent (aura, item, ally, equipment) that has the ability */
   | { kind: 'destroySelf' }
   /** "destroy this unless you remove a steam / balance / doom counter from it" */
+  /** "This gets +1{p} or go again" (the attack card's own ability) */
+  | { kind: 'powerOrGoAgain'; amount: number }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -106,8 +109,9 @@ export type Effect =
   | { kind: 'oppEquipCounter' }
   /** look at the top 5 of their deck, banish the cards sharing a name (Righteous Cleansing) */
   | { kind: 'cleanseTop'; n: number }
-  | { kind: 'oppDraw'; amount: number }
-  | { kind: 'oppCreateToken'; name: string }
+  /** all: every other living hero ("each other hero", "each opponent") */
+  | { kind: 'oppDraw'; amount: number; all?: boolean }
+  | { kind: 'oppCreateToken'; name: string; all?: boolean }
   /** the current attack gets "When this hits, <effects>" */
   | { kind: 'thisGrantOnHit'; effects: Effect[] }
   /** where this attack card goes when the chain closes (granted "When this hits, put it ...") */
@@ -255,6 +259,8 @@ export interface Activation {
   attack: boolean;
   instant: boolean;
   oncePerTurn: boolean;
+  /** "Twice / Thrice per Turn" (with oncePerTurn) */
+  perTurn?: number;
   destroySelf: boolean;
   /** {t} costs: this card, your hero, a cog you control */
   tapSelf?: boolean;
@@ -421,12 +427,12 @@ export function parseEffect(raw: string): Effect[] | null {
     return out;
   }
   if ((m = s.match(/^deal (\d+) arcane damage(?: to (any target|target hero|target opposing hero|each opposing hero|each hero|the defending hero))?$/i)))
-    return [{ kind: 'arcane', amount: +m[1], ...(m[2]?.toLowerCase() === 'any target' ? { any: true } : {}) }];
+    return [{ kind: 'arcane', amount: +m[1], ...(m[2]?.toLowerCase() === 'any target' ? { any: true } : {}), ...(/^each (opposing )?hero$/i.test(m[2] ?? '') ? { all: true } : {}) }];
   if ((m = s.match(/^deal (\d+) damage to (target hero|target opposing hero|any target|the defending hero|each opposing hero)$/i)))
-    return [{ kind: 'damage', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}) }];
+    return [{ kind: 'damage', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}), ...(/^each opposing hero$/i.test(m[2]) ? { all: true } : {}) }];
   if ((m = s.match(/^(?:you )?gain (\d+)\{h\}$/i))) return [{ kind: 'gainLife', amount: +m[1] }];
-  if ((m = s.match(/^(?:target|each) (?:opposing )?hero loses (\d+)\{h\}$/i)))
-    return [{ kind: 'loseLifeOpp', amount: +m[1] }];
+  if ((m = s.match(/^(target|each) (?:opposing )?hero loses (\d+)\{h\}$/i)))
+    return [{ kind: 'loseLifeOpp', amount: +m[2], ...(m[1].toLowerCase() === 'each' ? { all: true } : {}) }];
   if ((m = s.match(/^(?:you )?draw (a|an|one|two|three|\d+) cards?$/i)))
     return [{ kind: 'draw', amount: toNum(m[1].toLowerCase()) }];
   if ((m = s.match(/^gain ((?:\{r\})+)$/i)))
@@ -610,21 +616,23 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^your hero deals (\d+) arcane damage to (any target|target hero|them)$/i))) return [{ kind: 'arcane', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}) }];
   // "create a Frailty token under their control" and the like: the opposing hero on this chain link gets it
   if ((m = s.match(/^[Cc]reate (a|an|one|two|three|\d+) ([A-Z][\w' ]*?) tokens? under (?:their|the attacking hero's|the defending hero's|target hero's|target opposing hero's|target opponent's|each opponent's|each other hero's|another target hero's) control$/)))
-    return Array.from({ length: toNum(m[1].toLowerCase()) }, () => ({ kind: 'oppCreateToken' as const, name: m![2] }));
+    return Array.from({ length: toNum(m[1].toLowerCase()) }, () => ({ kind: 'oppCreateToken' as const, name: m![2], ...(/each (?:opponent|other hero)'s control$/.test(s) ? { all: true } : {}) }));
   // "Daggers you control get +1{p} this turn" / "Draconic attacks get +2{p} this turn"
   if ((m = s.match(/^(?:your )?(\w+?)s?(?: attacks)? (?:you control )?get \+(\d+)\{p\} (?:this turn|until end of turn)$/i))) {
     const f = parseFilter(/^weapon$/i.test(m[1]) ? 'weapon' : /^[a-z]/.test(m[1]) ? m[1].toLowerCase() : m[1]);
     if (f && f.kind !== 'any') return [{ kind: 'turnAttackPower', amount: +m[2], filter: f }];
   }
   if (/^your attacks this turn get dominate$/i.test(s)) return [{ kind: 'turnAttackDominate' }];
-  if ((m = s.match(/^[Ee]ach hero creates (?:a|an) ([A-Z][\w' ]*?) token$/))) return [{ kind: 'createToken', name: m[1], amount: 1 }, { kind: 'oppCreateToken', name: m[1] }];
-  if ((m = s.match(/^each other hero draws (a|two|\d+) cards?$/i))) return [{ kind: 'oppDraw', amount: toNum(m[1].toLowerCase()) }];
+  if ((m = s.match(/^[Ee]ach hero creates (?:a|an) ([A-Z][\w' ]*?) token$/))) return [{ kind: 'createToken', name: m[1], amount: 1 }, { kind: 'oppCreateToken', name: m[1], all: true }];
+  if ((m = s.match(/^each (?:other hero|opponent) draws (a|two|\d+) cards?$/i))) return [{ kind: 'oppDraw', amount: toNum(m[1].toLowerCase()), all: true }];
+  if ((m = s.match(/^each hero draws (a|two|\d+) cards?$/i))) return [{ kind: 'draw', amount: toNum(m[1].toLowerCase()) }, { kind: 'oppDraw', amount: toNum(m[1].toLowerCase()), all: true }];
   // "the attack gets ..." (a reaction or equipment boosting the current attack)
   if ((m = s.match(/^the attack gets \+(\d+)\{p\}$/i))) return [{ kind: 'targetAttackPower', amount: +m[1], filter: { kind: 'any' } }];
   if (/^the attack gets go again$/i.test(s)) return [{ kind: 'targetAttackGoAgain', filter: { kind: 'any' } }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if ((m = s.match(/^this gets \+(\d+)\{p\} or go again$/i))) return [{ kind: 'powerOrGoAgain', amount: +m[1] }];
   if (/^\{t\} (?:them|target hero|target opposing hero|target hero or ally|target [A-Z]\w+ hero(?: or ally)?|them or an ally they control|them or a weapon they control|them and all allies they control)$/.test(s)) return [{ kind: 'tapOpp' }];
   if (/^(?:you may )?\{u\} your hero$/i.test(s)) return [{ kind: 'untap', what: 'hero' }];
   if (/^(?:you may )?\{u\} (?:a|target) cog you control$/i.test(s)) return [{ kind: 'untap', what: 'cog' }];
@@ -906,7 +914,7 @@ function compile(c: Card): CardScript {
       continue;
     }
     // activated abilities: "Once per Turn Action - {r}{r}: Attack", "Instant - Destroy this: ..."
-    const act = line.match(/^(once per turn )?(action|instant)\s*[-–]\s*([^:]*):\s*(.+)$/i);
+    const act = line.match(/^((?:once|twice|thrice) per turn )?(action|instant)\s*[-–]\s*([^:]*):\s*(.+)$/i);
     if (act) {
       const costPart = act[3];
       const extra = costPart.replace(/\{r\}/gi, '').replace(/[,\s]+/g, ' ').trim().toLowerCase();
@@ -926,7 +934,7 @@ function compile(c: Card): CardScript {
       // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
       let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
-      if (/\.?\s*go again\.?$/i.test(body) && !/^attack/i.test(body)) {
+      if (/\.?\s*go again\.?$/i.test(body) && !/^attack/i.test(body) && !/\bor go again\.?$/i.test(body)) {
         goAgain = true;
         body = body.replace(/\.?\s*go again\.?$/i, '');
       }
@@ -939,6 +947,7 @@ function compile(c: Card): CardScript {
           attack,
           instant: /instant/i.test(act[2]),
           oncePerTurn: !!act[1] || attack,
+          perTurn: /^twice/i.test(act[1] ?? '') ? 2 : /^thrice/i.test(act[1] ?? '') ? 3 : undefined,
           destroySelf,
           tapSelf: tapSelf || undefined,
           tapHero: tapHero || undefined,

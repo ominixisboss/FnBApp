@@ -1,6 +1,7 @@
 // Ultimate Pit Fight: 3-4 heroes, attacks only to your left or right, last hero standing wins.
 import { describe, expect, it } from 'vitest';
 import './setup';
+import { findCard } from '../data/cardDb';
 import { applyAction, concedeSeat, createGame, targetableOpponents } from '../engine/game';
 import { chooseAction } from '../ai/bot';
 import { autoBuildDeck, heroesFor, toDeckList } from '../deck/deck';
@@ -80,4 +81,17 @@ describe('Mythic bot at a Pit Fight table', () => {
     for (let i = 0; i < 6000 && g.phase !== 'gameOver'; i++) { const who = g.pendingChoices?.[0]?.player ?? g.pendingTriggers?.player ?? g.priority; g = applyAction(g, chooseAction(g, who, who === 0 ? 'mythic' : 'normal').action); }
     expect(g.phase).toBe('gameOver');
   }, 300_000);
+
+  it('"Each other hero draws a card" reaches every opponent, not just one', () => {
+    let s = pod(3, 5);
+    const song = findCard('Song of the Wandering Mind')!;
+    const p = s.players[s.turnPlayer];
+    s = structuredClone(s);
+    const me = s.players[p.id];
+    me.isBot = false; me.hand.push({ uid: 99001, cardId: song.id, owner: me.id }); me.resources = 10; me.actionPoints = 1;
+    const before = s.players.map((q) => q.hand.length);
+    s = applyAction(s, { type: 'play', uid: 99001, pitch: [] });
+    for (let i = 0; i < 6 && s.stack?.length; i++) s = applyAction(s, { type: 'pass' });
+    for (const q of s.players) if (q.id !== me.id) expect(q.hand.length).toBe(before[q.id] + 1);
+  });
 });

@@ -239,6 +239,8 @@ export function findInst(s: GameState, uid: number): { p: PlayerState; zone: str
     const pm = p.permanents.find((e) => e.inst.uid === uid);
     if (pm) return { p, zone: 'permanent', inst: pm.inst };
   }
+  const l = s.chain.find((x) => x.inst.uid === uid);
+  if (l) return { p: s.players[l.attacker], zone: 'chain', inst: l.inst };
   return null;
 }
 
@@ -1026,6 +1028,13 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
     case 'moat': moat(s, p, [...p.hand, ...p.arsenal].filter((x) => picks.includes(x.uid))); break;
     case 'pounce': pounce(s, s.players[_data![0]], p, picks); break;
     case 'graveEquip': if (yes) graveEquip(s, p, _data![0], _data![1]); break;
+    case 'powerOrGoAgain': {
+      const l = s.chain[_data![0]];
+      if (!l) break;
+      if (yes) { l.goAgain = true; log(s, p.id, `${cardOf(l.inst).name} gets go again.`); }
+      else { l.powerMod += _data![1]; log(s, p.id, `${cardOf(l.inst).name} gets +${_data![1]}{p} (${linkPower(l)}).`); }
+      break;
+    }
     case 'payOrWeaken': {
       const [li, amount, cost] = _data!;
       const l = s.chain[li];
@@ -1395,6 +1404,12 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
   }
 }
 
+/** Does `p`'s hero's activated ability have {t} in its cost ("Instant - {r}, {t}: ...")? */
+function heroAbilityTaps(p: PlayerState): boolean {
+  const h = cardOf(p.hero);
+  return /(?:^|\n)(?:once per turn )?(?:action|instant|attack reaction|defense reaction)\s*[-–][^:\n]*\{t\}/i.test(h.text);
+}
+
 /** An untapped cog / ally `p` controls, or the card `uid` itself ('this'): a permanent, equipment or weapon. */
 function untappedOwn(p: PlayerState, what: 'cog' | 'ally' | 'this', uid: number): { inst: CardInst; tapped?: boolean; usedThisTurn?: boolean } | undefined {
   if (what === 'this') {
@@ -1577,13 +1592,16 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     ...p.weapons.map((w) => ({ inst: w.inst, used: w.usedThisTurn })),
     ...p.equipment.filter((e) => !e.destroyed).map((e) => ({ inst: e.inst, used: e.usedThisTurn })),
     ...p.permanents.map((pm) => ({ inst: pm.inst, used: false, perm: true })),
+    // the attack card on the active chain link: its "Instant - ...: This gets +1{p}" abilities
+    ...(() => { const l = currentLink(s); return l && l.attacker === pid && !l.fromWeapon && l.damage === null ? [{ inst: l.inst, used: false, perm: true, chain: true }] : []; })(),
   ];
   for (const src of sources) {
     const sc = getScript(cardOf(src.inst));
     sc.activations.forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
       // an ally's (or other permanent's) once-per-turn ability; allies attack only during your action phase
-      if (a.oncePerTurn && 'perm' in src && !a.tapSelf && p.turn.flags[`act${src.inst.uid}:${index}`]) return;
+      if (a.oncePerTurn && 'perm' in src && !a.tapSelf && (p.turn.flags[`act${src.inst.uid}:${index}`] ?? 0) >= (a.perTurn ?? 1)) return;
+      if ('chain' in src && !a.instant) return;
       if (a.attack && sc.attackIfWeapon && !p.turn.weaponAttacked) return;
       if (a.tapSelf && !untappedOwn(p, 'this', src.inst.uid)) return;
       if (a.tapHero && p.heroTapped) return;
@@ -1599,8 +1617,10 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   }
   // hero abilities
   const ab = ability(p);
+  const heroTaps = heroAbilityTaps(p);
   ab?.activations?.forEach((a, i) => {
-    if (a.oncePerTurn && p.turn.flags[`hero${i}`]) return;
+    // a hero ability with {t} in its cost: usable while the hero is untapped (an untap effect lets it go again)
+    if (heroTaps ? p.heroTapped : a.oncePerTurn && p.turn.flags[`hero${i}`]) return;
     if (a.instant) {
       if (!['action', 'reaction'].includes(s.phase)) return;
     } else if (s.phase !== 'action' || s.turnPlayer !== pid || p.actionPoints < 1 || s.stack?.length) return;
@@ -1941,6 +1961,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     pay(s, p, opt.cost, pitch);
     if (!a.instant) p.actionPoints -= 1;
     p.turn.flags[`hero${index - HERO_INDEX}`] = 1;
+    if (heroAbilityTaps(p)) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     inst = p.hero;
     label = `${cardOf(p.hero).name}: ${a.label}`;
     log(s, pid, `${p.name} activates ${label}.`);
@@ -1955,7 +1976,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     if (w && a.oncePerTurn) w.usedThisTurn = true;
     const e = p.equipment.find((e) => e.inst.uid === uid);
     if (e && a.oncePerTurn) e.usedThisTurn = true;
-    if (a.oncePerTurn && p.permanents.some((pm) => pm.inst.uid === uid)) p.turn.flags[`act${uid}:${index}`] = 1;
+    if (a.oncePerTurn && (p.permanents.some((pm) => pm.inst.uid === uid) || s.chain.some((l) => l.inst.uid === uid))) p.turn.flags[`act${uid}:${index}`] = (p.turn.flags[`act${uid}:${index}`] ?? 0) + 1;
     if (a.tapSelf) { const t = untappedOwn(p, 'this', uid); if (t) tapThing(s, p, t); }
     if (a.tapHero) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     if (a.tapCog) { const t = untappedOwn(p, 'cog', uid); if (t) tapThing(s, p, t); }
@@ -2575,6 +2596,12 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount + amp} arcane damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount + amp, arcane: true, source: srcName } });
           break;
         }
+        if (e.all) {
+          let total = 0;
+          for (const t of s.players.filter((q) => q.id !== p.id && !q.eliminated)) total += dealDamage(s, t.id, e.amount + amp, true, srcName);
+          p.turn.flags.lastArcane = total; if (total > 0) p.turn.arcaneDealt = true;
+          break;
+        }
         { const dealt = dealDamage(s, opp.id, e.amount + amp, true, srcName); p.turn.flags.lastArcane = dealt; if (dealt > 0) p.turn.arcaneDealt = true; }
         break;
       }
@@ -2585,10 +2612,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           ask(s, { player: p.id, kind: 'target', prompt: `${srcName}: choose a target for ${e.amount} damage.`, options: [opp.hero, ...allies(opp).map((pm) => pm.inst)].map((i) => ({ uid: i.uid, cardId: i.cardId })), resume: { type: 'damageTarget', amount: e.amount, arcane: false, source: srcName } });
           break;
         }
-        dealDamage(s, opp.id, e.amount, false, srcName);
+        for (const t of e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [opp]) dealDamage(s, t.id, e.amount, false, srcName);
         break;
       case 'gainLife': p.life += e.amount; log(s, p.id, `${p.name} gains ${e.amount} life (${p.life}).`); ability(p)?.onGainLife?.(heroCtx(s, p), e.amount); break;
-      case 'loseLifeOpp': opp.life -= e.amount; log(s, opp.id, `${opp.name} loses ${e.amount} life (${opp.life}).`); break;
+      case 'loseLifeOpp':
+        for (const t of e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [opp]) { t.life -= e.amount; log(s, t.id, `${t.name} loses ${e.amount} life (${t.life}).`); }
+        checkWin(s);
+        break;
       case 'draw': draw(s, p, e.amount); log(s, p.id, `${p.name} draws ${e.amount} card${e.amount > 1 ? 's' : ''}.`); break;
       case 'gainResource': p.resources += e.amount; break;
       case 'nextAttackPower':
@@ -2644,8 +2674,16 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         cleanseName(s, p, t, e.n, cardOf(best[0]).name, srcName);
         break;
       }
-      case 'oppDraw': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); break; }
-      case 'oppCreateToken': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; createToken(s, t, e.name, 1); break; }
+      case 'oppDraw': {
+        const ts = e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp];
+        for (const t of ts) { draw(s, t, e.amount); log(s, t.id, `${t.name} draws ${e.amount === 1 ? 'a card' : `${e.amount} cards`} (${srcName}).`); }
+        break;
+      }
+      case 'oppCreateToken': {
+        const ts = e.all ? s.players.filter((q) => q.id !== p.id && !q.eliminated) : [l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp];
+        for (const t of ts) createToken(s, t, e.name, 1);
+        break;
+      }
       case 'weaponsPowerTurn': {
         p.turn.flags.weaponBonus = (p.turn.flags.weaponBonus ?? 0) + e.amount;
         if (l && l.fromWeapon && !l.ally && l.attacker === p.id) l.powerMod += e.amount;
@@ -2803,6 +2841,14 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'powerOrGoAgain': {
+        const link = s.chain.find((x) => x.inst.uid === src.uid);
+        if (!link) break;
+        if (link.goAgain) { link.powerMod += e.amount; log(s, p.id, `${srcName} gets +${e.amount}{p} (${linkPower(link)}).`); break; }
+        if (p.isBot) { link.goAgain = true; log(s, p.id, `${srcName} gets go again.`); break; }
+        ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: go again? (No: +${e.amount}{p} instead)`, options: [{ uid: src.uid, cardId: src.cardId }], resume: { type: 'event', key: 'powerOrGoAgain', data: [s.chain.indexOf(link), e.amount] } });
+        break;
+      }
       case 'counterUpkeep': case 'removeCounter': {
         const pm = p.permanents.find((x) => x.inst.uid === src.uid);
         if (!pm) break;

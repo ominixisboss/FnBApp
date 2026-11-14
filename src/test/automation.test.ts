@@ -322,3 +322,41 @@ describe('ally attacks', () => {
     expect(playOptions(s, 0).some((o) => o.uid === 9994 && o.kind === 'activation')).toBe(false);
   });
 });
+
+describe('tapped heroes', () => {
+  it('a hero ability with {t} in its cost needs an untapped hero, and using it taps the hero', () => {
+    const hero = getDb().cards.find((x) => x.types.includes('Hero') && x.text.startsWith('Instant - {t}: Pitch the top card of your deck'))!;
+    expect(hero).toBeDefined();
+    const mk = (): DeckList => ({ heroId: hero.id, weaponIds: [], equipmentIds: [], cardIds: Array(30).fill(filler()) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk() }, { name: 'P1', isBot: false, deck: mk() }], 3));
+    s.turnPlayer = 0; s.priority = 0;
+    const heroOpt = () => playOptions(s, 0).find((o) => o.uid === s.players[0].hero.uid);
+    expect(heroOpt()).toBeDefined();
+    s.players[0].heroTapped = true;
+    expect(heroOpt()).toBeUndefined();
+    s.players[0].heroTapped = false;
+    s = applyAction(s, { type: 'activate', uid: s.players[0].hero.uid, index: heroOpt()!.index, pitch: [] });
+    expect(s.players[0].heroTapped).toBe(true);
+  });
+});
+
+describe('abilities of the attacking card', () => {
+  it('"Once per Turn Instant - {t} a cog you control: This gets +1{p} or go again" works on the chain', () => {
+    const c = findCard('Cloud Skiff')!;
+    let s = game([c.id]);
+    s.players[0].permanents.push({ inst: { uid: 9993, cardId: findCard('Copper Cog')!.id, owner: 0 }, ward: 0 });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    const l = currentLink(s)!;
+    const opt = playOptions(s, s.priority).find((o) => o.uid === l.inst.uid && o.kind === 'activation');
+    expect(opt).toBeDefined();
+    const power = linkPower(l);
+    s = applyAction(s, { type: 'activate', uid: l.inst.uid, index: opt!.index, pitch: [] });
+    while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9993)?.tapped).toBe(true);
+    const yes = s.pendingChoices?.length ? applyAction(s, { type: 'choose', yes: false }) : s;
+    expect(linkPower(currentLink(yes)!) > power || currentLink(yes)!.goAgain).toBe(true);
+    expect(playOptions(yes, yes.priority).some((o) => o.uid === l.inst.uid && o.kind === 'activation')).toBe(false);
+  });
+});

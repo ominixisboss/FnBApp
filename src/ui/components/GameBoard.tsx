@@ -876,7 +876,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <div ref={oppRef}>
             <PlayerArea p={opp} state={state} isOpp onHover={setHover} onClickArena={(i) => (manual && !online ? setMoveMenu({ inst: i, player: oppSeat }) : setDetail(cardOf(i)))} onZone={setZone} fx={fx} onDeck={manual && !online ? () => setMoveMenu({ inst: opp.hero, player: oppSeat }) : undefined} />
           </div>
-          <ChainView state={state} onHover={setHover} onClick={(c) => setDetail(c)} lastClick={lastClick} oppRef={oppHandRef} />
+          <ChainView state={state} onHover={setHover} lastClick={lastClick} oppRef={oppHandRef}
+            usable={(uid) => myTurn && options.some((o) => o.uid === uid && o.kind === 'activation')}
+            onClick={(c, inst) => {
+              // the attacking card's own instant ability ("{t} a cog you control: This gets +1{p}")
+              const acts = inst ? options.filter((o) => o.uid === inst.uid && o.kind === 'activation') : [];
+              if (inst && acts.length > 1 && !pending) return setActMenu({ inst, opts: acts });
+              if (acts.length && !pending) return startPlay(acts[0]);
+              setDetail(c);
+            }} />
           {!!state.stack?.length && (
             <div className="stack-zone" aria-label="The stack">
               <span className="stack-title">Stack</span>
@@ -1363,8 +1371,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
   );
 }
 
-function ChainView({ state, onHover, onClick, lastClick, oppRef }: {
-  state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void;
+function ChainView({ state, onHover, onClick, lastClick, oppRef, usable }: {
+  state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card, inst?: CardInst) => void; usable?: (uid: number) => boolean;
   lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -1374,7 +1382,7 @@ function ChainView({ state, onHover, onClick, lastClick, oppRef }: {
         <span className="chain-start">Chain link 1 starts here</span>
         <div className="chain-links">
           {state.chain.map((l, i) => (
-            <ChainLinkView key={l.inst.uid + '-' + i} l={l} state={state} onHover={onHover} onClick={onClick} lastClick={lastClick} oppRef={oppRef} />
+            <ChainLinkView key={l.inst.uid + '-' + i} l={l} state={state} onHover={onHover} onClick={onClick} lastClick={lastClick} oppRef={oppRef} usable={usable?.(l.inst.uid)} />
           ))}
         </div>
       </div>
@@ -1383,8 +1391,8 @@ function ChainView({ state, onHover, onClick, lastClick, oppRef }: {
   );
 }
 
-function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
-  l: ChainLink; state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card) => void;
+function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef, usable }: {
+  l: ChainLink; state: GameState; onHover: (c: Card | null) => void; onClick: (c: Card, inst?: CardInst) => void; usable?: boolean;
   lastClick: React.MutableRefObject<DOMRect | null>; oppRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -1437,7 +1445,7 @@ function ChainLinkView({ l, state, onHover, onClick, lastClick, oppRef }: {
     <div className={`link ${l.damage !== null ? 'done' : ''}`}>
       <div ref={cardRef} style={{ position: 'relative', zIndex: 2 }} className="chain-card" data-vfx="chain" data-card={l.inst.cardId} data-owner={l.attacker}>
         <span className="land-ring" />
-        <CardView card={cardOf(l.inst)} width="calc(var(--slot) * .86)" onHover={onHover} onClick={() => onClick(cardOf(l.inst))} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
+        <CardView card={cardOf(l.inst)} width="calc(var(--slot) * .86)" onHover={onHover} onClick={() => onClick(cardOf(l.inst), l.inst)} className={usable ? 'playable' : ''} badge={<span key={linkPower(l)} className="anim-pop">⚔ {linkPower(l)}</span>} />
       </div>
       {l.defenders.length > 0 && <span className="muted anim-pop">vs</span>}
       {l.defenders.map((d) => (
