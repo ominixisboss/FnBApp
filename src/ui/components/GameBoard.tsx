@@ -18,7 +18,7 @@ import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
 import type { SfxName } from '../sound';
-import { musicEnabled, musicSting, setMusicEnabled, setMusicMood } from '../music';
+import { currentBaseMood, musicEnabled, musicSting, setMusicEnabled, setMusicMood } from '../music';
 import { applyOrientation, isNative, orientationPref } from '../../native';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
@@ -274,7 +274,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   useEffect(() => { const t = setTimeout(() => setTick((n) => n + 1), 3600); return () => clearTimeout(t); }, [myEmote, online?.emote]);
   const [sound, setSound] = useState(soundEnabled);
   const [music, setMusic] = useState(musicEnabled);
-  useEffect(() => { setMusicMood('battle'); return () => setMusicMood('menu'); }, []);
+  useEffect(() => { setMusicMood('battle'); return () => setMusicMood(currentBaseMood()); }, []);
   // the music turns tense when someone is close to dying
   const danger = state.phase !== 'gameOver' && state.players.some((p) => !p.eliminated && p.life <= 6);
   useEffect(() => { if (state.phase !== 'gameOver') setMusicMood(danger ? 'tense' : 'battle'); }, [danger, state.phase]);

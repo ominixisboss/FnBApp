@@ -7,7 +7,7 @@ import DecksPage from './ui/pages/DecksPage';
 import PlayPage, { TABLE_DECK } from './ui/pages/PlayPage';
 import LearnPage from './ui/pages/LearnPage';
 import { animationsEnabled, setAnimations } from './ui/components/Fx';
-import { musicEnabled, setMusicEnabled, startMusic } from './ui/music';
+import { musicEnabled, setBaseMood, setMusicEnabled, startMusic } from './ui/music';
 import { canLeave } from './ui/navGuard';
 import { HoverCardLayer } from './ui/components/HoverCard';
 import ProfilePage, { Avatar } from './ui/pages/ProfilePage';
@@ -73,6 +73,12 @@ export default function App() {
     return () => window.removeEventListener('pointerdown', go);
   }, []);
   useEffect(() => { void checkServer(); }, []);
+  // each part of the app has its own theme (games switch to the battle theme themselves)
+  useEffect(() => {
+    const r = route || 'home';
+    setBaseMood(['decks', 'cards', 'learn', 'profile', 'tools', 'guides', 'drills', 'account', 'privacy', 'replay', 'puzzles'].includes(r) ? 'explore'
+      : ['campaign', 'gauntlet', 'tournament', 'cups', 'limited'].includes(r) ? 'campaign' : 'menu');
+  }, [route]);
   const auth = useAuth();
   // stay connected while signed in, so friends see you online and challenges reach you on any page
   const net = useOnline();

@@ -1745,3 +1745,16 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 @media (max-width: 640px) and (orientation: portrait) {
   .arena .chain-track { --chain-left: 14px; }
 }
+/* phones, third pass: a real top strip. ☰ on the left, the hint card beside it (in the space the opponent's
+   face-down hand used; their hand size is on their ✋ chip), and the board starting just below, so nothing overlaps */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena { --top-strip: calc(58px + var(--sa-t)); }
+  .arena .opp-hand { display: none; }
+  .arena-bar { top: calc(7px + var(--sa-t)); }
+  .arena .arena-hint { top: calc(6px + var(--sa-t)); left: 62px; right: 8px; bottom: auto; width: auto; max-height: 48px; overflow: hidden;
+    padding: 4px 10px; font-size: .7rem; line-height: 1.25; border-radius: 12px; z-index: 13; }
+  .arena .arena-hint b, .arena .arena-hint strong { font-size: .76rem; }
+  .arena .arena-hint > * { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .arena-board { top: var(--top-strip); }
+  .arena:has(.pit-strip) .arena-board { top: calc(var(--top-strip) + 36px); }
+}
