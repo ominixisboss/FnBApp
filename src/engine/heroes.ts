@@ -144,7 +144,7 @@ export const HERO_ABILITIES: HeroAbility[] = [
     summary: 'The first time your weapon attack hits each turn, that weapon can attack again.',
     match: (t) => t.startsWith('The first time your weapon attack hits each turn, you may attack an additional time'),
     onHit({ p, api }, l) {
-      if (!l.fromWeapon || flag(p, 'dori')) return;
+      if (!l.fromWeapon || l.ally || flag(p, 'dori')) return;
       setFlag(p, 'dori');
       const w = p.weapons.find((x) => x.inst.uid === l.inst.uid);
       if (w) { w.usedThisTurn = false; api.log(p, `${p.name}'s hero ability: ${cardOf(w.inst).name} may attack again this turn.`); }
@@ -837,7 +837,7 @@ HERO_ABILITIES.push(
     summary: 'The first time Dawnblade, Resplendent’s attack gets go again each turn, it may attack an additional time.',
     match: (t) => t.startsWith("The first time your Dawnblade, Resplendent's attack gets go again each turn"),
     onLinkResolve: ({ p, api }, l) => {
-      if (l.attacker !== p.id || !l.fromWeapon || !l.goAgain || flag(p, 'qp') || !cardOf(l.inst).name.startsWith('Dawnblade, Resplendent')) return;
+      if (l.attacker !== p.id || !l.fromWeapon || l.ally || !l.goAgain || flag(p, 'qp') || !cardOf(l.inst).name.startsWith('Dawnblade, Resplendent')) return;
       setFlag(p, 'qp');
       const w = p.weapons.find((x) => x.inst.uid === l.inst.uid);
       if (w) { w.usedThisTurn = false; api.log(p, 'Dawnblade, Resplendent may attack an additional time this turn.'); }
@@ -927,7 +927,7 @@ HERO_ABILITIES.push(
     summary: 'Your second sword attack each turn costs {r} less. End phase: if you attacked 2+ times with weapons, create a Copper token for each weapon attack that hit.',
     match: (t) => t.startsWith('Your second sword attack each turn costs {r} less to activate'),
     activationCostMod: ({ p }, src) => (src.types.includes('Sword') && p.turn.attacks >= 1 && !flag(p, 'kc2') ? -1 : 0),
-    onAttack: ({ p }, l) => { if (l.fromWeapon) p.turn.flags.weaponAttacks = (p.turn.flags.weaponAttacks ?? 0) + 1; if (l.fromWeapon && (p.turn.flags.weaponAttacks ?? 0) >= 2) setFlag(p, 'kc2'); },
+    onAttack: ({ p }, l) => { if (l.ally) return; if (l.fromWeapon) p.turn.flags.weaponAttacks = (p.turn.flags.weaponAttacks ?? 0) + 1; if (l.fromWeapon && (p.turn.flags.weaponAttacks ?? 0) >= 2) setFlag(p, 'kc2'); },
     endPhase: ({ s, p, api }) => { if (s.turnPlayer === p.id && (p.turn.flags.weaponAttacks ?? 0) >= 2 && p.turn.weaponHits > 0) api.createToken(p, 'Copper', p.turn.weaponHits); },
   },
   {

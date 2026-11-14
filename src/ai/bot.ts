@@ -7,7 +7,7 @@ import type { Effect } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
   defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, pitchOf,
-  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf,
+  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf, typeMatches,
 } from '../engine/game';
 import type { PlayOption } from '../engine/game';
 import type { Action, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
@@ -145,7 +145,7 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'discard': case 'handToBottom': case 'banishHand': {
       const want = oc.cost.kind === 'discard' ? oc.cost.pitch : undefined;
       const minP = oc.cost.kind === 'discard' ? oc.cost.power ?? 0 : 0;
-      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c) && powerOf(c) >= minP);
+      const h = cheapest((c) => (!want || pitchOf(c) === want) && needPower(c) && powerOf(c) >= minP && (oc.cost.kind !== 'discard' || typeMatches(c, oc.cost.type)));
       if (!h) return { accept: false };
       choice = { accept: true, uid: h.uid };
       cost = cardPlayValue(cardOf(h)) * (oc.cost.kind === 'handToBottom' ? 0.6 : 1) + 0.4;
@@ -173,6 +173,9 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'banishGrave': choice = { accept: true }; cost = oc.cost.n * 0.2 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
+    case 'tapHero': case 'tapOwn': choice = { accept: true }; cost = 0.3; break; // tapping is nearly free
+    case 'banishSoul': choice = { accept: true }; cost = 1.2; break;
+    case 'destroySelf': choice = { accept: true }; cost = 2; break;
     case 'arsenalToBottom': choice = { accept: true }; cost = p.arsenal[0] ? cardPlayValue(cardOf(p.arsenal[0])) * 0.8 : 99; break;
     case 'banishGraveMatch': case 'decompose': choice = { accept: true }; cost = 0.3; break;
     case 'reveal': {

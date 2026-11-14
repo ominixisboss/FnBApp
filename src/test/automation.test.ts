@@ -41,7 +41,7 @@ describe('conditions', () => {
 
 describe('optional costs', () => {
   it('paying "discard a card" gives the payoff, declining does not', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && !o.cost.type && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
     const s0 = game([c.id, filler(), filler()]);
     const uid = s0.players[0].hand[0].uid;
     const discard = s0.players[0].hand[1].uid;
@@ -52,7 +52,7 @@ describe('optional costs', () => {
     expect(yes.log.length).toBeGreaterThan(no.log.length);
   });
   it('the bot makes a decision on optional costs, with a card to pay when needed', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.timing !== 'defend' && o.minPower === undefined; });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && !o.cost.type && o.timing !== 'defend' && o.minPower === undefined; });
     const s = game([c.id, filler(), filler()]);
     const d = decideOptional(s, s.players[0], s.players[0].hand[0].uid, []);
     expect(d).toBeDefined();
@@ -168,5 +168,157 @@ describe('long tail', () => {
     s = applyAction(s, { type: 'pass' }); s = applyAction(s, { type: 'pass' });
     expect(s.players[1].banished.some((b) => b.cardId === cloak)).toBe(true);
     expect(life - s.players[1].life).toBe(Math.max(0, power - 2)); // the attack minus the 2 prevented
+  });
+});
+
+describe('third pass', () => {
+  it('a Crouching Tiger created in your banished zone can be played this turn', () => {
+    let s = game([findCard('Biting Breeze')!.id, filler()]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' }); s = applyAction(s, { type: 'pass' });
+    const tiger = s.players[0].banished.find((b) => getDb().byId.get(b.cardId)!.name === 'Crouching Tiger');
+    expect(tiger).toBeDefined();
+    s.players[0].actionPoints = Math.max(1, s.players[0].actionPoints); s.players[0].resources = 5;
+    expect(playOptions(s, 0).some((o) => o.uid === tiger!.uid)).toBe(true);
+  });
+  it('"Choose 1 or both" offers each option and both together', () => {
+    const c = getDb().cards.find((x) => /^Choose 1 or both;/im.test(x.text) && getScript(x).modes.length >= 3)!;
+    expect(getScript(c).modes.some((m) => m.label.includes(' + '))).toBe(true);
+  });
+  it('Bite: the dagger deals 1 and is destroyed, and counts as a dagger hit', () => {
+    const dagger = getDb().cards.find((c) => c.types.includes('Dagger') && c.types.includes('Assassin'))!;
+    const mk = (hand: string[], w: string[]): DeckList => ({ heroId: findCard('Arakni')!.id, weaponIds: w, equipmentIds: [], cardIds: [...hand, ...Array(30).fill(filler())] });
+    let s = createGame([{ name: 'A', isBot: false, deck: mk([findCard('Bite')!.id], [dagger.id]) }, { name: 'B', isBot: false, deck: mk([], []) }], 3, 'blitz', 0);
+    s = structuredClone(s);
+    const p = s.players[0]; const all = [...p.hand, ...p.deck];
+    p.hand = [all.splice(all.findIndex((x) => getDb().byId.get(x.cardId)!.name === 'Bite'), 1)[0]]; p.deck = all;
+    p.actionPoints = 1; p.resources = 10;
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'play', uid: p.hand[0].uid, pitch: [] });
+    expect(s.players[1].life).toBe(life - 1);
+    expect(s.players[0].weapons.length).toBe(0);
+  });
+});
+
+describe('card text, fourth pass', () => {
+  it('"You may <cost>. If you do, <effect>" asks, and pays only on yes', () => {
+    const c = findCard('Clearwater Elixir')!;
+    expect(getScript(c).onPlay.some((e) => e.kind === 'mayThen')).toBe(true);
+    let s = game([c.id]);
+    s.players[0].permanents.push({ inst: { uid: 9999, cardId: findCard('Bloodrot Pox')!.id, owner: 0 }, ward: 0 } as never);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 4 && !s.pendingChoices?.length; i++) s = applyAction(s, { type: 'pass' });
+    expect(s.pendingChoices?.[0]?.resume.type).toBe('mayThen');
+    const life = s.players[0].life;
+    const yes = applyAction(s, { type: 'choose', yes: true });
+    const no = applyAction(s, { type: 'choose', yes: false });
+    expect(yes.players[0].permanents.some((p) => p.inst.uid === 9999)).toBe(false);
+    expect(yes.players[0].life).toBe(life + 1);
+    expect(no.players[0].permanents.some((p) => p.inst.uid === 9999)).toBe(true);
+    expect(no.players[0].life).toBe(life);
+  });
+  it('"If you prevent damage this way, create a token" creates it once damage is prevented', () => {
+    const c = find((x) => getScript(x).onPlay.some((e) => e.kind === 'preventNext' && !!e.thenToken) && x.types.includes('Instant'));
+    expect(c).toBeDefined();
+    const tokenName = (getScript(c).onPlay.find((e) => e.kind === 'preventNext') as { thenToken: string }).thenToken;
+    let s = game([c.id]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+    expect(s.players[0].effects.some((e) => e.kind === 'preventNext' && e.thenToken === tokenName)).toBe(true);
+  });
+  it('"Daggers you control get +1{p} this turn" style effects last the whole turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).onPlay.some((e) => e.kind === 'turnAttackPower'));
+    expect(c).toBeDefined();
+  });
+});
+
+describe('triggered abilities of permanents', () => {
+  it('parses "When an attack you control hits a hero, you may destroy this. If you do, ..."', () => {
+    const t = getScript(findCard('Aether Crackers')!).triggers;
+    expect(t?.[0]?.on).toBe('hit');
+    expect(t?.[0]?.effects[0]?.kind).toBe('mayThen');
+  });
+  it('"At the start of your turn, put this into your soul" fires at the start of its controller\'s turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).triggers?.some((t) => t.on === 'startTurn' && t.effects.some((e) => e.kind === 'selfToSoul')))!;
+    expect(c).toBeDefined();
+    let s = game([], []);
+    s.players[1].permanents.push({ inst: { uid: 9998, cardId: c.id, owner: 1 }, ward: 0 });
+    for (let i = 0; i < 6 && s.turnPlayer === 0; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.turnPlayer).toBe(1);
+    expect(s.players[1].permanents.some((p) => p.inst.uid === 9998)).toBe(false);
+    expect((s.players[1].soul ?? []).some((x) => x.uid === 9998)).toBe(true);
+  });
+  it('"When you play an attack action card, destroy this" fires when the attack starts', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).triggers?.some((t) => t.on === 'playAttackAction' && t.effects.some((e) => e.kind === 'destroySelf')))!;
+    expect(c).toBeDefined();
+    let s = game([filler()]);
+    s.players[0].permanents.push({ inst: { uid: 9997, cardId: c.id, owner: 0 }, ward: 0 });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    expect(currentLink(s)).toBeDefined();
+    expect(s.players[0].permanents.some((p) => p.inst.uid === 9997)).toBe(false);
+  });
+});
+
+describe('tapping', () => {
+  it('an "Instant - {t}: ..." permanent can be used once, then untaps at its controller\'s next turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && !x.types.includes('Equipment') && !x.types.includes('Weapon') && getScript(x).activations.some((a) => a.tapSelf && a.instant && a.cost === 0 && !a.destroySelf))!;
+    expect(c).toBeDefined();
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9996, cardId: c.id, owner: 0 }, ward: 0 });
+    const opt = () => playOptions(s, 0).find((o) => o.uid === 9996 && o.kind === 'activation');
+    expect(opt()).toBeDefined();
+    s = applyAction(s, { type: 'activate', uid: 9996, index: opt()!.index, pitch: [] } as never);
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9996)?.tapped).toBe(true);
+    while (s.stack?.length || s.pendingChoices?.length) s = applyAction(s, s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(opt()).toBeUndefined();
+    s.players[0].heroTapped = true;
+    for (let i = 0; i < 12 && !(s.turnPlayer === 0 && s.turn > 1); i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(s.turnPlayer).toBe(0);
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9996)?.tapped).toBe(false);
+    expect(s.players[0].heroTapped).toBe(false);
+  });
+  it('"If this deals damage, you may {t} your hero. If you do, ..." on a spell', () => {
+    const sc = getScript(findCard('Aethersling')!);
+    const k = sc.conditional.find((x) => x.cond?.kind === 'dealtArcane');
+    expect(k?.effects[0]?.kind).toBe('mayThen');
+    expect(k?.effects[0]?.kind === 'mayThen' && k.effects[0].cost.kind).toBe('tapHero');
+    expect(sc.coverage).toBe('full');
+  });
+});
+
+describe('ally attacks', () => {
+  it('an ally attacks with its own power, stays in the arena and taps', () => {
+    const c = findCard('Barnacle')!;
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9995, cardId: c.id, owner: 0 }, ward: 0 });
+    const opt = playOptions(s, 0).find((o) => o.uid === 9995 && o.kind === 'activation');
+    expect(opt).toBeDefined();
+    s = applyAction(s, { type: 'activate', uid: 9995, index: opt!.index, pitch: [] });
+    for (let i = 0; i < 4 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    expect(l.ally).toBe(true);
+    expect(linkPower(l)).toBe(c.power ? Number(c.power) : 4);
+    expect(s.players[0].turn.weaponAttacked).toBeFalsy();
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'pass' });
+    expect(s.players[1].life).toBe(life - linkPower(l));
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9995)?.tapped).toBe(true);
+    expect(playOptions(s, 0).some((o) => o.uid === 9995)).toBe(false);
+  });
+  it('"Once per Turn Action - {r}{r}: Attack" can be used once a turn, and "When <name> attacks" is its on-attack ability', () => {
+    const c = findCard('Aegis, Archangel of Protection')!;
+    expect(getScript(c).onAttack.some((e) => e.kind === 'mayThen')).toBe(true);
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9994, cardId: c.id, owner: 0 }, ward: 4 });
+    s.players[0].actionPoints = 2;
+    const opt = playOptions(s, 0).find((o) => o.uid === 9994 && o.kind === 'activation')!;
+    s = applyAction(s, { type: 'activate', uid: 9994, index: opt.index, pitch: [] });
+    for (let i = 0; i < 4 && !currentLink(s); i++) s = applyAction(s, s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(currentLink(s)?.ally).toBe(true);
+    expect(playOptions(s, 0).some((o) => o.uid === 9994 && o.kind === 'activation')).toBe(false);
   });
 });

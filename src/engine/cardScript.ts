@@ -7,6 +7,8 @@ import type { Card } from '../data/types';
 export type AttackFilter =
   | { kind: 'any' }
   | { kind: 'attackAction' }
+  /** an ally's attack */
+  | { kind: 'ally' }
   | { kind: 'weapon' }
   | { kind: 'subtype'; value: string } // dagger, sword, arrow, ...
   | { kind: 'class'; value: string } // Warrior, Ninja, ...
@@ -32,7 +34,7 @@ export type Effect =
   | { kind: 'thisGoAgain' }
   | { kind: 'thisDominate' }
   | { kind: 'thisDefense'; amount: number }
-  | { kind: 'preventNext'; amount: number }
+  | { kind: 'preventNext'; amount: number; thenToken?: string }
   | { kind: 'createToken'; name: string; amount: number }
   | { kind: 'banishTopOpp'; amount: number }
   | { kind: 'oppDiscardRandom'; amount: number }
@@ -50,6 +52,30 @@ export type Effect =
   | { kind: 'reload' }
   /** "Destroy an aura you control. If you do, <then>" */
   | { kind: 'destroyOwnThen'; type?: string; name?: string; then: Effect[] }
+  /** "You may <cost>. If you do, <then>." anywhere (on hit, on attack, on defend, on play) */
+  /** every attack matching the filter this turn gets +N{p} */
+  | { kind: 'turnAttackPower'; amount: number; filter: AttackFilter }
+  | { kind: 'turnAttackDominate' }
+  /** destroy the permanent (aura, item, ally, equipment) that has the ability */
+  | { kind: 'destroySelf' }
+  /** "destroy this unless you remove a steam / balance / doom counter from it" */
+  | { kind: 'counterUpkeep'; counter: string }
+  /** "remove a verse counter from this" (+ "If you do, <then>") */
+  | { kind: 'removeCounter'; counter: string; then?: Effect[] }
+  /** "put this into your soul" (a Light aura) */
+  | { kind: 'selfToSoul' }
+  | { kind: 'nextAttackDominate' }
+  /** "your dagger attacks get go again this turn" */
+  | { kind: 'turnAttackGoAgain'; filter: AttackFilter }
+  /** "remove all +1{p} counters from weapons / swords you control" */
+  | { kind: 'clearWeaponCounters'; sub?: string }
+  /** "destroy all Runechants you control" */
+  | { kind: 'destroyAllOwn'; name: string }
+  /** {t} the opposing hero ("{t} them", "{t} target hero or ally") */
+  | { kind: 'tapOpp' }
+  /** {u} your hero / a cog / all cogs you control */
+  | { kind: 'untap'; what: 'hero' | 'cog' | 'allCogs' | 'ally' | 'weapon' }
+  | { kind: 'mayThen'; cost: OptionalCostKind; then: Effect[]; text: string }
   | { kind: 'banishTopSelf'; amount: number }
   /** create a card (e.g. Crouching Tiger) in your hand */
   | { kind: 'createInHand'; name: string }
@@ -96,6 +122,17 @@ export type Effect =
   | { kind: 'runechantsPerNonAttack'; goAgainAt?: number }
   /** this defending equipment is destroyed when the combat chain closes */
   | { kind: 'destroyAtChainClose' }
+  | { kind: 'gainAP'; amount: number }
+  /** create a card (Crouching Tiger) in your banished zone */
+  | { kind: 'createInBanished'; name: string }
+  /** "You may play it this turn": the card the effect just banished can be played from the banished zone */
+  | { kind: 'playLastBanished' }
+  /** banish a card of this class and type from your graveyard (Rattle Bones) */
+  | { kind: 'banishFromGrave'; cls?: string; type: string }
+  /** Bite: a dagger you control deals 1 damage to the hero; if it does, the dagger has hit; destroy the dagger */
+  | { kind: 'daggerStrike' }
+  /** put a card from your arsenal on the bottom of your deck; if you do, draw a card */
+  | { kind: 'arsenalCycle' }
   /** banish a card defending this chain link (the best one) */
   | { kind: 'banishDefender' }
   /** destroy a card of theirs that intimidate banished */
@@ -155,7 +192,11 @@ export type Condition =
   | { kind: 'boostedTimes'; n: number }
   | { kind: 'oppSoul' }
   | { kind: 'phantasmDestroyed' }
-  | { kind: 'createdToken'; name: string };
+  | { kind: 'createdToken'; name: string }
+  | { kind: 'lastAttackColor'; pitch: number }
+  | { kind: 'lastAttackName'; name: string }
+  /** the last arcane damage effect of this card dealt damage */
+  | { kind: 'dealtArcane' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
@@ -163,7 +204,17 @@ export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedB
 export type OptionalCostKind =
   | { kind: 'reveal'; talent: string } // Fusion: reveal an Ice / Earth / Lightning card from hand
   | { kind: 'charge'; pitch?: number } // put a card from hand into your hero's soul
-  | { kind: 'discard'; pitch?: number; power?: number }
+  | { kind: 'discard'; pitch?: number; power?: number; type?: string }
+  /** destroy the card that has the ability (an equipment, aura or item) */
+  | { kind: 'destroySelf' }
+  /** banish a card from your hero's soul */
+  | { kind: 'banishSoul' }
+  /** {t} your hero */
+  | { kind: 'tapHero' }
+  /** {t} a cog / an ally you control, or {t} this */
+  | { kind: 'tapOwn'; what: 'cog' | 'ally' | 'this' }
+  /** "X and Y": pay every part (only in "you may ... If you do" abilities) */
+  | { kind: 'all'; costs: OptionalCostKind[] }
   | { kind: 'pay'; amount: number }
   | { kind: 'banishGrave'; n: number }
   | { kind: 'destroyTop' }
@@ -205,6 +256,10 @@ export interface Activation {
   instant: boolean;
   oncePerTurn: boolean;
   destroySelf: boolean;
+  /** {t} costs: this card, your hero, a cog you control */
+  tapSelf?: boolean;
+  tapHero?: boolean;
+  tapCog?: boolean;
   goAgain: boolean;
   effects: Effect[];
   text: string;
@@ -232,6 +287,10 @@ export interface CardScript {
   boost: boolean;
   phantasm: boolean;
   steam: number; // enters the arena with N steam counters
+  /** "This enters the arena with N verse / balance / doom / energy counters" */
+  startCounters?: { counter: string; n: number };
+  /** "When this has none, destroy it" (its counters) */
+  destroyAtZero?: boolean;
   steamUpkeep: boolean; // start of turn: destroy unless you remove a steam counter
   destroyAt?: 'actionPhase' | 'startOfTurn';
   bloodDebt: boolean;
@@ -240,6 +299,10 @@ export interface CardScript {
   additionalCost: { discardRandom?: number; banishRandomHand?: number; banishGraveyard?: number; handToBottom?: number; banishSoul?: number };
   /** Contract: banishing an opponent's card of this kind (while this is on the combat chain) creates a Silver */
   contract?: 'nonAction' | 'attackAction' | 'nonAttackAction' | 'red' | 'yellow' | 'blue' | 'reaction' | 'lowDefense' | 'cheap' | 'costly' | 'goAgain';
+  /** Graven equipment: from the graveyard, at the start of your turn, destroy N Silver to equip it again */
+  graveEquip?: number;
+  /** "When this is equipped from anywhere other than your graveyard, put a -1{d} counter on it" */
+  equipCounter?: boolean;
   /** destroyed at the beginning of its controller's end phase */
   destroyAtEnd?: boolean;
   /** "If you would be dealt damage, you may banish this to prevent N of that damage" */
@@ -250,6 +313,8 @@ export interface CardScript {
   endPhaseWear?: boolean;
   /** "This may only defend an attack if the attack's controller has destroyed a Might token / drawn a card this turn" */
   defendIf?: { token?: string; drew?: boolean };
+  /** an ally that "can only attack if you've attacked with a weapon this turn" */
+  attackIfWeapon?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -259,6 +324,10 @@ export interface CardScript {
   activations: Activation[];
   modes: Mode[]; // "Choose 1;" options
   optional?: OptionalCost;
+  /** "When this is pitched, <effects>" */
+  onPitch?: Effect[];
+  /** a permanent's "when / whenever / at the beginning of ..." abilities */
+  triggers?: Trigger[];
   /** "Instant - Discard this: <effect>" usable from hand */
   handActivation?: { cost: number; effects: Effect[]; text: string };
   /** "(If <condition>, ) you may play this from your banished zone" */
@@ -317,6 +386,7 @@ const CLASS_WORDS = [
 function parseFilter(words: string): AttackFilter | null {
   const w = words.trim();
   if (w === '') return { kind: 'any' };
+  if (/^ally$/i.test(w)) return { kind: 'ally' };
   if (/^weapon$/i.test(w)) return { kind: 'weapon' };
   const sub = SUBTYPES.find((s) => w.toLowerCase() === s);
   if (sub) return { kind: 'subtype', value: sub };
@@ -332,6 +402,7 @@ export function parseEffect(raw: string): Effect[] | null {
   const s = raw.trim().replace(/\.$/, '').trim();
   let m: RegExpMatchArray | null;
   if (!s) return [];
+  if (/^put a card from your arsenal on the bottom of your deck\. if you do, draw a card$/i.test(s)) return [{ kind: 'arsenalCycle' }];
   // compound "X and Y" / "X, then Y"
   // "wager with the defending hero. The winner draws a card" is one effect, not two
   const wm = s.match(/^(you may )?wager with (?:them|the defending hero)\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token)$/i);
@@ -340,6 +411,9 @@ export function parseEffect(raw: string): Effect[] | null {
   if (parts.length > 1) {
     const out: Effect[] = [];
     for (const p of parts) {
+      const pt = p.match(/^(?:if|the first time) you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token\.?$/i);
+      const prev = out[out.length - 1];
+      if (pt && prev?.kind === 'preventNext') { prev.thenToken = pt[1]; continue; }
       const e = parseEffect(p);
       if (!e) return null;
       out.push(...e);
@@ -395,6 +469,8 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^amp (\d+)$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
   if (/^mark target opposing hero$/i.test(s)) return [{ kind: 'mark' }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\}(?: until end of turn)?$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
+  if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage\. if you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token$/i)))
+    return [{ kind: 'preventNext', amount: +m[1], thenToken: m[2] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage$/i)))
     return [{ kind: 'preventNext', amount: +m[1] }];
   if ((m = s.match(/^prevent the next (\d+) damage that would be dealt to you this turn$/i)))
@@ -406,6 +482,12 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:they|the defending hero|target hero|target opposing hero|each opposing hero) discards? (a|two|\d+) (?:random )?cards?$/i)))
     return [{ kind: 'oppDiscardRandom', amount: toNum(m[1].toLowerCase()) }];
   if (/^intimidate(?: them| the defending hero| target hero)?$/i.test(s)) return [{ kind: 'intimidate' }];
+  if ((m = s.match(/^gain (a|an|one|two|\d+) action points?$/i))) return [{ kind: 'gainAP', amount: toNum(m[1].toLowerCase()) }];
+  if ((m = s.match(/^[Cc]reate (?:a|an) ([A-Z][\w' ]+?) in your banished zone$/))) return [{ kind: 'createInBanished', name: m[1] }];
+  if (/^you may play it this turn$/i.test(s)) return [{ kind: 'playLastBanished' }];
+  if ((m = s.match(/^banish target (\w+) (attack action|action) card from your graveyard$/i))) return [{ kind: 'banishFromGrave', cls: titleCase(m[1]), type: m[2].toLowerCase() === 'attack action' ? 'Attack' : 'Action' }];
+  if (/^you may have target dagger you control deal 1 damage to them\. if damage is dealt this way, the dagger has hit\. destroy the dagger$/i.test(s)) return [{ kind: 'daggerStrike' }];
+  if ((m = s.match(/^the next attack action card you play this turn costs ((?:\{r\})+) less to play$/i))) return [{ kind: 'costLess', amount: m[1].length / 3, filter: { kind: 'attackAction' } }];
   if ((m = s.match(/^banish the top card of their deck and a defending card$/i))) return [{ kind: 'banishTopOpp', amount: 1 }, { kind: 'banishDefender' }];
   if (/^destroy an intimidated card they own$/i.test(s)) return [{ kind: 'destroyIntimidated' }];
   if ((m = s.match(/^it gets \+(\d+)\{d\} and "when the combat chain closes, destroy this\.?"$/i))) return [{ kind: 'thisDefense', amount: +m[1] }, { kind: 'destroyAtChainClose' }];
@@ -478,9 +560,9 @@ export function parseEffect(raw: string): Effect[] | null {
       else if ((k = it.match(/^"(?:when|if) this hits(?: a hero)?, (.+?)\.?"$/i))) {
         const dest = /^put it on the bottom of its owner's deck$/i.test(k[1]) ? 'deckBottom' : /^put it into your hand$/i.test(k[1]) ? 'hand' : /^put it into your soul$/i.test(k[1]) ? 'soul' : null;
         const e = dest ? [{ kind: 'setDestination' as const, dest: dest as 'hand' }] : parseEffect(k[1]);
-        if (!e) return null;
+        if (!e) { out.length = 0; break; }
         out.push({ kind: 'thisGrantOnHit', effects: e });
-      } else return null;
+      } else { out.length = 0; break; } // not a list of "this gets" items: let the rules below try
     }
     if (out.length) return out;
   }
@@ -524,8 +606,43 @@ export function parseEffect(raw: string): Effect[] | null {
     return out;
   }
   if ((m = s.match(/^target hero gains (\d+)\{h\}$/i))) return [{ kind: 'gainLife', amount: +m[1] }];
+  if ((m = s.match(/^deal (\d+) arcane damage to them$/i))) return [{ kind: 'arcane', amount: +m[1] }];
+  if ((m = s.match(/^your hero deals (\d+) arcane damage to (any target|target hero|them)$/i))) return [{ kind: 'arcane', amount: +m[1], ...(m[2].toLowerCase() === 'any target' ? { any: true } : {}) }];
+  // "create a Frailty token under their control" and the like: the opposing hero on this chain link gets it
+  if ((m = s.match(/^[Cc]reate (a|an|one|two|three|\d+) ([A-Z][\w' ]*?) tokens? under (?:their|the attacking hero's|the defending hero's|target hero's|target opposing hero's|target opponent's|each opponent's|each other hero's|another target hero's) control$/)))
+    return Array.from({ length: toNum(m[1].toLowerCase()) }, () => ({ kind: 'oppCreateToken' as const, name: m![2] }));
+  // "Daggers you control get +1{p} this turn" / "Draconic attacks get +2{p} this turn"
+  if ((m = s.match(/^(?:your )?(\w+?)s?(?: attacks)? (?:you control )?get \+(\d+)\{p\} (?:this turn|until end of turn)$/i))) {
+    const f = parseFilter(/^weapon$/i.test(m[1]) ? 'weapon' : /^[a-z]/.test(m[1]) ? m[1].toLowerCase() : m[1]);
+    if (f && f.kind !== 'any') return [{ kind: 'turnAttackPower', amount: +m[2], filter: f }];
+  }
+  if (/^your attacks this turn get dominate$/i.test(s)) return [{ kind: 'turnAttackDominate' }];
+  if ((m = s.match(/^[Ee]ach hero creates (?:a|an) ([A-Z][\w' ]*?) token$/))) return [{ kind: 'createToken', name: m[1], amount: 1 }, { kind: 'oppCreateToken', name: m[1] }];
+  if ((m = s.match(/^each other hero draws (a|two|\d+) cards?$/i))) return [{ kind: 'oppDraw', amount: toNum(m[1].toLowerCase()) }];
+  // "the attack gets ..." (a reaction or equipment boosting the current attack)
+  if ((m = s.match(/^the attack gets \+(\d+)\{p\}$/i))) return [{ kind: 'targetAttackPower', amount: +m[1], filter: { kind: 'any' } }];
+  if (/^the attack gets go again$/i.test(s)) return [{ kind: 'targetAttackGoAgain', filter: { kind: 'any' } }];
+  if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
+  if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
+  if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^\{t\} (?:them|target hero|target opposing hero|target hero or ally|target [A-Z]\w+ hero(?: or ally)?|them or an ally they control|them or a weapon they control|them and all allies they control)$/.test(s)) return [{ kind: 'tapOpp' }];
+  if (/^(?:you may )?\{u\} your hero$/i.test(s)) return [{ kind: 'untap', what: 'hero' }];
+  if (/^(?:you may )?\{u\} (?:a|target) cog you control$/i.test(s)) return [{ kind: 'untap', what: 'cog' }];
+  if (/^(?:you may )?\{u\} (?:all|up to \d+) cogs you control$/i.test(s)) return [{ kind: 'untap', what: 'allCogs' }];
+  if (/^(?:you may )?\{u\} (?:a|target) (?:gun|bow|staff|weapon) you control$/i.test(s)) return [{ kind: 'untap', what: 'weapon' }];
+  if (/^\{u\} (?:an|target) ally you control$/i.test(s)) return [{ kind: 'untap', what: 'ally' }];
+  if ((m = s.match(/^destroy (?:this|it) unless you remove (?:a|an) (\w+) counter from (?:it|this)$/i))) return [{ kind: 'counterUpkeep', counter: m[1].toLowerCase() }];
+  if ((m = s.match(/^remove (?:a|an) (\w+) counter from this$/i))) return [{ kind: 'removeCounter', counter: m[1].toLowerCase() }];
+  if (/^put this into your (?:hero's )?soul$/i.test(s)) return [{ kind: 'selfToSoul' }];
+  if (/^your next attack this turn gets dominate$/i.test(s)) return [{ kind: 'nextAttackDominate' }];
+  if ((m = s.match(/^your (\w+?)s? attacks get go again this turn$/i))) { const f = parseFilter(m[1].toLowerCase()); if (f) return [{ kind: 'turnAttackGoAgain', filter: f }]; }
+  if ((m = s.match(/^remove all \+1\{p\} counters from (weapons|swords) you control$/i))) return [{ kind: 'clearWeaponCounters', sub: m[1].toLowerCase() === 'swords' ? 'Sword' : undefined }];
+  if ((m = s.match(/^destroy all ([A-Z][\w' ]*?)s? you control$/))) return [{ kind: 'destroyAllOwn', name: m[1] }];
+  if (/^sharpen all swords you control$/i.test(s)) return [{ kind: 'sharpen', times: 1 }];
+  // "destroy this, then <effect>" / "destroy this and <effect>"
+  if ((m = s.match(/^destroy this,? (?:and|then) (.+)$/i))) { const e = parseEffect(m[1]); return e ? [{ kind: 'destroySelf' }, ...e] : null; }
   // "X and Y"
-  const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw)\b)/i);
+  const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw|this gets|it gets|the attack gets|amp \d)\b)/i);
   if (and.length > 1) {
     const out: Effect[] = [];
     for (const p of and) {
@@ -594,6 +711,8 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you've been booed this turn$/.test(t) || /^the crowd has booed you this turn$/.test(t)) return { kind: 'booed' };
   if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
   if (/^you've played another red card this turn$/.test(t)) return { kind: 'anotherRed' };
+  if ((m = t.match(/^an? (red|yellow|blue) attack action card was the last attack this combat chain$/))) return { kind: 'lastAttackColor', pitch: { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] };
+  if ((m = t.match(/^([a-z' ]+) was the last attack this combat chain$/))) return { kind: 'lastAttackName', name: titleCase(m[1]) };
   if ((m = t.match(/^you've created (?:a|an) ([a-z' ]+) token this turn$/))) return { kind: 'createdToken', name: titleCase(m[1]) };
   if (/^you have no cards in (?:your )?hand$/.test(t)) return { kind: 'emptyHand' };
   if (/^you have no cards in your deck$/.test(t)) return { kind: 'emptyDeck' };
@@ -609,6 +728,17 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
   let m: RegExpMatchArray | null;
   if ((m = t.match(/^discard (?:a|an) (?:(red|yellow|blue) )?card$/))) return { kind: 'discard', pitch: m[1] ? { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] : undefined };
   if ((m = t.match(/^pay ((?:\{r\})+)$/))) return { kind: 'pay', amount: m[1].length / 3 };
+  if (/^destroy this$/.test(t)) return { kind: 'destroySelf' };
+  if (/^banish a card from your hero's soul$/.test(t)) return { kind: 'banishSoul' };
+  if (/^\{t\} your hero$/.test(t)) return { kind: 'tapHero' };
+  if (/^\{t\} this$/.test(t)) return { kind: 'tapOwn', what: 'this' };
+  if ((m = t.match(/^\{t\} (?:a|an) (cog|ally) you control$/))) return { kind: 'tapOwn', what: m[1] as 'cog' | 'ally' };
+  if ((m = t.match(/^(.+?) and (.+)$/))) {
+    const a = parseOptionalCost(m[1]);
+    const b = a && parseOptionalCost(m[2]);
+    if (a && b) return { kind: 'all', costs: [a, b] };
+  }
+  if ((m = t.match(/^discard (?:a|an) (instant|attack action|action|non-attack action) card$/))) return { kind: 'discard', type: { instant: 'Instant', 'attack action': 'Attack', action: 'Action', 'non-attack action': 'NonAttack' }[m[1]] };
   if ((m = t.match(/^banish (a|an|two|three|\d+) cards? from your graveyard$/))) return { kind: 'banishGrave', n: toNum(m[1]) };
   if (/^destroy the top card of your deck$/.test(t)) return { kind: 'destroyTop' };
   if (/^charge your (?:hero's )?soul$/.test(t)) return { kind: 'charge' };
@@ -623,7 +753,7 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
     const types: Record<string, string> = { aura: 'Aura', item: 'Item', 'attack action card': 'Attack', 'action card': 'Action' };
     return types[m[1]] ? { kind: 'banishGraveMatch', type: types[m[1]] } : { kind: 'banishGraveMatch', name: titleCase(m[1]) };
   }
-  if ((m = t.match(/^destroy (?:a|an) ([a-z' ]+) you control$/))) return { kind: 'destroyOwn', name: titleCase(m[1]) };
+  if ((m = t.match(/^destroy (?:a|an) ([a-z' ]+?)(?: token)? you control$/))) return { kind: 'destroyOwn', name: titleCase(m[1]) };
   return null;
 }
 
@@ -632,7 +762,7 @@ export function parseOptional(a: string, b: string): OptionalCost | null {
   const ma = a.replace(/^(galvanize|decompose) - /i, '').match(/^(when this attacks|when you play this|as an additional cost to play this|when this defends),? you may (.+?)\.?$/i);
   if (!ma) return null;
   const cost = parseOptionalCost(ma[2]);
-  if (!cost) return null;
+  if (!cost || cost.kind === 'all') return null; // combined costs only in "you may ... If you do" abilities
   const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}|an? (red|yellow|blue) card is charged this way|you charged your (?:hero's )?soul this way),? (.+?)\.?$/i);
   if (!mb) return null;
   const effectText = mb[5];
@@ -697,6 +827,9 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^reload$/i.test(s)) { sc.onPlay.push({ kind: 'reload' }); return true; }
   if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
+  if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
+  if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
+  if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
   if (/^at the beginning of your action phase, destroy this$/i.test(s)) { sc.destroyAt = 'actionPhase'; return true; }
   if (/^at the start of your turn, destroy this$/i.test(s)) { sc.destroyAt = 'startOfTurn'; return true; }
@@ -725,8 +858,15 @@ function compile(c: Card): CardScript {
   for (const k of c.keywords) if (!/^(intimidate|amp \d+|opt \d+|reload)$/i.test(k)) keywordSentence(sc, k);
   let fusion: string | null = null;
 
-  // strip reminder text
-  const text = c.text.replace(/\([^)]*\)/g, '').trim();
+  // strip reminder text; an ally's or weapon's own name in its text means "this" ("When Aegis attacks", "Whenever Kyloria hits a hero")
+  let text = c.text.replace(/\([^)]*\)/g, '').trim();
+  if (c.types.includes('Ally') || c.types.includes('Weapon')) {
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const names = [...new Set([c.name, c.name.split(',')[0]])].filter((x) => x.length > 2).map(esc).join('|');
+    text = text.replace(new RegExp(`\\b(?:${names})(?= (?:attacks|hits|is|enters|leaves|deals|gets|has|can)\\b)`, 'g'), 'this');
+    text = text.replace(/\bWhenever this (attacks|hits)\b/g, 'When this $1').replace(/\bWhen this dies\b/g, 'When this is destroyed')
+      .replace(/\b(?:he|she|it) deals (\d+) arcane damage to them\b/g, 'deal $1 arcane damage to them');
+  }
   if (!text) return finish(sc, c);
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   for (let li = 0; li < lines.length; li++) {
@@ -740,14 +880,28 @@ function compile(c: Card): CardScript {
       continue;
     }
     // modal cards: "Choose 1;" followed by one option per line
-    if (/^choose 1;?$/i.test(line)) {
-      while (li + 1 < lines.length && /[.!]$/.test(lines[li + 1])) {
-        const opt = lines[++li];
+    // "Choose 1 or both;", "Choose 2;", "Choose any number;": each allowed combination becomes one mode
+    const modal = line.match(/^choose (1|2|3|1 or both|any number);?$/i);
+    if (modal) {
+      const single: Mode[] = [];
+      while (li + 1 < lines.length && /[.!"]$/.test(lines[li + 1])) {
+        const opt = lines[++li].replace(/^[-•]\s*/, '');
         const tmp = emptyScript();
         handleSentence(tmp, opt, false, false);
         const parsed = tmp.unparsed.length === 0;
-        sc.modes.push({ label: opt.replace(/\.$/, ''), onPlay: tmp.onPlay, onAttack: tmp.onAttack, onHit: tmp.onHit, parsed });
+        single.push({ label: opt.replace(/\.$/, ''), onPlay: tmp.onPlay, onAttack: tmp.onAttack, onHit: tmp.onHit, parsed });
         if (!parsed) sc.unparsed.push(`(mode) ${opt}`);
+      }
+      const how = modal[1].toLowerCase();
+      const sizes = how === '1' ? [1] : how === '2' ? [2] : how === '3' ? [3] : how === '1 or both' ? [1, 2] : single.map((_, i) => i + 1);
+      const combos: Mode[][] = [];
+      const pick = (start: number, acc: Mode[]) => { if (sizes.includes(acc.length)) combos.push(acc); for (let i = start; i < single.length; i++) pick(i + 1, [...acc, single[i]]); };
+      pick(0, []);
+      for (const set of combos.filter((x) => x.length)) {
+        sc.modes.push(set.length === 1 ? set[0] : {
+          label: set.map((m) => m.label).join(' + '),
+          onPlay: set.flatMap((m) => m.onPlay), onAttack: set.flatMap((m) => m.onAttack), onHit: set.flatMap((m) => m.onHit), parsed: set.every((m) => m.parsed),
+        });
       }
       continue;
     }
@@ -765,7 +919,10 @@ function compile(c: Card): CardScript {
           continue;
         }
       }
-      const extraOk = ['', 'destroy this', '{t}', '{t} your hero', '{t} your hero destroy this', '{t} destroy this', '0'].includes(extra);
+      const tapHero = /\{t\}(?: this and)? your hero/.test(extra);
+      const tapCog = /\{t\} a cog you control/.test(extra);
+      const tapSelf = /\{t\}(?! your hero| a cog)/.test(extra.replace(/\{t\} this and your hero/, '{t} this'));
+      const extraOk = extra.replace(/\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
       // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
       let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
@@ -783,6 +940,9 @@ function compile(c: Card): CardScript {
           instant: /instant/i.test(act[2]),
           oncePerTurn: !!act[1] || attack,
           destroySelf,
+          tapSelf: tapSelf || undefined,
+          tapHero: tapHero || undefined,
+          tapCog: tapCog || undefined,
           goAgain: goAgain || /go again/i.test(tail),
           effects: effects ?? [],
           text: line,
@@ -832,16 +992,133 @@ function compile(c: Card): CardScript {
         i++;
         continue;
       }
-      const opt = i + 1 < sentences.length ? parseOptional(sentences[i], sentences[i + 1]) : null;
+      // allies attack through an activated ability, so their "you may" costs are on-attack abilities, not play costs
+      const opt = i + 1 < sentences.length && !c.types.includes('Ally') ? parseOptional(sentences[i], sentences[i + 1]) : null;
       if (opt && !sc.optional) {
         sc.optional = opt;
         i++;
         continue;
       }
+      // "If this deals damage, you may <cost>." + "If you do, <effect>." (an attack: when it hits; a spell: if its arcane damage got through)
+      const dd = i + 1 < sentences.length ? sentences[i].match(/^if this deals damage, (you may .+)$/i) : null;
+      const ddMay = dd && parseMayThen(dd[1], sentences[i + 1]);
+      if (ddMay) {
+        if (isAttack) sc.onHit.push(ddMay.effect);
+        else sc.conditional.push({ when: 'if', cond: { kind: 'dealtArcane' }, effects: [ddMay.effect] });
+        i++;
+        continue;
+      }
+      const may = i + 1 < sentences.length ? parseMayThen(sentences[i], sentences[i + 1]) : null;
+      if (may && (may.list !== 'onHit' || isAttack || c.types.includes('Ally'))) {
+        sc[may.list].push(may.effect);
+        i++;
+        continue;
+      }
+      const before = sc.unparsed.length;
       handleSentence(sc, sentences[i], isAttack, isPermanentLike);
+      // a permanent's triggered ability nothing else understood
+      const lastHere = i + 1 >= sentences.length;
+      const nextLineFirst = lastHere && li + 1 < lines.length ? lines[li + 1].split(/(?<=\.)\s+(?=[A-Z])/)[0] : undefined;
+      const trig = sc.unparsed.length > before && isPermanentLike && !isAttack ? parseTrigger(sentences[i], sentences[i + 1] ?? nextLineFirst) : null;
+      if (trig) {
+        sc.unparsed.length = before;
+        (sc.triggers ??= []).push(...trig.triggers);
+        if (trig.usedNext && !lastHere) i++;
+        else if (trig.usedNext && nextLineFirst) {
+          // the payoff was the next line's first sentence
+          lines[li + 1] = lines[li + 1].slice(nextLineFirst.length).trim();
+          if (!lines[li + 1]) lines.splice(li + 1, 1);
+        }
+      }
     }
   }
   return finish(sc, c);
+}
+
+/** what a permanent's "when / whenever / at the beginning of ..." ability waits for */
+export type TriggerEvent =
+  | 'startTurn' | 'actionPhase' | 'endPhase' | 'chainClose' | 'leaves'
+  | 'playAttackAction' | 'weaponAttack' | 'playAction' | 'playNonAttackAction' | 'playAura'
+  | 'hit' | 'beatChest' | 'winWager' | 'boost';
+
+export interface Trigger {
+  on: TriggerEvent;
+  /** 'hit' / attacks: which attacks count ("a sword attack you control hits") */
+  filter?: AttackFilter;
+  /** "Once per turn, ..." */
+  once?: boolean;
+  effects: Effect[];
+  text: string;
+}
+
+const PLAY_EVENTS: Record<string, TriggerEvent> = {
+  'an attack action card': 'playAttackAction', 'an action card': 'playAction', 'a non-attack action card': 'playNonAttackAction', 'an aura': 'playAura',
+};
+
+/** "Whenever you play an attack action card" -> the events it waits for, or null */
+export function parseTriggerHead(raw: string): { on: TriggerEvent[]; filter?: AttackFilter; once?: boolean } | null {
+  let h = raw.trim().toLowerCase().replace(/\.$/, '');
+  let once: boolean | undefined;
+  if (h.startsWith('once per turn, ')) { once = true; h = h.slice('once per turn, '.length); }
+  let m: RegExpMatchArray | null;
+  const one = (on: TriggerEvent, filter?: AttackFilter) => ({ on: [on], filter, once });
+  if (/^at the start of your turn$/.test(h)) return one('startTurn');
+  if (/^at the (?:beginning|start) of your action phase$/.test(h)) return one('actionPhase');
+  if (/^at the beginning of your end phase$/.test(h)) return one('endPhase');
+  if (/^when the combat chain closes$/.test(h)) return one('chainClose');
+  if (/^when this leaves the arena$/.test(h)) return one('leaves');
+  if (/^whenever you beat chest$/.test(h)) return one('beatChest');
+  if (/^whenever you win a wager$/.test(h)) return one('winWager');
+  if (/^whenever you boost$/.test(h)) return one('boost');
+  if (/^when(?:ever)? you activate a weapon attack$/.test(h)) return one('weaponAttack');
+  if (/^when(?:ever)? you play an attack action card or activate a weapon attack$/.test(h)) return { on: ['playAttackAction', 'weaponAttack'], once };
+  if (/^at the beginning of your action phase or when you play an attack action card$/.test(h)) return { on: ['actionPhase', 'playAttackAction'], once };
+  if ((m = h.match(/^when(?:ever)? you play (an attack action card|an action card|a non-attack action card|an aura)$/))) return one(PLAY_EVENTS[m[1]]);
+  // "when an attack action card you control hits", "whenever a weapon attack you control hits", "when your sword attack hits", "whenever a dagger you own hits a hero"
+  if ((m = h.match(/^when(?:ever)? (?:an?|your) (?:([a-z]+) )?(attack action card|attack|[a-z]+) (?:you (?:control|own) )?hits(?: a hero)?$/))) {
+    const word = m[2] === 'attack' || m[2] === 'attack action card' ? (m[1] ?? '') : m[2];
+    if (m[2] === 'attack action card' && !m[1]) return one('hit', { kind: 'attackAction' });
+    const f = parseFilter(/^[a-z]/.test(word) && CLASS_WORDS.some((c) => c.toLowerCase() === word) ? CLASS_WORDS.find((c) => c.toLowerCase() === word)! : word);
+    if (f) return one('hit', f);
+  }
+  return null;
+}
+
+/** A permanent's triggered ability: "<head>, <effects>" (or "<head>, you may <cost>." + "If you do, <effects>.") */
+export function parseTrigger(sent: string, next?: string): { triggers: Trigger[]; usedNext: boolean } | null {
+  const ms = sent.match(/^((?:once per turn, )?(?:when|whenever|at the beginning of|at the start of) [^,]+?), (.+?)\.?$/i);
+  if (!ms) return null;
+  const head = parseTriggerHead(ms[1]);
+  if (!head) return null;
+  let effects = parseEffect(ms[2]);
+  let usedNext = false;
+  if (effects && next && /^remove (?:a|an) \w+ counter from this\.?$/i.test(ms[2]) && /^if you do/i.test(next)) effects = null; // its payoff is on the next sentence
+  const rc = ms[2].match(/^remove (?:a|an) (\w+) counter from this\.?$/i);
+  const rcThen = rc && next?.match(/^if you do,? (.+?)\.?$/i);
+  const rcEff = rcThen && parseEffect(rcThen[1]);
+  if (rc && rcEff) { effects = [{ kind: 'removeCounter', counter: rc[1].toLowerCase(), then: rcEff }]; usedNext = true; }
+  if (!effects && next) {
+    const may = parseMayThen(ms[2], next);
+    if (may && may.list === 'onPlay') { effects = [may.effect]; usedNext = true; }
+  }
+  if (!effects) return null;
+  const text = ms[2].replace(/\.$/, '');
+  return { triggers: head.on.map((on) => ({ on, filter: head.filter, once: head.once, effects: effects!, text })), usedNext };
+}
+
+/** "When this hits, you may <cost>." + "If you do, <effects>." as an effect on the matching trigger */
+export function parseMayThen(a: string, b: string): { list: 'onHit' | 'onAttack' | 'onDefend' | 'onPlay'; effect: Effect } | null {
+  const ma = a.match(/^(?:(when this hits(?: a hero)?|when this attacks|when this defends|when you play this),? )?(you may )?(.+?)\.?$/i);
+  if (!ma) return null;
+  if (!ma[2] && !/^when this defends/i.test(ma[1] ?? '')) return null; // without "you may" only the defend cost lines (Sunkwater)
+  const mb = b.match(/^if you do,? (.+?)\.?$/i);
+  if (!mb) return null;
+  const cost = parseOptionalCost(ma[3]);
+  const then = cost && parseEffect(mb[1]);
+  if (!cost || !then) return null;
+  const w = (ma[1] ?? '').toLowerCase();
+  const list = w.startsWith('when this hits') ? 'onHit' : w === 'when this attacks' ? 'onAttack' : w === 'when this defends' ? 'onDefend' : 'onPlay';
+  return { list, effect: { kind: 'mayThen', cost, then, text: `${ma[3].replace(/\.$/, '')} to ${mb[1].replace(/\.$/, '')}` } };
 }
 
 /** "When this defends, clash with the attacking hero." + "The winner creates a Vigor token." / "If you win, ..." */
@@ -920,6 +1197,25 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   }
   if (/^at the beginning of your end phase, put a -1\{d\} counter on this\.?$/i.test(sent)) { sc.endPhaseWear = true; return; }
   if (/^at the beginning of your end phase, destroy this\.?$/i.test(sent)) { sc.destroyAtEnd = true; return; }
+  if (/^you may equip this\.?$/i.test(sent)) return; // event equipment: the event deck offers to equip it
+  // "You may play it this turn." belongs to the effect before it that banished or created the card
+  if (/^you may play it this turn\.?$/i.test(sent)) {
+    const host = findHost(sc, (e) => e.kind === 'createInBanished' || e.kind === 'banishFromGrave');
+    if (host) { host.push({ kind: 'playLastBanished' }); return; }
+  }
+  if (/^when this attacks a hero, you may have target dagger you control deal 1 damage to them\.?$/i.test(sent)) { sc.onAttack.push({ kind: 'daggerStrike' }); return; }
+  if (/^(if damage is dealt this way, the dagger has hit|destroy the dagger)\.?$/i.test(sent) && sc.onAttack.some((e) => e.kind === 'daggerStrike')) return;
+  if ((m = sent.match(/^while this is in your graveyard, at the start of your turn, you may destroy (\d+) silver you control\.?$/i))) { sc.graveEquip = +m[1]; return; }
+  if (/^if you do, equip this\.?$/i.test(sent) && sc.graveEquip) return;
+  if (/^when this is equipped from anywhere other than your graveyard, put a -1\{d\} counter on it\.?$/i.test(sent)) { sc.equipCounter = true; return; }
+  if ((m = sent.match(/^[Ii]f you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token\.?$/))) {
+    const last = [...sc.onPlay, ...sc.activations.flatMap((a) => a.effects)].reverse().find((e) => e.kind === 'preventNext');
+    if (last && last.kind === 'preventNext') { last.thenToken = m[1]; return; }
+  }
+  if ((m = sent.match(/^when this is pitched, (.+)$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void (sc.onPitch ??= []).push(...e);
+  }
   if ((m = sent.match(/^when this enters the arena, (.+)$/i)) && isPermanentLike) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onPlay.push(...e);
@@ -979,7 +1275,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const e = cond && parseEffect(m[2]);
     if (cond && e && !isAttack) return void sc.conditional.push({ when: 'instead', cond, effects: e });
   }
-  if ((m = sent.match(/^when this attacks, if (.+?), (.+)$/i))) {
+  if ((m = sent.replace(/^combo - /i, '').match(/^when this attacks, if (.+?), (.+)$/i))) {
     const cond = parseCondition(m[1]);
     const e = cond && parseEffect(m[2]);
     if (cond && e) return void sc.conditional.push({ when: LINK_CONDITIONS.has(cond.kind) ? 'ifLink' : 'if', cond, effects: e });
@@ -1082,13 +1378,24 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   sc.unparsed.push(sent);
 }
 
+/** The effect list (anywhere in the script, including conditionals) whose last effect matches. */
+function findHost(sc: CardScript, pred: (e: Effect) => boolean): Effect[] | null {
+  const lists: Effect[][] = [sc.onPlay, sc.onAttack, sc.onHit, ...sc.conditional.map((c) => c.effects), ...sc.activations.map((a) => a.effects)];
+  const walk = (list: Effect[]): Effect[] | null => {
+    for (const e of list) if (e.kind === 'ifCond') { const r = walk(e.effects); if (r) return r; }
+    return list.length && pred(list[list.length - 1]) ? list : null;
+  };
+  for (const l of lists.reverse()) { const r = walk(l); if (r) return r; }
+  return null;
+}
+
 function finish(sc: CardScript, c: Card): CardScript {
   const meaningful = c.text.trim().length > 0;
   if (!meaningful || sc.unparsed.length === 0) sc.coverage = 'full';
   else {
     const parsedSomething =
       sc.onPlay.length + sc.onHit.length + sc.onAttack.length + sc.conditional.length + sc.activations.length + sc.modes.length + sc.onDestroy.length > 0 ||
-      !!sc.optional || !!sc.handActivation ||
+      !!sc.optional || !!sc.handActivation || !!sc.triggers?.length || !!sc.onPitch?.length || sc.onDefend.length > 0 ||
       sc.goAgain || sc.dominate || sc.ward > 0;
     sc.coverage = parsedSomething ? 'partial' : 'none';
   }
@@ -1100,6 +1407,7 @@ export function describeFilter(f: AttackFilter): string {
     case 'any': return 'attack';
     case 'keyword': return `attack with ${f.value.toLowerCase()}`;
     case 'attackAction': return 'attack action card';
+    case 'ally': return 'ally attack';
     case 'weapon': return 'weapon attack';
     case 'subtype': return `${f.value} attack`;
     case 'class': return `${f.value} attack`;

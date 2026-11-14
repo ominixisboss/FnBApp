@@ -44,19 +44,25 @@ export interface PermanentState {
   damage?: number;
   /** stolen: goes back to this player at the end of the action phase */
   returnTo?: PlayerId;
+  /** {t}: tapped until its controller's next turn */
+  tapped?: boolean;
 }
 
 export type TurnEffect =
   | { kind: 'nextAttackPower'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
   | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
-  | { kind: 'preventNext'; amount: number; source: string }
+  | { kind: 'preventNext'; amount: number; source: string; thenToken?: string }
   | { kind: 'ampArcane'; amount: number; source: string }
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }
   /** "your next Guardian attack action card this turn costs {r} less" (Seismic Surge) */
   | { kind: 'costLess'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'nextAttackDominate'; source: string }
+  /** every attack matching the filter this turn */
+  | { kind: 'turnAttackPower'; amount: number; filter: AttackFilter; source: string }
+  | { kind: 'turnAttackDominate'; source: string }
+  | { kind: 'turnAttackGoAgain'; filter: AttackFilter; source: string }
   /** the next attack gets +X{p} when it attacks, X = Gold you control (Benefactor of Bloodworth Goldmane) */
   | { kind: 'nextAttackGoldPower'; source: string };
 
@@ -75,6 +81,8 @@ export interface PlayerState {
   graveyard: CardInst[];
   banished: CardInst[];
   intimidated: CardInst[];
+  /** {t} your hero: tapped until this player's next turn */
+  heroTapped?: boolean;
   /** counters on the hero card (e.g. Blaze's energy counters) */
   heroCounters?: number;
   /** knocked out of a multiplayer game */
@@ -142,8 +150,11 @@ export interface Defender {
 
 export interface ChainLink {
   attacker: PlayerId;
-  inst: CardInst; // attack card or weapon
+  inst: CardInst; // attack card, weapon or ally
+  /** a weapon or an ally attacks (the card stays where it is); see `ally` */
   fromWeapon: boolean;
+  /** an ally attacks: like a weapon attack, but it isn't one ("weapon attacks get +1{p}" don't apply) */
+  ally?: boolean;
   fromArsenal: boolean;
   basePower: number;
   powerMod: number;
@@ -229,7 +240,9 @@ export interface PendingChoice {
     /** Kox: the top of the event deck in the order picked (unpicked ones after) */
     | { type: 'eventOrder' }
     /** a choice an event card asks for (see resolveEventChoice) */
-    | { type: 'event'; key: string; data?: number[] };
+    | { type: 'event'; key: string; data?: number[] }
+    /** "you may <cost>. If you do, <then>" (answered yes: pay and resolve) */
+    | { type: 'mayThen'; cost: import('../engine/cardScript').OptionalCostKind; then: import('../engine/cardScript').Effect[]; src: CardInst; text: string };
   /** the rest of the effect, run once the choice is made ("Opt 3, then banish the top card") */
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }

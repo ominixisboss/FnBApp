@@ -1616,3 +1616,150 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .bar-more .portrait-only { display: none; }
 .event-chip { position: absolute; z-index: 11; right: calc(10px + var(--sa-r)); top: calc(94px + var(--sa-t)); max-width: 46vw; padding: 4px 10px; border-radius: 999px; background: #1a1006e6; border: 1px solid #c9a24a88; color: #f1e4cc; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pit-in .35s var(--spring); }
 @media (max-width: 640px) and (orientation: portrait) { .event-chip { top: calc(40px + var(--sa-t)); right: 6px; font-size: .62rem; } }
+/* phones: the dock spans the width (the corner buttons moved into ☰), message beside the button, nothing clipped */
+@media (max-width: 640px) and (orientation: portrait) {
+  .dock { left: 8px; right: 8px; width: auto; }
+  .dock .phase-ladder { display: none; }
+  .arena .prompt { flex-direction: row; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; }
+  .arena .prompt .msg { flex: 1; max-height: none; overflow: visible; font-size: .74rem; text-align: left; }
+  .arena .prompt button { width: auto; flex: 0 0 46%; }
+  .arena .prompt button.primary { min-height: 52px; font-size: .9rem; padding: .7em .6em; }
+  .stack-zone { right: 4px; transform: translateY(-50%) scale(.78); transform-origin: right center; }
+}
+/* phones: "Build a deck" is a slim row, not a half-screen card; PLAY appears once you've picked a deck */
+@media (max-width: 640px) and (orientation: portrait) {
+  .deckbox-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+  .deckbox-grid .deckbox-new { grid-column: 1 / -1; aspect-ratio: auto; min-height: 56px; grid-auto-flow: column; justify-content: center; gap: .5rem; }
+  .deckbox-grid .deckbox-new span { font-size: 1.4rem; }
+  .lobby-side .play-big:disabled { display: none; }
+}
+/* phones, second pass: a bigger board (no decorative chain titles, opponent and chain nearly full size), solid drawers */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena .chain-title, .arena .chain-start { display: none; }
+  .arena .mat-side.opp { --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .9), 66px); }
+  .arena .mat-chain { --slot: min(calc((100cqi - 5 * var(--gap) - 12px) / 6 * .9), 66px); }
+  .arena-board { top: calc(var(--ohw) * 1.1 + 8px + var(--sa-t)); bottom: calc(var(--ctl) + 76px); }
+  .drawer { left: 8px; right: 8px; width: auto; top: calc(56px + var(--sa-t)); bottom: calc(8px + var(--sa-b)); background: #15110d; z-index: 46; }
+}
+/* phones: three cards per row in the card database, deck editor and pickers (browse faster; tap a card for its details) */
+@media (max-width: 640px) and (orientation: portrait) {
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; }
+  .grid > * { min-width: 0; font-size: .78rem; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  .hero-pick { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+  .hero-pick .small { font-size: .66rem; line-height: 1.15; }
+}
+/* phones: lessons in one swipeable row of chips (the lesson starts on the first screen); achievements two per row */
+@media (max-width: 640px) and (orientation: portrait) {
+  .learn-layout .lesson-list { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: .45rem; -webkit-overflow-scrolling: touch; }
+  .learn-layout .lesson-list::-webkit-scrollbar { display: none; }
+  .learn-layout .lesson-list > * { flex: 0 0 auto !important; white-space: nowrap; }
+  .achievements { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+  .achievements > * { padding: .55rem; font-size: .8rem; }
+}
+
+/* ---------------------------------------------------------------- victory / defeat screen */
+.gameover .box { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; scrollbar-width: none; }
+.go-card { --goh: clamp(64px, 12vh, 112px); display: flex; flex-direction: column; align-items: center; gap: .55rem; padding: 1.1rem 1rem 1rem;
+  border-radius: 20px; background: linear-gradient(180deg, #1d1611f0, #0e0b08f5); border: 1px solid #a57c4688; box-shadow: 0 30px 80px #000, inset 0 1px 0 #ffffff14; }
+.gameover.win .go-card { border-color: #f6d58e99; box-shadow: 0 30px 80px #000, 0 0 60px #d9a44133, inset 0 1px 0 #ffffff1c; }
+.go-heroes { display: flex; align-items: center; gap: 1rem; }
+.go-hero { display: flex; flex-direction: column; align-items: center; gap: .25rem; font: 600 .78rem Cinzel, Georgia, serif; color: #e8d9bd; transition: filter .4s; }
+.go-hero.win .card { box-shadow: 0 0 0 2px #f6d58e, 0 0 28px #f0b542aa; animation: goWin 1.6s ease-in-out .4s infinite alternate; }
+.go-hero.lost { filter: grayscale(.85) brightness(.6); }
+.go-hero.lost .card { transform: rotate(-4deg) translateY(4px); }
+@keyframes goWin { to { box-shadow: 0 0 0 2px #fff3c4, 0 0 44px #f0b542; } }
+.go-vs { font: 800 1.1rem Cinzel, Georgia, serif; color: #c9a46a; opacity: .8; }
+.gameover .go-card h1 { margin: .1rem 0 0; line-height: 1; }
+.go-sub { margin: 0; font-size: 1rem; color: #e8d9bd; }
+.go-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .4rem; width: 100%; margin-top: .3rem; }
+.go-stat { display: flex; flex-direction: column; align-items: center; gap: .1rem; padding: .5rem .2rem; border-radius: 12px; background: #00000059; border: 1px solid #ffffff14;
+  animation: fadeUp .4s ease-out both; }
+.go-stat b { font-size: 1.05rem; color: #f6e6c8; white-space: nowrap; }
+.go-stat span { font-size: .66rem; color: #a8957a; text-transform: uppercase; letter-spacing: .04em; text-align: center; }
+.go-actions { display: flex; flex-direction: column; align-items: stretch; gap: .45rem; width: min(380px, 100%); margin-top: .4rem; }
+.go-actions .go-main { font: 700 1.15rem/1 Cinzel, Georgia, serif; padding: .85em 1em; border-radius: 999px; }
+.go-actions > button:not(.go-main) { padding: .65em 1em; border-radius: 999px; }
+.go-secondary { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: .45rem; }
+.go-secondary button { padding: .55em .6em; border-radius: 999px; font-size: .9rem; }
+.go-card .progress-gains, .go-card > :last-child { width: 100%; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .go-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .go-card { --goh: 78px; padding: .9rem .7rem; }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  .go-card { --goh: 54px; gap: .35rem; padding: .7rem .9rem; }
+  .gameover .go-card h1 { font-size: 2.4rem; }
+  .go-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: center; }
+  .go-actions > button, .go-secondary { flex: 1 1 auto; }
+}
+/* format picker: full names normally; on phones short names in an even 4-column grid, and the mode links in 3 even columns */
+.format-seg .fmt-short { display: none; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .format-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 16px; width: 100%; }
+  .format-seg button { padding: .55em .2em; border-radius: 12px; font-size: .82rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .format-seg .fmt-full { display: none; }
+  .format-seg .fmt-short { display: inline; }
+  .more-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .more-modes a { display: flex; align-items: center; justify-content: center; text-align: center; padding: .55em .3em; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+/* the in-game menu never runs off a short (landscape phone) screen: it scrolls instead */
+.bar-more.open { max-height: calc(100dvh - 56px - var(--sa-t, 0px)); overflow-y: auto; overscroll-behavior: contain; }
+/* end screen: the two halves stack normally; stat tiles and format buttons fill their last row */
+.go-left, .go-right { display: flex; flex-direction: column; align-items: center; gap: .55rem; width: 100%; }
+.go-stats { display: flex; flex-wrap: wrap; }
+.go-stat { flex: 1 1 calc(20% - .4rem); min-width: 0; }
+@media (max-width: 640px) and (orientation: portrait) {
+  .go-stat { flex-basis: calc(33.3% - .4rem); }
+  .format-seg { display: flex; flex-wrap: wrap; }
+  .format-seg button { flex: 1 1 calc(25% - 4px); }
+}
+/* short landscape screens (phones on their side): heroes and title on the left, stats and buttons on the right */
+@media (max-height: 520px) and (orientation: landscape) {
+  .gameover .box { width: min(860px, calc(100vw - 24px)); }
+  .go-card { flex-direction: row; align-items: center; gap: 1rem; --goh: 72px; }
+  .go-left { flex: 0 0 38%; }
+  .go-right { flex: 1; gap: .4rem; }
+  .go-stat { padding: .35rem .2rem; }
+  .go-stat b { font-size: .95rem; }
+  .go-actions { width: 100%; margin-top: .1rem; }
+  .go-actions .go-main { padding: .7em 1em; font-size: 1.05rem; }
+}
+/* audio settings */
+.audio-settings { display: flex; flex-direction: column; gap: .55rem; }
+.audio-row { display: grid; grid-template-columns: 7.2rem 1fr 3rem; align-items: center; gap: .6rem; }
+.audio-toggle { padding: .45em .7em; border-radius: 999px; text-align: left; }
+.audio-toggle.on { border-color: var(--accent); color: #f6e6c8; }
+.audio-row input[type=range] { width: 100%; accent-color: #d9a441; }
+.audio-val { font-size: .8rem; color: #a8957a; text-align: right; }
+.audio-settings.compact .audio-row { grid-template-columns: 6.4rem 1fr 2.6rem; }
+/* the gold chain: starts where the label ends (or at the edge when the label is hidden), fits a whole number of
+   links (no cut-off ring at the end), and has a ball at both ends */
+.chain-track { --chain-left: calc(var(--slot) * 1.9); }
+.chain-track::before { left: var(--chain-left); right: 14px; background-repeat: round no-repeat; background-size: auto 12px; }
+.chain-track::after { left: calc(var(--chain-left) - 6px); right: 2px; width: auto; border-radius: 0; box-shadow: none;
+  background: radial-gradient(circle closest-side, #fbe3a6 0, #d9a441 45%, #8a6a3e 88%, transparent 100%) left center / 13px 13px no-repeat,
+              radial-gradient(circle closest-side, #fbe3a6 0, #d9a441 45%, #8a6a3e 88%, transparent 100%) right center / 13px 13px no-repeat;
+  filter: drop-shadow(0 0 4px #d9a44188); }
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena .chain-track { --chain-left: 14px; }
+}
+/* phones, third pass: a real top strip. ☰ on the left, the hint card beside it (in the space the opponent's
+   face-down hand used; their hand size is on their ✋ chip), and the board starting just below, so nothing overlaps */
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena { --top-strip: calc(58px + var(--sa-t)); }
+  .arena .opp-hand { display: none; }
+  .arena-bar { top: calc(7px + var(--sa-t)); }
+  .arena .arena-hint { top: calc(6px + var(--sa-t)); left: 62px; right: 8px; bottom: auto; width: auto; max-height: 48px; overflow: hidden;
+    padding: 4px 10px; font-size: .7rem; line-height: 1.25; border-radius: 12px; z-index: 13; }
+  .arena .arena-hint b, .arena .arena-hint strong { font-size: .76rem; }
+  .arena .arena-hint > * { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .arena-board { top: var(--top-strip); }
+  .arena:has(.pit-strip) .arena-board { top: calc(var(--top-strip) + 36px); }
+}
+
+/* {t}: tapped heroes and permanents tilt and dim until they untap */
+.is-tapped { transform: rotate(14deg); filter: saturate(.5) brightness(.78); transition: transform .25s ease, filter .25s ease; }
+.tapped-badge { position: absolute; top: 2px; right: 2px; z-index: 3; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 8px; background: rgba(20, 16, 10, .85); color: #f2e14e; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .is-tapped { transition: none; } }

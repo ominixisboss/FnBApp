@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable, typeMatches,
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -13,10 +13,12 @@ import { getScript } from '../../engine/cardScript';
 import { formatName } from '../../deck/deck';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
+import AudioSettings from './AudioSettings';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
 import { setSoundEnabled, sfx, soundEnabled } from '../sound';
-import { musicEnabled, setMusicEnabled, setMusicMood } from '../music';
+import type { SfxName } from '../sound';
+import { currentBaseMood, musicEnabled, musicSting, setMusicEnabled, setMusicMood } from '../music';
 import { applyOrientation, isNative, orientationPref } from '../../native';
 import { buzz, canVibrate, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { hideHover } from './HoverCard';
@@ -41,18 +43,48 @@ const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fa
 
 const motionOk = () => animationsEnabled() && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
+/** Sounds for what just happened: the board changes, plus what the new log lines say (at most a few at once). */
 function playSounds(a: GameState, b: GameState) {
-  if (b.phase === 'gameOver' && a.phase !== 'gameOver') return sfx(b.winner === HUMAN ? 'win' : 'lose');
+  if (b.phase === 'gameOver' && a.phase !== 'gameOver') {
+    sfx(b.winner === HUMAN ? 'win' : 'lose');
+    musicSting(b.winner === HUMAN ? 'victory' : 'defeat');
+    return;
+  }
+  const out: SfxName[] = [];
+  const add = (n: SfxName) => { if (!out.includes(n)) out.push(n); };
   const lifeLoss = Math.max(...b.players.map((p, i) => a.players[i].life - p.life));
-  if (lifeLoss >= 5) sfx('bigHit');
-  else if (lifeLoss > 0) sfx('hit');
-  if (b.chain.length > a.chain.length) sfx('play');
+  if (lifeLoss >= 5) add('bigHit');
+  else if (lifeLoss > 0) add('hit');
+  if (b.chain.length > a.chain.length) add('attack');
   const defA = a.chain[a.chain.length - 1]?.defenders.length ?? 0;
   const lastB = b.chain[b.chain.length - 1];
-  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA) sfx('block');
-  if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) sfx('pitch');
-  if (b.turn !== a.turn) sfx(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
-  else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) sfx('draw');
+  if (lastB && b.chain.length === a.chain.length && lastB.defenders.length > defA) add('block');
+  // what the log says happened
+  const fresh = b.log.length > a.log.length ? b.log.slice(a.log.length).map((e) => e.text) : [];
+  const said = (re: RegExp) => fresh.some((t) => re.test(t));
+  if (said(/is knocked out/)) add('knockout');
+  if (said(/^Event: /)) add('event');
+  if (said(/arcane damage/)) add('arcane');
+  if (said(/breaks \(blade break\)|is destroyed \(temper\)|is destroyed\.$|shatter/)) add('shatter');
+  if (said(/The crowd cheers/)) add('cheer');
+  if (said(/The crowd boos/)) add('boo');
+  if (said(/creates? (?:a|\d+) Gold|Gold token|wins the wager|steals/)) add('gold');
+  else if (said(/creates? .*token/)) add('token');
+  if (said(/gains? \d+ life|gain(?:s)? \d+\{h\}|\+\d+ life/)) add('lifeGain');
+  if (said(/has go again|gains an action point|gets go again/)) add('goAgain');
+  if (said(/Clash!|rolled|rolls/)) add('dice');
+  if (said(/shuffles/)) add('shuffle');
+  if (said(/is banished|banishes/)) add('banish');
+  if (said(/discards/)) add('discard');
+  if (b.stack?.length && (b.stack.length > (a.stack?.length ?? 0))) add('reaction');
+  if (b.players.some((p, i) => p.permanents.length > a.players[i].permanents.length) && !out.includes('token') && !out.includes('gold')) add('aura');
+  if (b.players.some((p, i) => p.pitch.length > a.players[i].pitch.length)) add('pitch');
+  if (b.turn !== a.turn) {
+    add(b.turnPlayer === HUMAN ? 'myTurn' : 'turn');
+    if (b.turnPlayer === HUMAN && b.players[HUMAN].life <= 5) add('heartbeat');
+  } else if (b.players[HUMAN].hand.length > a.players[HUMAN].hand.length) add('draw');
+  // the most important few, slightly staggered so they don't smear together
+  out.slice(0, 3).forEach((n, i) => (i ? setTimeout(() => sfx(n), i * 90) : sfx(n)));
 }
 
 /** Vibration for the moments that matter to you: being hit, landing hits, blocking, playing, your turn. */
@@ -226,13 +258,15 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const [choosePlay, setChoosePlay] = useState<PlayOption[] | null>(null);
   const [boostSel, setBoostSel] = useState<number[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
-  const [drawer, setDrawer] = useState<'log' | 'manual' | null>(null);
+  const [drawer, setDrawer] = useState<'log' | 'manual' | 'audio' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // phone toolbar overflow menu
   const [pitchOrderOn, setPitchOrderOn] = useState(() => readSetting('pitchorder', false));
   // manual moves (sandbox): tap any card to move it anywhere
   const manualAllowed = !online || !!online.sandbox;
   const [manual, setManual] = useState(!!sandbox);
   const [moveMenu, setMoveMenu] = useState<{ inst: CardInst; player: PlayerId } | null>(null);
+  /** a card in the arena with more than one usable ability (an ally's attack and its instant): pick one */
+  const [actMenu, setActMenu] = useState<{ inst: CardInst; opts: typeof options } | null>(null);
   const [ordering, setOrdering] = useState<{ action: Action; order: number[] } | null>(null);
   const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [emoteOpen, setEmoteOpen] = useState(false);
@@ -242,7 +276,10 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   useEffect(() => { const t = setTimeout(() => setTick((n) => n + 1), 3600); return () => clearTimeout(t); }, [myEmote, online?.emote]);
   const [sound, setSound] = useState(soundEnabled);
   const [music, setMusic] = useState(musicEnabled);
-  useEffect(() => { setMusicMood('battle'); return () => setMusicMood('menu'); }, []);
+  useEffect(() => { setMusicMood('battle'); return () => setMusicMood(currentBaseMood()); }, []);
+  // the music turns tense when someone is close to dying
+  const danger = state.phase !== 'gameOver' && state.players.some((p) => !p.eliminated && p.life <= 6);
+  useEffect(() => { if (state.phase !== 'gameOver') setMusicMood(danger ? 'tense' : 'battle'); }, [danger, state.phase]);
   const handRef = useRef<HTMLDivElement>(null);
   const oppHandRef = useRef<HTMLDivElement>(null);
   const suppressClick = useRef(false);
@@ -582,6 +619,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
     const acts = options.filter((o) => o.uid === inst.uid && o.kind === 'activation');
+    if (acts.length > 1 && !pending) return setActMenu({ inst, opts: acts });
     if (acts.length && !pending) return startPlay(acts[0]);
     setDetail(cardOf(inst));
   };
@@ -794,6 +832,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
           <button className={`icon-btn ${autoPay ? 'on' : ''}`} title="Auto-pay: pitch cards automatically when you play something (hold Shift to choose yourself)" onClick={() => { writeSetting('autopay', !autoPay); setAutoPay(!autoPay); }}>⛀<span>Auto-pay</span></button>
           <button className={`icon-btn ${autoPass ? 'on' : ''}`} title="Auto-pass: end your turn / skip blocking automatically when you have nothing to do" onClick={() => { writeSetting('autopass', !autoPass); setAutoPass(!autoPass); }}>⏭<span>Auto-pass</span></button>
           <button className="icon-btn" title="Sound" onClick={() => { setSoundEnabled(!sound); setSound(!sound); }}>{sound ? '🔊' : '🔇'}<span>Sound</span></button>
+          <button className={`icon-btn ${drawer === 'audio' ? 'on' : ''}`} title="Music and sound volume" onClick={() => setDrawer(drawer === 'audio' ? null : 'audio')}>🎚<span>Audio</span></button>
           <button className={`icon-btn ${music ? 'on' : ''}`} title="Music" onClick={() => { setMusicEnabled(!music); setMusic(!music); }}>{music ? '🎵' : '🔈'}<span>Music</span></button>
           {manualAllowed && <button className={`icon-btn ${manual ? 'on' : ''}`} title="Manual moves: tap any card to move it anywhere (for effects the simulator doesn't automate)" onClick={() => setManual(!manual)}>✋<span>Manual moves</span></button>}
           <button className={`icon-btn ${pitchOrderOn ? 'on' : ''}`} title="Choose the order your pitched cards go to the bottom of your deck" onClick={() => { writeSetting('pitchorder', !pitchOrderOn); setPitchOrderOn(!pitchOrderOn); }}>⇅<span>Pitch order</span></button>
@@ -954,6 +993,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <button className="small" onClick={() => setDrawer(null)}>✕</button>
           </div>
           {drawer === 'manual' && <ManualTools state={state} act={act} />}
+          {drawer === 'audio' && <><h3 style={{ margin: 0 }}>Audio</h3><AudioSettings compact /></>}
           {drawer === 'log' && (
             <div className="log" ref={logRef}>
               {state.log.slice(-250).map((l, i) => (
@@ -982,22 +1022,64 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       {fx.banner && <TurnBanner key={`tb${fx.banner.id}`} text={fx.banner.text} mine={fx.banner.mine} />}
       {overlay && state.phase === 'gameOver' && (
         <GameOverOverlay won={state.winner === HUMAN}>
-          <h1>{state.winner === HUMAN ? 'Victory' : 'Defeat'}</h1>
-          <p style={{ fontSize: '1.1rem' }}>
-            {state.winner === HUMAN ? `You defeated ${opp.name.replace(' (bot)', '')}` : `${opp.name.replace(' (bot)', '')} wins`} on turn {state.turn}
-            {' '}· you finished on {Math.max(0, me.life)} life.
-          </p>
-          <div className="row" style={{ justifyContent: 'center', marginTop: '1rem' }}>
-            {onRematch && <button className="primary" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
-            <button className="gold" onClick={onExit}>New game</button>
-            <button onClick={() => setOverlay(false)}>View board</button>
-            {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
-          </div>
-          {extraResult}
-          {onGameOver && <ProgressGains before={progressBefore} />}
+          {(() => {
+            const won = state.winner === HUMAN;
+            const oppName = opp.name.replace(' (bot)', '');
+            const g = gameStats.current;
+            const tiles: [string, string | number, string][] = [
+              ['♥', Math.max(0, me.life), 'life left'],
+              ['⚔', g.damageDealt, 'damage dealt'],
+              ['🔥', g.maxTurnDamage, 'best turn'],
+              ['🃏', g.cardsPlayed, 'cards played'],
+              ['🛡', g.blocks, 'blocks'],
+            ];
+            return (
+              <div className="go-card">
+                <div className="go-left">
+                <div className="go-heroes">
+                  <div className={`go-hero ${won ? 'win' : 'lost'}`}><CardView card={cardOf(me.hero)} width="var(--goh)" tilt={false} noPopout /><span>You</span></div>
+                  <span className="go-vs">VS</span>
+                  <div className={`go-hero ${won ? 'lost' : 'win'}`}><CardView card={cardOf(opp.hero)} width="var(--goh)" tilt={false} noPopout /><span>{oppName}</span></div>
+                </div>
+                <h1>{won ? 'Victory' : 'Defeat'}</h1>
+                <p className="go-sub">{won ? `You defeated ${oppName}` : `${oppName} wins`} on turn {state.turn}</p>
+                </div>
+                <div className="go-right">
+                <div className="go-stats">
+                  {tiles.map(([icon, v, label], i) => (
+                    <div key={label} className="go-stat" style={{ animationDelay: `${0.35 + i * 0.08}s` }}><b>{icon} {v}</b><span>{label}</span></div>
+                  ))}
+                </div>
+                <div className="go-actions">
+                  {onRematch && <button className="primary go-main" onClick={onRematch}>{rematchLabel ?? 'Rematch'}</button>}
+                  <button className={onRematch ? 'gold' : 'primary go-main'} onClick={onExit}>New game</button>
+                  <div className="go-secondary">
+                    <button onClick={() => setOverlay(false)}>View board</button>
+                    {decisions.current.length > 0 && <button onClick={() => setReviewing(true)}>🔍 Review game</button>}
+                  </div>
+                </div>
+                {extraResult}
+                {onGameOver && <ProgressGains before={progressBefore} />}
+                </div>
+              </div>
+            );
+          })()}
         </GameOverOverlay>
       )}
       {manual && <div className="manual-banner">✋ Manual moves on: tap a card to move it · <button className="small" onClick={() => setManual(false)}>Done</button></div>}
+      {actMenu && (
+        <div className="modal-bg" onClick={() => setActMenu(null)}>
+          <div className="modal move-menu" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: 0 }}>{cardOf(actMenu.inst).name}</h3>
+            {actMenu.opts.map((o) => (
+              <button key={o.index} className="primary" onClick={() => { setActMenu(null); startPlay(o); }}>
+                {o.label.split(': ').slice(1).join(': ') || o.label}{o.cost ? ` (${o.cost})` : ''}
+              </button>
+            ))}
+            <button onClick={() => { setActMenu(null); setDetail(cardOf(actMenu.inst)); }}>Card details</button>
+          </div>
+        </div>
+      )}
       {moveMenu && (() => {
         const pl = state.players[moveMenu.player];
         const isHero = moveMenu.inst.uid === pl.hero.uid;
@@ -1080,7 +1162,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         const oc = inst && getScript(cardOf(inst)).optional;
         if (!inst || !oc) return null;
         const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop', 'reveal', 'charge'].includes(oc.cost.kind);
-        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || ((!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (oc.cost.kind !== 'discard' || typeMatches(cardOf(h), oc.cost.type)))));
         const advice = decideOptional(state, me, inst.uid, []);
         const yes = (choice: OptionalChoice) => startPlay(optPick.opt, optPick.mode, choice);
         return (
@@ -1235,7 +1317,8 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {weaponSlot('weapR', w2, w1 ? offHand : undefined)}
       <Slot area="hero" label="Hero" filled className={`hero-box hero-aura aura-${themeOf(cardOf(p.hero))}`}>
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
-          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
+          className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${p.heroTapped ? 'is-tapped' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
+        {p.heroTapped && <span className="tapped-badge" title="Tapped: untaps at the start of their turn">⟲</span>}
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} theme={fx.theme[p.id]} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -1268,10 +1351,11 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
       </div>
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
-        {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false }))].map(({ inst, destroyed }) => (
+        {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed, tapped: false })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false, tapped: !!pm.tapped }))].map(({ inst, destroyed, tapped }) => (
           <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop perm-card">
             <span className="materialize" aria-hidden />
-            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
+            <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${tapped ? 'is-tapped' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
+            {tapped && <span className="tapped-badge" title="Tapped: untaps at the start of its controller's turn">⟲</span>}
           </div>
         ))}
       </div>
