@@ -13,6 +13,7 @@ import { getScript } from '../../engine/cardScript';
 import { formatName } from '../../deck/deck';
 import { getDb } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
+import { readable, SymText } from '../symbols';
 import AudioSettings from './AudioSettings';
 import CardDetail from './CardDetail';
 import { GameOverOverlay, TurnBanner, animationsEnabled } from './Fx';
@@ -38,8 +39,6 @@ interface Pending { opt: PlayOption; pitch: number[]; mode?: number; optional?: 
 interface Floater { id: number; player: PlayerId; amount: number }
 interface Fx { floaters: Floater[]; lifeAnim: string[]; lifeKey: number[]; theme: Theme[]; shakeKey: number; banner: { id: number; text: string; mine: boolean } | null }
 
-/** Card-text symbols in plain words for buttons: "Gain 1{h}" -> "Gain 1 ♥" */
-const readable = (t: string) => t.replace(/\{r\}/g, '⛀').replace(/\{h\}/g, ' ♥').replace(/\{p\}/g, ' power').replace(/\{d\}/g, ' defense').replace(/\{i\}/g, ' intellect').replace(/\{t\}/g, 'tap').replace(/\{u\}/g, 'untap').replace(/ {2,}/g, ' ');
 const readSetting = (k: string, def: boolean) => { try { const v = localStorage.getItem(`fab-trainer.${k}`); return v === null ? def : v === '1'; } catch { return def; } };
 const writeSetting = (k: string, v: boolean) => { try { localStorage.setItem(`fab-trainer.${k}`, v ? '1' : '0'); } catch { /* ignore */ } };
 
@@ -724,7 +723,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (pending) {
     prompt = (
       <>
-        <span className="msg">Pitch cards to pay for <b>{pending.opt.label}</b> <span className="pay-meter">{pitchTotal} / {pendingCost}</span></span>
+        <span className="msg">Pitch cards to pay for <b><SymText text={pending.opt.label} /></b> <span className="pay-meter">{pitchTotal} / {pendingCost}</span></span>
         <button className="gold" onClick={() => { const p = autoPitch(me, pendingCost, [...(pending.opt.kind === 'card' ? [pending.opt.uid] : []), ...(pending.optional?.uid !== undefined ? [pending.optional.uid] : [])]); if (p) finishPay(p); }}>Auto-pay</button>
         <button onClick={() => setPending(null)}>Cancel</button>
       </>
@@ -762,7 +761,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   } else if (state.phase === 'action' && top) {
     prompt = (
       <>
-        <span className="msg"><b>{top.label}</b> is on the stack{top.controller === HUMAN ? '' : ` (${state.players[top.controller].name})`}. Respond with an instant, or let it resolve.</span>
+        <span className="msg"><b><SymText text={top.label} /></b> is on the stack{top.controller === HUMAN ? '' : ` (${state.players[top.controller].name})`}. Respond with an instant, or let it resolve.</span>
         <button className="primary" onClick={() => act({ type: 'pass' })}>Let it resolve</button>
       </>
     );
@@ -803,7 +802,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     <div className={`arena ${dangerClass} ${lethalFx ? 'lethal' : ''} mat-${cosmetics?.mat ?? 'tavern'} sleeve-${cosmetics?.sleeve ?? 'classic'}`}>
       <div className="mat-ambient" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</div>
       {/* screen readers hear each new line of the game log */}
-      <div className="sr-only" aria-live="polite" aria-atomic="true">{state.log[state.log.length - 1]?.text}</div>
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{readable(state.log[state.log.length - 1]?.text ?? '')}</div>
       <div className="arena-bar">
         <span className="arena-title">{formatName(state.format)} · Turn {state.turn}</span>
         <div className="grow" />
@@ -853,8 +852,11 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         })}
       </div>
 
+      {state.macro === 'Treasure Island' && (
+        <div className="event-chip macro-chip" title="Treasure Island: the first time a hero is attacked each turn, it gets a gold counter. Dealing damage to an opposing hero loots that many counters as Gold tokens.">🏝 Treasure Island: <b>{state.treasureGold ?? 0}</b> gold</div>
+      )}
       {state.lastEvent && (
-        <div className="event-chip" title={getDb().byId.get(state.lastEvent)?.text}>🎪 Event: <b>{getDb().byId.get(state.lastEvent)?.name}</b>{state.eventDeck ? <span className="muted"> · {state.eventDeck.length} left</span> : null}</div>
+        <div className="event-chip" title={readable(getDb().byId.get(state.lastEvent)?.text ?? '')}>🎪 Event: <b>{getDb().byId.get(state.lastEvent)?.name}</b>{state.eventDeck ? <span className="muted"> · {state.eventDeck.length} left</span> : null}</div>
       )}
       {state.players.length > 2 && (
         <div className="pit-strip" role="list" aria-label="Opponents">
@@ -991,8 +993,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
 
       {hint && showHint && state.phase !== 'gameOver' && (
         <div className="hint arena-hint">
-          <b>💡 {describeAction(state, hint.action)}</b>
-          <div className="muted small">{hint.reason}</div>
+          <b>💡 <SymText text={describeAction(state, hint.action)} /></b>
+          <div className="muted small"><SymText text={hint.reason} /></div>
         </div>
       )}
 
@@ -1008,7 +1010,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <div className="log" ref={logRef}>
               {state.log.slice(-250).map((l, i) => (
                 <div key={i} className={l.player === HUMAN ? 'me' : l.player === 1 ? 'them' : 'muted'}>
-                  {l.text}
+                  <SymText text={l.text} />
                   {l.rule && <details className="rule-tip"><summary>ℹ why?</summary>{l.rule}</details>}
                 </div>
               ))}
@@ -1083,7 +1085,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <h3 style={{ margin: 0 }}>{cardOf(actMenu.inst).name}</h3>
             {actMenu.opts.map((o) => (
               <button key={o.index} className="primary" onClick={() => { setActMenu(null); startPlay(o); }}>
-                {readable(o.label.split(': ').slice(1).join(': ') || o.label)}{o.cost ? ` (${o.cost} ⛀)` : ''}
+                <SymText text={o.label.split(': ').slice(1).join(': ') || o.label} />{o.cost ? ` (${o.cost} ⛀)` : ''}
               </button>
             ))}
             <button onClick={() => { setActMenu(null); setDetail(cardOf(actMenu.inst)); }}>Card details</button>
@@ -1210,7 +1212,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <div className="col">
               {choosePlay.map((o) => (
                 <button key={o.index} style={{ textAlign: 'left' }} onClick={() => { setChoosePlay(null); startPlay(o); }}>
-                  {o.index === HAND_INDEX ? o.label : `Play ${o.label}`}{o.cost ? ` (cost ${o.cost})` : ''}
+                  <SymText text={o.index === HAND_INDEX ? o.label : `Play ${o.label}`} />{o.cost ? ` (cost ${o.cost})` : ''}
                 </button>
               ))}
               <button className="small" onClick={() => setChoosePlay(null)}>Cancel</button>
@@ -1225,7 +1227,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
             <div className="col">
               {modesOf(modePick).map((m, i) => (
                 <button key={i} onClick={() => startPlay(modePick, i)} style={{ textAlign: 'left' }}>
-                  {m.label}{!m.parsed && <span className="muted small"> (not automated, apply manually)</span>}
+                  <SymText text={m.label} />{!m.parsed && <span className="muted small"> (not automated, apply manually)</span>}
                 </button>
               ))}
               <button className="small" onClick={() => setModePick(null)}>Cancel</button>
@@ -1290,10 +1292,11 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
 
   const equipSlot = (area: string, label: string, e?: EquipState) => (
     <Slot area={area} label={label} filled={!!e} uid={e?.inst.uid}>
-      {e && (
-        <CardView key={`${e.inst.uid}-${e.destroyed}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
-          className={`${e.destroyed ? 'destroyed' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
-          badge={e.destroyed ? 'destroyed' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
+      {e && e.faceDown && isOpp && <CardBack width={SLOT} label="?" />}
+      {e && !(e.faceDown && isOpp) && (
+        <CardView key={`${e.inst.uid}-${e.destroyed}-${!!e.faceDown}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
+          className={`${e.destroyed ? 'destroyed' : ''} ${e.faceDown ? 'face-down' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
+          badge={e.destroyed ? 'destroyed' : e.faceDown ? '🔒' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
       {e && !e.destroyed && e.defenseMod < 0 && <span className={`cracks c${Math.min(3, -e.defenseMod)}`} aria-hidden />}
     </Slot>
@@ -1358,7 +1361,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
         </div>
       </div>
       <div className="mat-effects" style={{ gridArea: 'fx' }}>
-        {effects.map((e) => <span key={e} className="tag anim-pop">{e}</span>)}
+        {effects.map((e) => <span key={e} className="tag anim-pop"><SymText text={e} /></span>)}
       </div>
       <div className="mat-perms" style={{ gridArea: 'perm' }}>
         {[...extraEquip.map((e) => ({ inst: e.inst, destroyed: e.destroyed, tapped: false })), ...p.permanents.map((pm) => ({ inst: pm.inst, destroyed: false, tapped: !!pm.tapped }))].map(({ inst, destroyed, tapped }) => (
@@ -1744,7 +1747,7 @@ function ChoicePrompt({ choice, onDone }: { choice: NonNullable<GameState['pendi
     <div className="modal-bg">
       <div className="modal choice-modal" style={{ maxWidth: 620 }}>
         <h2 style={{ marginBottom: '.3rem' }}>{choice.kind === 'opt' ? 'Opt' : choice.kind === 'reload' ? 'Reload' : choice.kind === 'target' ? 'Choose a target' : choice.kind === 'pick' ? 'Choose a card' : 'Your call'}</h2>
-        <p className="small" style={{ marginTop: 0 }}>{choice.prompt}</p>
+        <p className="small" style={{ marginTop: 0 }}><SymText text={choice.prompt} /></p>
         {choice.options.length > 0 && (
           <div className="choice-cards">
             {choice.options.map((o) => {

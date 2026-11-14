@@ -1766,3 +1766,19 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 
 /* a tapped hero tilts less, so it stays inside its slot */
 .hero-box .is-tapped { transform: rotate(8deg); }
+
+/* card-text symbols ({r}, {p}, {d}, {h} ...) drawn inline */
+.glyph { display: inline-block; margin: 0 .08em; font-style: normal; line-height: 1; }
+.glyph-res { color: #e9c46a; }
+.glyph-pow { color: #e76f51; }
+.glyph-def { filter: saturate(.7); }
+.glyph-life { color: #e5484d; }
+.glyph-int { filter: saturate(.7); }
+.glyph-tap, .glyph-chi, .glyph-x { color: var(--accent, #e9c46a); font-weight: 700; }
+
+/* Cloaked equipment while face-down: only you can see it */
+.face-down { filter: grayscale(.85) brightness(.55); }
+
+/* the macro chip sits under the event chip when both are shown */
+.macro-chip { top: calc(124px + var(--sa-t)); }
+@media (max-width: 640px) and (orientation: portrait) { .macro-chip { top: calc(14px + var(--sa-t)); } }

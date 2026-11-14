@@ -24,6 +24,8 @@ export interface EquipState {
   usedThisTurn: boolean;
   /** quell was used: destroyed at the beginning of the end phase */
   quelled?: boolean;
+  /** Cloaked: equipped face-down (can't defend, abilities off, opponents can't see it) */
+  faceDown?: boolean;
 }
 
 export interface WeaponState {
@@ -53,6 +55,7 @@ export type TurnEffect =
   | { kind: 'nextAttackGoAgain'; filter: AttackFilter; source: string }
   | { kind: 'nextAttackOnHit'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'preventNext'; amount: number; source: string; thenToken?: string }
+  | { kind: 'preventArcane'; amount: number; source: string }
   | { kind: 'ampArcane'; amount: number; source: string }
   | { kind: 'nextAttackOnAttack'; filter: AttackFilter; effects: import('../engine/cardScript').Effect[]; source: string }
   | { kind: 'nextWagerPower'; amount: number; overpower?: boolean; source: string }
@@ -91,6 +94,8 @@ export interface PlayerState {
   focus?: PlayerId;
   /** Shiyana: the hero she is copying until the start of her next turn */
   copyOf?: string;
+  /** Arakni, Marionette became an Agent of Chaos: the hero card it returns to ("return to the brood") */
+  broodOf?: string;
   /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */
   inventory?: string[];
   /** Yoji: the next damage to this hero this turn is dealt to that player instead (1 of it prevented) */
@@ -247,7 +252,13 @@ export interface PendingChoice {
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
 
+export type Macro = 'Treasure Island' | 'Omens of Arcana';
+
 export interface GameState {
+  /** an optional table-wide macro card (Treasure Island, Omens of Arcana) */
+  macro?: Macro;
+  /** Treasure Island's gold counters */
+  treasureGold?: number;
   /** Yorick: every hero shares one deck and one graveyard (the players' arrays are the same objects) */
   sharedZones?: boolean;
   /** Pit Fight: the order heroes were knocked out (first out first) */

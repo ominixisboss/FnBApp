@@ -7,7 +7,7 @@ import type { Effect, OptionalCostKind } from '../engine/cardScript';
 import {
   availableResources, cardOf, cardPlayValue, checkDefense, costOf, currentLink, defendOptions,
   defenseOf, effectiveCost, evalCondition, HAND_INDEX, heroCtx, HERO_INDEX, linkDefense, linkPower, optionalPayable, pitchOf,
-  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf, typeMatches, setBotMayJudge,
+  heaveOptions, heroAbilityOf, oppOf, playOptions, powerOf, typeMatches, setBotMayJudge, activationsOf,
 } from '../engine/game';
 import type { PlayOption } from '../engine/game';
 import type { Action, CardInst, Difficulty, GameState, OptionalChoice, PlayerId, PlayerState } from '../engine/types';
@@ -151,8 +151,9 @@ function itemsFor(s: GameState, p: PlayerState): Item[] {
       const value = a.botValue?.(heroCtx(s, p)) ?? 0.5;
       return { opt, value, goAgain: !!a.goAgain, usesAP: !a.instant, isAttack: false, cost: opt.cost, uidInHand: null };
     }
-    const src = cardOf(findSourceInst(p, opt.uid)!);
-    const a = getScript(src).activations[opt.index];
+    const srcInst = findSourceInst(p, opt.uid)!;
+    const src = cardOf(srcInst);
+    const a = activationsOf(p, srcInst)[opt.index];
     const value = a.attack ? powerOf(src) : effectValue(a.effects) - (a.destroySelf ? 1 : 0);
     return { opt, value, goAgain: a.goAgain, usesAP: !a.instant, isAttack: a.attack, cost: opt.cost, uidInHand: null };
   });

@@ -23,6 +23,8 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
     p.arsenal = p.arsenal.map((c) => (c.faceUp ? c : { ...c, cardId: HIDDEN_ID }));
     p.intimidated = hide(p.intimidated);
     p.inventory = p.inventory?.map(() => HIDDEN_ID);
+    // Cloaked equipment equipped face-down: only its owner sees what it is
+    p.equipment = p.equipment.map((e) => (e.faceDown ? { ...e, inst: { ...e.inst, cardId: HIDDEN_ID } } : e));
   }
   s.seed = 0; // don't leak the RNG
   if (s.eventDeck) s.eventDeck = s.eventDeck.map(() => HIDDEN_ID); // only how many are left

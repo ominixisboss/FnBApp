@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hideHover, isPinnedFor, newHoverOwner, showHover } from './HoverCard';
 import type { CSSProperties, ReactNode } from 'react';
 import type { Card } from '../../data/types';
+import { SymText } from '../symbols';
 
 interface Props {
   card: Card;
@@ -111,7 +112,7 @@ export function TextCard({ card }: { card: Card }) {
       </div>
       <div className="nm">{card.name}</div>
       <div className="small">{card.typeText}</div>
-      <div className="tx">{card.text}</div>
+      <div className="tx"><SymText text={card.text} /></div>
       <div className="st">
         <span>{card.power !== null ? `⚔${card.power}` : ''}</span>
         <span>{card.health !== null ? `♥${card.health}` : ''}</span>

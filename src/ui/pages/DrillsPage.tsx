@@ -20,7 +20,7 @@ function optionsFor(d: Drill): Action[] {
   } else {
     others.push({ type: 'pass' });
     for (const o of playOptions(s, 0)) {
-      const pitch = autoPitch(p, Math.max(0, o.cost - p.resources), [o.uid]);
+      const pitch = autoPitch(p, o.cost, [o.uid]);
       if (pitch) others.push(o.kind === 'card' ? { type: 'play', uid: o.uid, pitch } : { type: 'activate', uid: o.uid, index: o.index, pitch });
     }
   }

@@ -16,7 +16,10 @@ export type AttackFilter =
   | { kind: 'boosted' } // "the next attack you boost"
   | { kind: 'runeGated' } // "the next attack action card you rune gate"
   | { kind: 'classAttackAction'; value: string } // "your next Guardian attack action card"
-  | { kind: 'keyword'; value: string }; // "the next attack with stealth"
+  | { kind: 'keyword'; value: string } // "the next attack with stealth"
+  | { kind: 'color'; pitch: number } // "your next blue attack"
+  /** any other word: a card type ("angel") or part of the name ("Dawnblade"); ally: only an ally's attack ("Pirate ally attack") */
+  | { kind: 'word'; value: string; ally?: boolean };
 
 export type Effect =
   /** any: "to any target" (allies too), otherwise a hero */
@@ -76,6 +79,17 @@ export type Effect =
   | { kind: 'transcend' }
   /** "Roll a 6 sided die." and what the roll does ("Gain {r} equal to half the number rolled") */
   | { kind: 'rollDie'; then: RollEffect[] }
+  /** prevent the next N arcane damage that would be dealt to you this turn */
+  | { kind: 'preventArcane'; amount: number }
+  /** "Look at the top N cards of your (their) deck": shown to you, nothing moves */
+  | { kind: 'lookTop'; n: number; theirs?: boolean }
+  /** the defending hero banishes a card from their hand / a card in their arsenal (Agents of Chaos) */
+  | { kind: 'oppBanishHand' }
+  | { kind: 'oppBanishArsenal' }
+  /** Treasure Island: put a gold counter on it / remove one (a Thief makes a Gold) / Divvy Up */
+  | { kind: 'treasurePut' }
+  | { kind: 'treasureTake'; thiefGold: boolean }
+  | { kind: 'treasureDivvy' }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -182,6 +196,10 @@ export type Condition =
   | { kind: 'aurasAtLeast'; n: number }
   | { kind: 'anotherBlue' }
   | { kind: 'rolledSix' }
+  /** the current attack has go again */
+  | { kind: 'linkGoAgain' }
+  /** the current attack is a <Class> attack ("defends a Guardian attack") */
+  | { kind: 'linkClass'; cls: string }
   | { kind: 'attackingMarked' }
   | { kind: 'weaponAttacked' }
   | { kind: 'intimidated' }
@@ -280,6 +298,10 @@ export interface Activation {
   /** "Twice / Thrice per Turn" (with oncePerTurn) */
   perTurn?: number;
   destroySelf: boolean;
+  /** "turn this face-up" is part of the cost (a Cloaked equipment) */
+  faceUpCost?: boolean;
+  /** "Activate this only while this is face-down" */
+  onlyFaceDown?: boolean;
   /** {t} costs: this card, your hero, a cog you control */
   tapSelf?: boolean;
   tapHero?: boolean;
@@ -347,6 +369,22 @@ export interface CardScript {
   countsAs?: string;
   /** "When an attack usurps this, <effects>" (a card that counts as a Runechant) */
   onUsurp?: Effect[];
+  /** "Solflare - When this is charged to your soul, ..." */
+  onCharge?: Effect[];
+  /** "When you win a clash revealing this, ..." */
+  onClashWin?: Effect[];
+  /** "If this would be put into your graveyard from anywhere, instead banish it" */
+  banishInsteadOfGrave?: boolean;
+  /** Cloaked: equipped face-down */
+  cloaked?: boolean;
+  /** "While this is equipped face-down, at the start of your turn, if you have exactly 1{h}, you may turn this face-up" */
+  heirloom?: boolean;
+  /** "While this is equipped face-down, when an attack <cond> hits you, destroy this and create a <X> token under each opponent's control" */
+  concealed?: { when: 'goAgain' | 'aboveBase' | 'reaction'; token: string };
+  /** "Dragon allies you control get 'Once per Turn Action - 0: Attack'" (Storm of Sandikai) */
+  grantsDragonAttack?: boolean;
+  /** "If you've played a red card this turn, your dragon attacks get go again" (Dromai) */
+  dragonGoAgainIfRed?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -429,6 +467,11 @@ function parseFilter(words: string): AttackFilter | null {
   if (cls) return { kind: 'class', value: cls };
   const either = w.split(/\s+or\s+/);
   if (either.length > 1 && either.every((x) => CLASS_WORDS.includes(x))) return { kind: 'anyClass', values: either };
+  const color = ({ red: 1, yellow: 2, blue: 3 } as Record<string, number>)[w.toLowerCase()];
+  if (color) return { kind: 'color', pitch: color };
+  // "Pirate ally", "angel", "Dawnblade", "Herald": one word (plus "ally"), matched against card types and names
+  const am = w.match(/^([A-Za-z]+)( ally)?$/);
+  if (am && !/^(attack|action|card|cards|non|next|first|this|that|opposing|defending|attacking|other|another|chosen|named|each|stealth|combo)$/i.test(am[1])) return { kind: 'word', value: am[1][0].toUpperCase() + am[1].slice(1).toLowerCase(), ally: !!am[2] || undefined };
   return null;
 }
 
@@ -442,10 +485,16 @@ export function parseEffect(raw: string): Effect[] | null {
   // "wager with the defending hero. The winner draws a card" is one effect, not two
   const wm = s.match(/^(you may )?wager with (?:them|the defending hero)\. the winner (draws (a|two|\d+) cards?|creates (?:a|an) ([A-Z][\w ]*?) token)$/i);
   if (wm) return [{ kind: 'wager', tokens: wm[4] ? [wm[4]] : [], winnerDraw: wm[3] ? toNum(wm[3].toLowerCase()) : undefined, optional: !!wm[1] }];
+  if ((m = s.match(/^search your deck for (?:a|an) ([A-Z][\w' ,:-]+?), reveal it, put it into your hand,? (?:and|then) shuffle$/i)))
+    return [{ kind: 'tutor', name: m[1].trim() }];
   const parts = /"/.test(s) ? [s] : s.split(/,? then |\. Then |\.\s+(?=[A-Z])/i); // never split inside a quoted grant
   if (parts.length > 1) {
     const out: Effect[] = [];
     for (const p of parts) {
+      if (/^if you do and you are a thief, create a gold token\.?$/i.test(p) && out[out.length - 1]?.kind === 'treasureTake') continue;
+      if (/^(?:you may )?remove a gold counter from treasure island\.?$/i.test(p)) { out.push({ kind: 'treasureTake', thiefGold: true }); continue; }
+      if (/^remove half the gold counters from treasure island, rounded up\.?$/i.test(p)) { out.push({ kind: 'treasureDivvy' }); continue; }
+      if (/^if you are a thief, instead remove all of them\.?$/i.test(p) || /^create gold tokens equal to the number of gold counters removed this way\.?$/i.test(p)) { if (out[out.length - 1]?.kind === 'treasureDivvy') continue; }
       const rollPrev = out[out.length - 1];
       const rf = rollPrev?.kind === 'rollDie' ? parseRollFollowUp(p) : null;
       if (rf && rollPrev?.kind === 'rollDie') { rollPrev.then.push(rf); continue; }
@@ -507,6 +556,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^amp (\d+)$/i))) return [{ kind: 'ampArcane', amount: +m[1] }];
   if (/^mark target opposing hero$/i.test(s)) return [{ kind: 'mark' }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\}(?: until end of turn)?$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
+  if ((m = s.match(/^prevent the next (\d+) arcane damage that would be dealt to you this turn$/i))) return [{ kind: 'preventArcane', amount: +m[1] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage\. if you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token$/i)))
     return [{ kind: 'preventNext', amount: +m[1], thenToken: m[2] }];
   if ((m = s.match(/^the next time you would be dealt damage this turn, prevent (\d+) of that damage$/i)))
@@ -664,6 +714,14 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^(?:you may )?put a gold counter on treasure island$/i.test(s)) return [{ kind: 'treasurePut' }];
+  if (/^remove half the gold counters from treasure island, rounded up$/i.test(s)) return [{ kind: 'treasureDivvy' }];
+  if (/^(?:you may )?remove a gold counter from treasure island$/i.test(s)) return [{ kind: 'treasureTake', thiefGold: true }];
+  if (/^(?:you may )?remove a gold counter from treasure island\. if you do and you are a thief, create a gold token$/i.test(s)) return [{ kind: 'treasureTake', thiefGold: true }];
+  if (/^remove half the gold counters from treasure island, rounded up\. if you are a thief, instead remove all of them\. create gold tokens equal to the number of gold counters removed this way$/i.test(s)) return [{ kind: 'treasureDivvy' }];
+  if (/^they banish a card from their hand$/i.test(s)) return [{ kind: 'oppBanishHand' }];
+  if (/^banish a card in their arsenal$/i.test(s)) return [{ kind: 'oppBanishArsenal' }];
+  if ((m = s.match(/^(?:you may )?look at the top (card|\d+ cards) of (your|their|target hero's) deck$/i))) return [{ kind: 'lookTop', n: /^\d/.test(m[1]) ? parseInt(m[1], 10) : 1, theirs: m[2].toLowerCase() !== 'your' || undefined }];
   if (/^roll a 6 sided die$/i.test(s)) return [{ kind: 'rollDie', then: [] }];
   if (/^transcend$/i.test(s)) return [{ kind: 'transcend' }];
   if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];
@@ -871,7 +929,6 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^mirage$/i.test(s)) return (sc.mirage = true);
   if (/^guardwell$/i.test(s)) return (sc.guardwell = true);
   if (/^spectra$/i.test(s)) return (sc.spectra = true);
-  if (/^cloaked$/i.test(s)) return true; // equipped face-down: no effect on play here
   if ((m = s.match(/^heave (\d+)$/i))) return !!(sc.heave = +m[1]);
   if ((m = s.match(/^quell (\d+)$/i))) return !!(sc.quell = +m[1]);
   if (/^ephemeral$/i.test(s)) return (sc.ephemeral = true);
@@ -880,6 +937,9 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
   if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
+  if (/^cloaked$/i.test(s)) return (sc.cloaked = true);
+  if (/^dragon allies you control get "once per turn action - 0: attack"$/i.test(s)) return (sc.grantsDragonAttack = true);
+  if (/^while this is equipped face-down, at the start of your turn, if you have exactly 1\{h\}, you may turn this face-up$/i.test(s)) return (sc.heirloom = true);
   if ((m = s.match(/^this counts as an? (Gold|Runechant|Silver|Copper)$/i))) { sc.countsAs = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase(); return true; }
   if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
@@ -903,7 +963,7 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
 function compile(c: Card): CardScript {
   const sc = emptyScript();
   const isAttack = c.types.includes('Attack') && c.types.includes('Action');
-  const isPermanentLike = ['Equipment', 'Weapon', 'Hero', 'Token', 'Aura', 'Item', 'Ally'].some((t) =>
+  const isPermanentLike = ['Equipment', 'Weapon', 'Hero', 'Token', 'Aura', 'Item', 'Ally', 'Figment', 'Landmark', 'Construct'].some((t) =>
     c.types.includes(t),
   );
   // the keyword list repeats effect keywords that are also in the text (intimidate, opt, amp, reload): only take static ones from it
@@ -977,7 +1037,9 @@ function compile(c: Card): CardScript {
       const tapHero = /\{t\}(?: this and)? your hero/.test(extra);
       const tapCog = /\{t\} a cog you control/.test(extra);
       const tapSelf = /\{t\}(?! your hero| a cog)/.test(extra.replace(/\{t\} this and your hero/, '{t} this'));
-      const extraOk = extra.replace(/\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
+      const faceUpCost = /turn this face-up/.test(extra);
+      const onlyFaceDown = /activate this only while this is face-down/i.test(act[4]);
+      const extraOk = extra.replace(/turn this face-up|\{t\} this and your hero|\{t\} your hero|\{t\} a cog you control|\{t\} this|\{t\}|destroy this|\band\b|^0$/g, '').trim() === '';
       // "Activate this only while ..." timing limits are simplified away (the ability can be used at any instant speed)
       let body = act[4].trim().replace(/\s*Activate this only (?:while|if|during) [^.]*\.?$/i, '');
       let goAgain = false;
@@ -996,6 +1058,8 @@ function compile(c: Card): CardScript {
           oncePerTurn: !!act[1] || attack,
           perTurn: /^twice/i.test(act[1] ?? '') ? 2 : /^thrice/i.test(act[1] ?? '') ? 3 : undefined,
           destroySelf,
+          faceUpCost: faceUpCost || undefined,
+          onlyFaceDown: onlyFaceDown || undefined,
           tapSelf: tapSelf || undefined,
           tapHero: tapHero || undefined,
           tapCog: tapCog || undefined,
@@ -1324,6 +1388,35 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const host = rf && [...sc.onAttack, ...sc.onPlay, ...sc.activations.flatMap((a) => a.effects)].reverse().find((e) => e.kind === 'rollDie');
     if (rf && host && host.kind === 'rollDie') { host.then.push(rf); return; }
   }
+  // "When this defends an attack with go again / with {p} greater than its base / a Guardian attack, ..."
+  if ((m = sent.match(/^when this defends (an attack with go again|an attack with \{p\} greater than its base|an? ([A-Z][a-z]+) attack), (.+?)\.?$/))) {
+    const cond: Condition = /go again/.test(m[1]) ? { kind: 'linkGoAgain' } : /greater than its base/.test(m[1]) ? { kind: 'powerAboveBase' } : { kind: 'linkClass', cls: m[2] };
+    const e = parseEffect(m[3]);
+    if (e) return void sc.onDefend.push({ kind: 'ifCond', cond, effects: e });
+  }
+  if ((m = sent.match(/^crush - when this deals (\d+) or more damage to an? ([A-Z][a-z]+) hero, (.+?)\.?$/)) && isAttack) {
+    const e = parseEffect(m[3]);
+    if (e && +m[1] === 4) return void sc.conditional.push({ when: 'crush', effects: [{ kind: 'ifOppClass', cls: m[2], then: e }] });
+  }
+  if ((m = sent.match(/^[Tt]ower - if this has (\d+) or more \{p\}, it gets "when this hits(?: a hero)?, (.+?)\.?"\.?$/)) && isAttack) {
+    const e = parseEffect(m[2]);
+    if (e) return void sc.conditional.push({ when: 'ifLink', cond: { kind: 'powerAtLeast', n: +m[1] }, effects: [{ kind: 'thisGrantOnHit', effects: e }] });
+  }
+  if ((m = sent.match(/^solflare - when this is charged to your soul, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void (sc.onCharge ??= []).push(...e);
+  }
+  if ((m = sent.match(/^when you win a clash revealing this, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) return void (sc.onClashWin ??= []).push(...e);
+  }
+  if (/^if this would be put into your graveyard from anywhere, instead banish it\.?$/i.test(sent)) { sc.banishInsteadOfGrave = true; return; }
+  if (/^(if you are a thief, instead remove all of them|create gold tokens equal to the number of gold counters removed this way)\.?$/i.test(sent) && sc.onPlay.some((e) => e.kind === 'treasureDivvy')) return;
+  if (/^if you do and you are a thief, create a gold token\.?$/i.test(sent) && [...sc.onAttack, ...sc.onDefend, ...sc.onPlay].some((e) => e.kind === 'treasureTake')) return;
+  if ((m = sent.match(/^while this is equipped face-down, when an attack (with go again|with \{p\} greater than its base|hits you and its controller has played or activated an attack reaction this chain link)(?: hits you)?, destroy this and create (?:a|an) ([A-Z][\w' ]*?) token under each opponent's control\.?$/i))) {
+    sc.concealed = { when: /go again/.test(m[1]) ? 'goAgain' : /greater/.test(m[1]) ? 'aboveBase' : 'reaction', token: m[2] };
+    return;
+  }
   if ((m = sent.match(/^when an attack usurps this, (.+?)\.?$/i))) {
     const e = parseEffect(m[1].replace(/^it gets/i, 'the attack gets'));
     if (e) return void (sc.onUsurp ??= []).push(...e);
@@ -1553,5 +1646,7 @@ export function describeFilter(f: AttackFilter): string {
     case 'boosted': return 'attack you boost';
     case 'runeGated': return 'attack action card you rune gate';
     case 'classAttackAction': return `${f.value} attack action card`;
+    case 'color': return `${['', 'red', 'yellow', 'blue'][f.pitch]} attack`;
+    case 'word': return `${f.value}${f.ally ? ' ally' : ''} attack`;
   }
 }

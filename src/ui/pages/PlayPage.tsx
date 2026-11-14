@@ -4,7 +4,7 @@ import type { DeckFormat } from '../../deck/deck';
 import { botDeck } from '../../deck/botDecks';
 import { FORMATS, FORMAT_RULES, autoBuildDeck, formatName, heroesFor, loadDecks, toDeckList, validateDeck } from '../../deck/deck';
 import { createGame } from '../../engine/game';
-import type { Difficulty, GameState } from '../../engine/types';
+import type { Macro, Difficulty, GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import { loadMatches, recordMatch } from '../../stats/matches';
 import type { MatchStats } from '../../stats/progress';
@@ -42,6 +42,8 @@ interface Setup {
   pitBots?: 2 | 3;
   /** Smash Palace: reveal an event card at the start of every turn */
   events?: boolean;
+  /** an optional table-wide macro card */
+  macro?: Macro;
 }
 
 /** format names that fit a phone's format picker */
@@ -125,7 +127,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
       { name: 'You', isBot: false, deck: withInventory(ctx.pool, pre.chosen) },
       { name: ctx.opp.name, isBot: true, difficulty: setup.difficulty, deck: ctx.opp.deck },
       ...(ctx.more ?? []).map((o) => ({ name: o.name, isBot: true, difficulty: setup.difficulty, deck: o.deck })),
-    ], Date.now() & 0x7fffffff, setup.format, first, { events: setup.format === 'upf' && !!setup.events }));
+    ], Date.now() & 0x7fffffff, setup.format, first, { events: setup.format === 'upf' && !!setup.events, macro: setup.macro }));
     setPre(null);
   };
   const matchOver = match && (match.wins[0] >= 2 || match.wins[1] >= 2);
@@ -361,6 +363,17 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
             <label className="row small" title="Smash Palace: at the start of every turn, the turn player reveals the top card of a shared event deck and follows it. Games with Fightmaster Kox always use it."><input type="checkbox" checked={!!setup.events} onChange={(e) => setSetup({ ...setup, events: e.target.checked })} /> Event deck (Smash Palace)</label>
           </div>
         )}
+        <div className="row small">
+          <span className="lobby-label">Macro</span>
+          <div className="seg">
+            {([undefined, 'Treasure Island', 'Omens of Arcana'] as const).map((m) => (
+              <button key={m ?? 'none'} className={setup.macro === m ? 'on' : ''} onClick={() => setSetup({ ...setup, macro: m })}
+                title={m === 'Treasure Island' ? 'The first time a hero is attacked each turn, put a gold counter on it. Dealing damage to an opposing hero loots that many counters as Gold tokens.' : m === 'Omens of Arcana' ? 'Each hero starts with a Lightning Flow token; Lightning Flow tokens get spellvoid 1.' : 'No macro card'}>
+                {m ?? 'None'}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="row small">
           <span className="lobby-label">Match</span>
           <div className="seg">{([1, 3] as const).map((b) => <button key={b} className={(setup.bestOf ?? 1) === b ? 'on' : ''} onClick={() => setSetup({ ...setup, bestOf: b })}>{b === 1 ? 'Single game' : 'Best of 3'}</button>)}</div>

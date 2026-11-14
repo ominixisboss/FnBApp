@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { GLOSSARY, LESSONS } from '../../learn/lessons';
 import PlayPage from './PlayPage';
+import { SymText } from '../symbols';
 
 export default function LearnPage({ lesson }: { lesson?: string }) {
   const [practice, setPractice] = useState(false);
@@ -42,7 +43,7 @@ export default function LearnPage({ lesson }: { lesson?: string }) {
           <>
             <h1>Keyword glossary</h1>
             {GLOSSARY.map(([k, v]) => (
-              <p key={k}><b>{k}</b>: {v}</p>
+              <p key={k}><b><SymText text={k} /></b>: <SymText text={v} /></p>
             ))}
             <p className="muted small">Search the <a href="#cards">card database</a> for any keyword to see every card that uses it.</p>
           </>
