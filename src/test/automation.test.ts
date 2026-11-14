@@ -399,3 +399,23 @@ describe('meld and transcend', () => {
     expect(getScript(findCard('Moon Chakra')!).conditional.some((k) => k.when === 'instead' && k.cond?.kind === 'transcended')).toBe(true);
   });
 });
+
+describe('counts as', () => {
+  it('"This counts as a Runechant": an attack usurps it (its payoff) and it deals 1 arcane like a Runechant', () => {
+    const c = findCard('Runechant of Pride')!;
+    expect(getScript(c).countsAs).toBe('Runechant');
+    let s = game([filler()]);
+    s.players[0].permanents.push({ inst: { uid: 9992, cardId: c.id, owner: 0 }, ward: 0 });
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    expect(linkPower(l)).toBe(Number(findCard('Wounding Blow', 3)!.power) + 1);
+    expect(s.players[1].life).toBe(life - 1);
+    expect(s.players[0].permanents.some((p) => p.inst.uid === 9992)).toBe(false);
+    expect(s.players[0].permanents.some((p) => getDb().cards.find((x) => x.id === p.inst.cardId)?.name === 'Runechant')).toBe(true);
+  });
+  it('"This counts as a Gold" is parsed', () => {
+    expect(getDb().cards.some((x) => getScript(x).countsAs === 'Gold')).toBe(true);
+  });
+});

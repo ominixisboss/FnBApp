@@ -340,6 +340,10 @@ export interface CardScript {
   closeMissToken?: string;
   /** Meld whose left half is an Action: modes 0 (left) and 2 (both) use an action point; mode 1 is the Instant half */
   meldAction?: boolean;
+  /** "This counts as a Gold / Runechant" */
+  countsAs?: string;
+  /** "When an attack usurps this, <effects>" (a card that counts as a Runechant) */
+  onUsurp?: Effect[];
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -868,6 +872,7 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
   if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
+  if ((m = s.match(/^this counts as an? (Gold|Runechant|Silver|Copper)$/i))) { sc.countsAs = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase(); return true; }
   if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
   if (/^at the beginning of your action phase, destroy this$/i.test(s)) { sc.destroyAt = 'actionPhase'; return true; }
@@ -1276,6 +1281,10 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if ((m = sent.match(/^while this is in your graveyard, at the start of your turn, you may destroy (\d+) silver you control\.?$/i))) { sc.graveEquip = +m[1]; return; }
   if (/^if you do, equip this\.?$/i.test(sent) && sc.graveEquip) return;
   if (/^when this is equipped from anywhere other than your graveyard, put a -1\{d\} counter on it\.?$/i.test(sent)) { sc.equipCounter = true; return; }
+  if ((m = sent.match(/^when an attack usurps this, (.+?)\.?$/i))) {
+    const e = parseEffect(m[1].replace(/^it gets/i, 'the attack gets'));
+    if (e) return void (sc.onUsurp ??= []).push(...e);
+  }
   if ((m = sent.match(/^[Ii]f you prevent damage this way, create (?:a|an) ([A-Z][\w' ]*?) token\.?$/))) {
     const last = [...sc.onPlay, ...sc.activations.flatMap((a) => a.effects)].reverse().find((e) => e.kind === 'preventNext');
     if (last && last.kind === 'preventNext') { last.thenToken = m[1]; return; }
