@@ -38,6 +38,16 @@ export type Effect =
   | { kind: 'preventNext'; amount: number; thenToken?: string }
   | { kind: 'createToken'; name: string; amount: number }
   | { kind: 'banishTopOpp'; amount: number }
+  /** destroy the top card(s) of their deck */
+  | { kind: 'oppMill'; amount: number }
+  /** destroy an item / aura they control */
+  | { kind: 'oppDestroyPerm'; type: 'Item' | 'Aura' | 'Ally' | 'Token'; name?: string }
+  /** banish a card from their soul */
+  | { kind: 'banishOppSoul' }
+  /** "When this hits a Brute hero, ...": only against heroes of that class */
+  | { kind: 'ifOppClass'; cls: string; then: Effect[] }
+  /** banish a card from their graveyard */
+  | { kind: 'banishOppGrave' }
   | { kind: 'oppDiscardRandom'; amount: number }
   | { kind: 'intimidate' }
   | { kind: 'opt'; amount: number }
@@ -321,6 +331,8 @@ export interface CardScript {
   defendIf?: { token?: string; drew?: boolean };
   /** an ally that "can only attack if you've attacked with a weapon this turn" */
   attackIfWeapon?: boolean;
+  /** "When the combat chain closes, if this didn't hit, the defending hero creates a <X> token" */
+  closeMissToken?: string;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -388,6 +400,9 @@ const CLASS_WORDS = [
   'Warrior', 'Guardian', 'Ninja', 'Brute', 'Assassin', 'Ranger', 'Runeblade', 'Mechanologist',
   'Wizard', 'Illusionist', 'Pirate', 'Draconic', 'Light', 'Shadow', 'Earth', 'Ice', 'Lightning', 'Mystic', 'Royal',
 ];
+
+/** hero classes and talents a "When this hits a <X> hero" clause can name */
+const HERO_CLASSES = ['Brute', 'Guardian', 'Warrior', 'Ninja', 'Wizard', 'Pirate', 'Thief', 'Revered', 'Reviled', 'Bard', 'Necromancer', 'Merchant'];
 
 function parseFilter(words: string): AttackFilter | null {
   const w = words.trim();
@@ -632,6 +647,12 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];
+  if ((m = s.match(/^destroy (?:an|target) (item|aura|ally)( token)? (?:they|that hero) controls?$/i))) return [{ kind: 'oppDestroyPerm', type: m[2] ? 'Token' : ({ item: 'Item', aura: 'Aura', ally: 'Ally' } as const)[m[1].toLowerCase() as 'item'] }];
+  if ((m = s.match(/^destroy (?:a|an|target) ([A-Z][\w' ]*?) token (?:they|that hero) controls?$/))) return [{ kind: 'oppDestroyPerm', type: 'Token', name: m[1] }];
+  if (/^banish a card from their soul$/i.test(s)) return [{ kind: 'banishOppSoul' }];
+  if (/^mark (?:the attacking hero|them|that hero)$/i.test(s)) return [{ kind: 'mark' }];
+  if (/^banish a card from their graveyard$/i.test(s)) return [{ kind: 'banishOppGrave' }];
   if ((m = s.match(/^this gets \+(\d+)\{p\} or go again$/i))) return [{ kind: 'powerOrGoAgain', amount: +m[1] }];
   if (/^\{t\} (?:them|target hero|target opposing hero|target hero or ally|target [A-Z]\w+ hero(?: or ally)?|them or an ally they control|them or a weapon they control|them and all allies they control)$/.test(s)) return [{ kind: 'tapOpp' }];
   if (/^(?:you may )?\{u\} your hero$/i.test(s)) return [{ kind: 'untap', what: 'hero' }];
@@ -1363,6 +1384,19 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     return;
   }
   if (/^when this hits(?: a hero)?, put it into your soul\.?$/i.test(sent)) { sc.hitDestination = 'soul'; return; }
+  if ((m = sent.match(/^when this hits(?: a hero)?, put it into your soul and (.+?)\.?$/i))) {
+    const e = parseEffect(m[1]);
+    if (e) { sc.hitDestination = 'soul'; sc.onHit.push(...e); return; }
+  }
+  if ((m = sent.match(/^when this hits an? ([A-Z][a-z]+) hero, (.+?)\.?$/)) && isAttack && (CLASS_WORDS.includes(m[1]) || HERO_CLASSES.includes(m[1]))) {
+    const e = parseEffect(m[2]);
+    if (e) return void sc.onHit.push({ kind: 'ifOppClass', cls: m[1], then: e });
+  }
+  if ((m = sent.match(/^[Ww]hen the combat chain closes, if this didn't hit, the defending hero creates (?:a|an) ([A-Z][\w' ]*?) token\.?$/)) && isAttack) { sc.closeMissToken = m[1]; return; }
+  if ((m = sent.match(/^the first time this deals damage to a hero, (.+?)\.?$/i)) && isAttack) {
+    const e = parseEffect(m[1]);
+    if (e) return void sc.onHit.push(...e);
+  }
   if (/^when this hits(?: a hero)?, put it on the bottom of its owner's deck\.?$/i.test(sent)) { sc.hitDestination = 'deckBottom'; return; }
   if (/^this can't be defended by equipment\.?$/i.test(sent)) { sc.noEquipDefense = true; return; }
   if (/^this costs \{r\} less to play for each draconic chain link you control\.?$/i.test(sent)) { sc.costLessPer = 'draconicLink'; return; }

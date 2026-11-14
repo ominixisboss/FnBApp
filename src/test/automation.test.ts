@@ -360,3 +360,19 @@ describe('abilities of the attacking card', () => {
     expect(playOptions(yes, yes.priority).some((o) => o.uid === l.inst.uid && o.kind === 'activation')).toBe(false);
   });
 });
+
+describe('attack cards on the chain', () => {
+  it('"When the combat chain closes, if this didn\'t hit, the defending hero creates a token"', () => {
+    const c = getDb().cards.find((x) => legal(x) && !!getScript(x).closeMissToken && Number(x.cost ?? 0) <= 3)!;
+    expect(c).toBeDefined();
+    const token = getScript(c).closeMissToken!;
+    let s = game([c.id], [filler(), filler(), filler(), filler()]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s.players[1].life = 40;
+    const blockers = s.players[1].hand.map((h) => h.uid);
+    s = applyAction(s, { type: 'defend', uids: blockers });
+    for (let i = 0; i < 6 && s.chain.length; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.log.some((x) => x.text === `P1 creates a ${token} token.`)).toBe(true);
+  });
+});

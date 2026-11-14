@@ -2380,6 +2380,8 @@ function resolveDamage(s: GameState) {
 }
 
 function closeChain(s: GameState) {
+  // "When the combat chain closes, if this didn't hit, the defending hero creates a <X> token"
+  for (const l of s.chain) { const t = getScript(cardOf(l.inst)).closeMissToken; if (t && !l.hit && !l.fromWeapon) createToken(s, s.players[defenderOf(l)], t, 1); }
   if (s.chain.length) for (const pl of s.players) fireTriggers(s, pl, 'chainClose');
   for (const l of s.chain) {
     if (l.fromWeapon) continue;
@@ -2785,6 +2787,34 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       }
       case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName, thenToken: e.thenToken }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
+      case 'oppMill': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        for (let i = 0; i < e.amount; i++) { const x = t.deck.shift(); if (x) { t.graveyard.push(x); log(s, t.id, `${cardOf(x).name} is destroyed from the top of ${t.name}'s deck.`); } }
+        break;
+      }
+      case 'ifOppClass': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        if (cardOf(t.hero).types.includes(e.cls)) resolveEffects(s, p, e.then, src);
+        break;
+      }
+      case 'banishOppSoul': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const x = (t.soul ?? []).shift();
+        if (x) { t.banished.push(x); log(s, t.id, `${cardOf(x).name} is banished from ${t.name}'s soul.`); banishedFromOpp(s, p, x); }
+        break;
+      }
+      case 'oppDestroyPerm': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const pm = [...t.permanents].filter((x) => has(cardOf(x.inst), e.type) && (!e.name || cardOf(x.inst).name.toLowerCase() === e.name.toLowerCase())).sort((a, b) => Number(cardOf(b.inst).cost ?? 0) - Number(cardOf(a.inst).cost ?? 0))[0];
+        if (pm) { log(s, p.id, `${srcName} destroys ${t.name}'s ${cardOf(pm.inst).name}.`); removePermanent(s, t, pm.inst.uid); }
+        break;
+      }
+      case 'banishOppGrave': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const g = t.graveyard.pop();
+        if (g) { t.banished.push(g); log(s, t.id, `${cardOf(g).name} is banished from ${t.name}'s graveyard.`); banishedFromOpp(s, p, g); }
+        break;
+      }
       case 'banishTopOpp':
         for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
         break;
