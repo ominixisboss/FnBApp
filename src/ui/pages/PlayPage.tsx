@@ -314,13 +314,13 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
                     <>
                       <div className="seg">{([2, 3] as const).map((n) => <button key={n} className={(setup.pitBots ?? 3) === n ? 'on' : ''} onClick={() => setSetup({ ...setup, pitBots: n })}>{n + 1} seats</button>)}</div>
                       <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked Pit Fight table</button>
-                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4, !!setup.events); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, setup.pitBots === 2 ? 3 : 4, !!setup.events, setup.macro); }}>Create a Pit Fight room ({setup.pitBots === 2 ? 3 : 4} seats)</button>
                       <div className="small muted">The public table is ranked on its own Pit Fight ladder (your finishing place against the other players); rooms are unranked. Share the room code with up to {setup.pitBots === 2 ? 2 : 3} friends; the host can fill empty seats with bots.</div>
                     </>
                   ) : (
                     <>
                       <button className="play-big" disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.queue(d, setup.format); }}>Ranked match</button>
-                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox); }}>Create private room</button>
+                      <button disabled={!selectedHero} onClick={() => { const d = deckForOnline(); if (d) online.host(d, setup.format, roomSandbox, undefined, undefined, setup.macro); }}>Create private room</button>
                     </>
                   )}
                   <label className="row small" title="Both players can move cards by hand, like a tabletop (for cards the simulator doesn't automate). Every move shows in the log."><input type="checkbox" checked={roomSandbox} onChange={(e) => setRoomSandbox(e.target.checked)} /> Allow manual moves in my room</label>
