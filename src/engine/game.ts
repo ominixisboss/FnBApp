@@ -1153,6 +1153,8 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'cheered': return (p.turn.cheers ?? 0) > 0;
     case 'booed': return (p.turn.boos ?? 0) > 0;
     case 'anotherRed': return p.turn.played.filter((id) => card(id).pitch === 1).length >= 2;
+    case 'anotherBlue': return p.turn.played.filter((id) => card(id).pitch === 3).length >= 2;
+    case 'transcended': return !!p.turn.flags.transcended;
     case 'emptyHand': return p.hand.length === 0;
     case 'emptyDeck': return p.deck.length === 0;
     case 'boostedTimes': return (p.turn.flags.boosts ?? 0) >= cond.n;
@@ -1759,6 +1761,11 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   const zone = fromArsenal ? p.arsenal : fromBanished ? p.banished : fromGrave ? p.graveyard : p.hand;
   const c = cardOf(zone.find((h) => h.uid === uid)!);
   const sc = getScript(c);
+  // Meld: the Action half (and the meld) needs an action; otherwise only the Instant half can be played
+  if (sc.meldAction && mode !== 1 && !(s.phase === 'action' && !s.stack?.length && s.turnPlayer === pid && p.actionPoints > 0)) {
+    mode = 1;
+    log(s, pid, `Only ${sc.modes[1]?.label ?? 'the instant half'} of ${c.name} can be played now.`);
+  }
   // optional cost ("you may ... If you do, ..."): validate before paying anything
   const oc = optional?.accept && sc.optional && sc.optional.timing !== 'defend' ? sc.optional : undefined;
   if (oc && !optionalPayable(p, oc, uid)) throw new Error('You can’t pay that optional cost.');
@@ -1805,7 +1812,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   // a cost reduction for "your next ... card" is used up by this card
   const cl = p.effects.findIndex((e) => e.kind === 'costLess' && matchesFilter(e.filter, { inst, fromWeapon: false }));
   if (cl >= 0) p.effects.splice(cl, 1);
-  const isAction = has(c, 'Action') && !has(c, 'Instant');
+  const isAction = (has(c, 'Action') && !has(c, 'Instant')) || (!!sc.meldAction && mode !== 1);
   if (s.phase === 'action' && isAction) p.actionPoints -= 1;
   if (has(c, 'Action')) p.turn.flags.costMore = 0; // "their first action during their next turn costs an additional {r}"
   log(s, pid, `${p.name} plays ${c.name}${fromArsenal ? ' from arsenal' : fromBanished ? ' from the banished zone' : ''}.`);
@@ -1836,7 +1843,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
   const pid = p.id;
   const c = cardOf(inst);
   const sc = getScript(c);
-  const isAction = has(c, 'Action') && !has(c, 'Instant');
+  const isAction = (has(c, 'Action') && !has(c, 'Instant')) || (!!sc.meldAction && mode !== 1);
   const chosen = sc.modes[mode];
   if (has(c, 'Attack') && has(c, 'Action')) {
     startAttack(s, p, inst, false, fromArsenal, chosen, oc ? { oc, used: optUsed } : undefined);
@@ -2871,6 +2878,11 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'transcend':
+        p.turn.flags.transcended = 1;
+        log(s, p.id, `${srcName} transcends.`, 'Transcend: the card turns over. "If you\u2019ve transcended this turn" effects now apply.');
+        fireTriggers(s, p, 'transcend');
+        break;
       case 'powerOrGoAgain': {
         const link = s.chain.find((x) => x.inst.uid === src.uid);
         if (!link) break;

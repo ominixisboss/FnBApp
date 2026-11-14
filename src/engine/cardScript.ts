@@ -72,6 +72,8 @@ export type Effect =
   /** "destroy this unless you remove a steam / balance / doom counter from it" */
   /** "This gets +1{p} or go again" (the attack card's own ability) */
   | { kind: 'powerOrGoAgain'; amount: number }
+  /** Transcend (a Mystic card turns over: "if you've transcended this turn" payoffs) */
+  | { kind: 'transcend' }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -210,7 +212,10 @@ export type Condition =
   | { kind: 'lastAttackColor'; pitch: number }
   | { kind: 'lastAttackName'; name: string }
   /** the last arcane damage effect of this card dealt damage */
-  | { kind: 'dealtArcane' };
+  | { kind: 'dealtArcane' }
+  | { kind: 'anotherBlue' }
+  /** "if you've transcended this turn" */
+  | { kind: 'transcended' };
 
 /** Conditions that depend on how the chain link went: checked just before damage. */
 export const LINK_CONDITIONS = new Set<Condition['kind']>(['reprise', 'defendedByAttackAction', 'powerAboveBase', 'instantThisLink', 'defendedByFewer', 'powerAtLeast', 'reactionsThisLink', 'defendedByAction']);
@@ -333,6 +338,8 @@ export interface CardScript {
   attackIfWeapon?: boolean;
   /** "When the combat chain closes, if this didn't hit, the defending hero creates a <X> token" */
   closeMissToken?: string;
+  /** Meld whose left half is an Action: modes 0 (left) and 2 (both) use an action point; mode 1 is the Instant half */
+  meldAction?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -647,6 +654,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^transcend$/i.test(s)) return [{ kind: 'transcend' }];
   if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];
   if ((m = s.match(/^destroy (?:an|target) (item|aura|ally)( token)? (?:they|that hero) controls?$/i))) return [{ kind: 'oppDestroyPerm', type: m[2] ? 'Token' : ({ item: 'Item', aura: 'Aura', ally: 'Ally' } as const)[m[1].toLowerCase() as 'item'] }];
   if ((m = s.match(/^destroy (?:a|an|target) ([A-Z][\w' ]*?) token (?:they|that hero) controls?$/))) return [{ kind: 'oppDestroyPerm', type: 'Token', name: m[1] }];
@@ -740,6 +748,8 @@ export function parseCondition(raw: string): Condition | null {
   if (/^you've been booed this turn$/.test(t) || /^the crowd has booed you this turn$/.test(t)) return { kind: 'booed' };
   if ((m = t.match(/^there are fewer than (\d+) non-equipment cards defending this$/))) return { kind: 'defendedByFewer', n: +m[1] };
   if (/^you've played another red card this turn$/.test(t)) return { kind: 'anotherRed' };
+  if (/^you've played another blue card this turn$/.test(t)) return { kind: 'anotherBlue' };
+  if (/^you've transcended this turn$/.test(t)) return { kind: 'transcended' };
   if ((m = t.match(/^an? (red|yellow|blue) attack action card was the last attack this combat chain$/))) return { kind: 'lastAttackColor', pitch: { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] };
   if ((m = t.match(/^([a-z' ]+) was the last attack this combat chain$/))) return { kind: 'lastAttackName', name: titleCase(m[1]) };
   if ((m = t.match(/^you've created (?:a|an) ([a-z' ]+) token this turn$/))) return { kind: 'createdToken', name: titleCase(m[1]) };
@@ -897,6 +907,9 @@ function compile(c: Card): CardScript {
       .replace(/\b(?:he|she|it) deals (\d+) arcane damage to them\b/g, 'deal $1 arcane damage to them');
   }
   if (!text) return finish(sc, c);
+  // Meld ("Arcane Seeds // Life"): play either half, or both
+  const meld = parseMeld(c, text);
+  if (meld) { sc.modes.push(...meld.modes); sc.goAgain = meld.goAgain; sc.meldAction = c.types.includes('Action') || undefined; return finish(sc, c); }
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -1069,7 +1082,7 @@ function compile(c: Card): CardScript {
 export type TriggerEvent =
   | 'startTurn' | 'actionPhase' | 'endPhase' | 'chainClose' | 'leaves'
   | 'playAttackAction' | 'weaponAttack' | 'playAction' | 'playNonAttackAction' | 'playAura'
-  | 'hit' | 'beatChest' | 'winWager' | 'boost';
+  | 'hit' | 'beatChest' | 'winWager' | 'boost' | 'transcend';
 
 export interface Trigger {
   on: TriggerEvent;
@@ -1100,6 +1113,7 @@ export function parseTriggerHead(raw: string): { on: TriggerEvent[]; filter?: At
   if (/^whenever you beat chest$/.test(h)) return one('beatChest');
   if (/^whenever you win a wager$/.test(h)) return one('winWager');
   if (/^whenever you boost$/.test(h)) return one('boost');
+  if (/^whenever you transcend$/.test(h)) return one('transcend');
   if (/^when(?:ever)? you activate a weapon attack$/.test(h)) return one('weaponAttack');
   if (/^when(?:ever)? you play an attack action card or activate a weapon attack$/.test(h)) return { on: ['playAttackAction', 'weaponAttack'], once };
   if (/^at the beginning of your action phase or when you play an attack action card$/.test(h)) return { on: ['actionPhase', 'playAttackAction'], once };
@@ -1134,6 +1148,30 @@ export function parseTrigger(sent: string, next?: string): { triggers: Trigger[]
   if (!effects) return null;
   const text = ms[2].replace(/\.$/, '');
   return { triggers: head.on.map((on) => ({ on, filter: head.filter, once: head.once, effects: effects!, text })), usedNext };
+}
+
+/** Meld: "Meld / <left text> / // / <right text>": modes for the left half, the right half, and both. */
+function parseMeld(c: Card, text: string): { modes: Mode[]; goAgain: boolean } | null {
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const cut = lines.indexOf('//');
+  if (cut < 0 || !/^meld$/i.test(lines[0] ?? '') || !c.name.includes(' // ')) return null;
+  const half = (ls: string[]) => {
+    let goAgain = false;
+    const out: Effect[] = [];
+    for (const l of ls) for (const sent of l.split(/(?<=\.)\s+(?=[A-Z])/)) {
+      if (/^go again\.?$/i.test(sent)) { goAgain = true; continue; }
+      const e = parseEffect(sent);
+      if (!e) return null;
+      out.push(...e);
+    }
+    return { effects: out, goAgain };
+  };
+  const left = half(lines.slice(1, cut));
+  const right = half(lines.slice(cut + 1));
+  if (!left || !right) return null;
+  const [ln, rn] = c.name.split(' // ');
+  const mode = (label: string, onPlay: Effect[]): Mode => ({ label, onPlay, onAttack: [], onHit: [], parsed: true });
+  return { modes: [mode(ln, left.effects), mode(rn, right.effects), mode(`Meld: ${ln} and ${rn}`, [...left.effects, ...right.effects])], goAgain: left.goAgain };
 }
 
 /** "When this hits, you may <cost>." + "If you do, <effects>." as an effect on the matching trigger */
@@ -1302,9 +1340,14 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   }
   if ((m = sent.match(/^if (.+?), instead (.+)$/i))) {
     const cond = parseCondition(m[1]);
-    const e = cond && parseEffect(m[2]);
+    let e = cond && parseEffect(m[2]);
+    // "Prevent 3 of that damage. If you've transcended this turn, instead prevent 5." : the same effect with the bigger number
+    const num = m[2].match(/^(?:prevent|it gets \+|deal) ?(\d+)/i);
+    const last = sc.onPlay[sc.onPlay.length - 1];
+    if (!e && cond && num && last && 'amount' in last) e = [...sc.onPlay.slice(0, -1), { ...last, amount: +num[1] } as Effect];
     if (cond && e && !isAttack) return void sc.conditional.push({ when: 'instead', cond, effects: e });
   }
+  if (/^if you've played another blue card this turn, transcend\.?$/i.test(sent)) return void sc.conditional.push({ when: 'if', cond: { kind: 'anotherBlue' }, effects: [{ kind: 'transcend' }] });
   if ((m = sent.replace(/^combo - /i, '').match(/^when this attacks, if (.+?), (.+)$/i))) {
     const cond = parseCondition(m[1]);
     const e = cond && parseEffect(m[2]);

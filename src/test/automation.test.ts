@@ -376,3 +376,26 @@ describe('attack cards on the chain', () => {
     expect(s.log.some((x) => x.text === `P1 creates a ${token} token.`)).toBe(true);
   });
 });
+
+describe('meld and transcend', () => {
+  it('a meld card plays its left half, its right half, or both', () => {
+    const c = findCard('Arcane Seeds // Life')!;
+    expect(getScript(c).modes.length).toBe(3);
+    const run = (mode: number) => {
+      let s = game([c.id]);
+      const life = s.players[0].life;
+      s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [], mode });
+      while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+      const runes = s.players[0].permanents.filter((p) => findCard('Runechant')!.name === getDb().cards.find((x) => x.id === p.inst.cardId)?.name).length;
+      return { runes, life: s.players[0].life - life, ap: s.players[0].actionPoints };
+    };
+    expect(run(0)).toEqual({ runes: 2, life: 0, ap: 1 }); // Arcane Seeds: an action with go again
+    expect(run(1)).toEqual({ runes: 0, life: 1, ap: 1 }); // Life: an instant, no action point used
+    expect(run(2)).toEqual({ runes: 2, life: 1, ap: 1 });
+  });
+  it('"If you\'ve played another blue card this turn, transcend" turns on "if you\'ve transcended" payoffs', () => {
+    const sc = getScript(findCard('Homage to Ancestors')!);
+    expect(sc.conditional.some((k) => k.cond?.kind === 'anotherBlue' && k.effects[0]?.kind === 'transcend')).toBe(true);
+    expect(getScript(findCard('Moon Chakra')!).conditional.some((k) => k.when === 'instead' && k.cond?.kind === 'transcended')).toBe(true);
+  });
+});
