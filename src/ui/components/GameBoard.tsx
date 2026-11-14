@@ -1296,7 +1296,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {e && !(e.faceDown && isOpp) && (
         <CardView key={`${e.inst.uid}-${e.destroyed}-${!!e.faceDown}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
           className={`${e.destroyed ? 'destroyed' : ''} ${e.faceDown ? 'face-down' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
-          badge={e.destroyed ? 'destroyed' : e.faceDown ? 'face-down' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
+          badge={e.destroyed ? 'destroyed' : e.faceDown ? '🔒' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
       {e && !e.destroyed && e.defenseMod < 0 && <span className={`cracks c${Math.min(3, -e.defenseMod)}`} aria-hidden />}
     </Slot>
