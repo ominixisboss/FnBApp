@@ -1734,3 +1734,14 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .audio-row input[type=range] { width: 100%; accent-color: #d9a441; }
 .audio-val { font-size: .8rem; color: #a8957a; text-align: right; }
 .audio-settings.compact .audio-row { grid-template-columns: 6.4rem 1fr 2.6rem; }
+/* the gold chain: starts where the label ends (or at the edge when the label is hidden), fits a whole number of
+   links (no cut-off ring at the end), and has a ball at both ends */
+.chain-track { --chain-left: calc(var(--slot) * 1.9); }
+.chain-track::before { left: var(--chain-left); right: 14px; background-repeat: round no-repeat; background-size: auto 12px; }
+.chain-track::after { left: calc(var(--chain-left) - 6px); right: 2px; width: auto; border-radius: 0; box-shadow: none;
+  background: radial-gradient(circle closest-side, #fbe3a6 0, #d9a441 45%, #8a6a3e 88%, transparent 100%) left center / 13px 13px no-repeat,
+              radial-gradient(circle closest-side, #fbe3a6 0, #d9a441 45%, #8a6a3e 88%, transparent 100%) right center / 13px 13px no-repeat;
+  filter: drop-shadow(0 0 4px #d9a44188); }
+@media (max-width: 640px) and (orientation: portrait) {
+  .arena .chain-track { --chain-left: 14px; }
+}
