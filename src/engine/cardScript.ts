@@ -81,6 +81,8 @@ export type Effect =
   | { kind: 'rollDie'; then: RollEffect[] }
   /** prevent the next N arcane damage that would be dealt to you this turn */
   | { kind: 'preventArcane'; amount: number }
+  /** "Look at the top N cards of your (their) deck": shown to you, nothing moves */
+  | { kind: 'lookTop'; n: number; theirs?: boolean }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -687,6 +689,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if ((m = s.match(/^(?:you may )?look at the top (card|\d+ cards) of (your|their|target hero's) deck$/i))) return [{ kind: 'lookTop', n: /^\d/.test(m[1]) ? parseInt(m[1], 10) : 1, theirs: m[2].toLowerCase() !== 'your' || undefined }];
   if (/^roll a 6 sided die$/i.test(s)) return [{ kind: 'rollDie', then: [] }];
   if (/^transcend$/i.test(s)) return [{ kind: 'transcend' }];
   if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];

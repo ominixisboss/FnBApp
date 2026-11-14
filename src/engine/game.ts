@@ -2913,6 +2913,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         break;
       case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
       case 'preventArcane': p.effects.push({ kind: 'preventArcane', amount: e.amount, source: srcName }); log(s, p.id, `The next ${e.amount} arcane damage to ${p.name} this turn will be prevented.`); break;
+      case 'lookTop': {
+        const t = e.theirs ? (l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp) : p;
+        const top = t.deck.slice(0, e.n);
+        log(s, p.id, `${p.name} looks at the top ${e.n === 1 ? 'card' : `${e.n} cards`} of ${t.id === p.id ? 'their' : `${t.name}'s`} deck.`);
+        if (!p.isBot && top.length) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${t.id === p.id ? 'your' : `${t.name}'s`} deck (look only).`, confirm: 'OK', skippable: true, botPick: null, options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'event', key: 'look' } });
+        break;
+      }
       case 'rollDie': {
         const n = 1 + Math.floor(rand(s) * 6);
         if (n === 6) p.turn.flags.rolledSix = 1;
