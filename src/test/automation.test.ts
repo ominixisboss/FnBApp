@@ -495,3 +495,23 @@ describe('macros', () => {
     expect(getScript(findCard('Divvy Up')!).coverage).toBe('full');
   });
 });
+
+describe('steal and keyword filters', () => {
+  it('"steal an item they control until the end of this action phase" takes it, then gives it back', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).onHit.some((e) => e.kind === 'steal' && e.what === 'item' && e.temporary))!;
+    expect(c).toBeDefined();
+    let s = game([c.id]);
+    s.players[1].permanents.push({ inst: { uid: 9988, cardId: findCard('Copper Cog')!.id, owner: 1 }, ward: 0 });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'defend', uids: [] });
+    for (let i = 0; i < 3 && !s.players[0].permanents.some((p) => p.inst.uid === 9988); i++) s = applyAction(s, { type: 'pass' });
+    expect(s.players[0].permanents.some((p) => p.inst.uid === 9988)).toBe(true);
+    for (let i = 0; i < 6 && s.turnPlayer === 0; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.log.some((x) => x.text === 'Copper Cog returns to P1.')).toBe(true);
+  });
+  it('"Target attack action card with stealth gets +N{p}" filters on the keyword', () => {
+    const c = getDb().cards.find((x) => legal(x) && /^Target attack action card with stealth gets \+\d\{p\}\.?$/.test(x.text))!;
+    expect(getScript(c).onPlay[0]).toMatchObject({ kind: 'targetAttackPower', filter: { kind: 'keyword', value: 'Stealth' } });
+  });
+});

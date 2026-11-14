@@ -2534,6 +2534,14 @@ function endTurn(s: GameState) {
   if ((s.phase as string) === 'gameOver') return;
   { const tp = s.players[s.turnPlayer]; for (const pm of [...tp.permanents]) if (getScript(cardOf(pm.inst)).destroyAtEnd) removePermanent(s, tp, pm.inst.uid); }
   for (const e of s.players[s.turnPlayer].equipment) if (!e.destroyed && getScript(cardOf(e.inst)).endPhaseWear) { e.defenseMod -= 1; log(s, s.turnPlayer, `${cardOf(e.inst).name} gets a -1{d} counter (${equipDefense(e)}).`); }
+  // cards stolen "until the end of this action phase" go back
+  for (const pl of s.players) for (const pm of [...pl.permanents]) {
+    if (pm.returnTo === undefined || pm.returnTo === pl.id) continue;
+    const back = s.players[pm.returnTo];
+    pl.permanents = pl.permanents.filter((x) => x !== pm);
+    const to = pm.returnTo; pm.returnTo = undefined;
+    if (!back.eliminated) { back.permanents.push(pm); log(s, to, `${cardOf(pm.inst).name} returns to ${back.name}.`); }
+  }
   for (const pl of s.players) for (const e of pl.equipment) if (e.quelled && !e.destroyed) { e.destroyed = true; e.quelled = false; log(s, pl.id, `${cardOf(e.inst).name} is destroyed (quell).`); }
   for (const pl of s.players) ability(pl)?.endPhase?.(heroCtx(s, pl));
   const debt = ability(p)?.skipBloodDebt?.(heroCtx(s, p)) ? 0 : p.banished.filter((b) => getScript(cardOf(b)).bloodDebt).length;
@@ -2736,6 +2744,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         if (l && l.attacker === p.id && matchesFilter(e.filter, l)) { l.powerMod += e.amount; log(s, p.id, `${cardOf(l.inst).name} gets +${e.amount} power (${linkPower(l)}).`); }
         break;
       case 'targetAttackGoAgain': if (l && matchesFilter(e.filter, l)) l.goAgain = true; break;
+      case 'targetAttackOnHit': if (l && l.attacker === p.id && matchesFilter(e.filter, l)) l.extraOnHit = [...l.extraOnHit, ...e.effects]; break;
+      case 'targetAttackKeyword':
+        if (l && l.attacker === p.id && matchesFilter(e.filter, l)) {
+          if (e.keyword === 'dominate') l.dominate = true; else if (e.keyword === 'overpower') l.overpower = true; else l.unpreventable = true;
+          log(s, p.id, `${cardOf(l.inst).name} gets ${e.keyword === 'unpreventable' ? '"damage can\u2019t be prevented"' : e.keyword}.`);
+        }
+        break;
       case 'thisPower': if (l && l.inst.uid === src.uid) l.powerMod += e.amount; break;
       case 'thisGoAgain': if (l && l.inst.uid === src.uid) l.goAgain = true; break;
       case 'thisGrantOnHit': if (l && l.inst.uid === src.uid) l.extraOnHit = [...l.extraOnHit, ...e.effects]; break;
@@ -3136,6 +3151,18 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'perEvoPower': {
         const n = evoCount(p);
         if (l && l.inst.uid === src.uid && n) { l.powerMod += e.amount * n; log(s, p.id, `${srcName} gets +${e.amount * n} power (${n} Evo${n > 1 ? 's' : ''} equipped).`); }
+        break;
+      }
+      case 'steal': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const ok = (c: Card) => e.what === 'gold' ? c.name === 'Gold' || getScript(c).countsAs === 'Gold' : e.what === 'auraToken' ? has(c, 'Aura') && has(c, 'Token') : e.what === 'item' ? has(c, 'Item') : has(c, 'Ally');
+        const pm = [...t.permanents].filter((x) => ok(cardOf(x.inst))).sort((a, b) => Number(cardOf(b.inst).cost ?? 0) - Number(cardOf(a.inst).cost ?? 0))[0];
+        if (!pm) break;
+        t.permanents = t.permanents.filter((x) => x !== pm);
+        if (e.temporary) pm.returnTo = t.id;
+        p.permanents.push(pm);
+        log(s, p.id, `${p.name} steals ${cardOf(pm.inst).name} from ${t.name}${e.temporary ? ' until the end of the turn' : ''}.`, 'To steal a card is to gain control of it.');
+        ability(p)?.onSteal?.(heroCtx(s, p), cardOf(pm.inst));
         break;
       }
       case 'stealGold': {
