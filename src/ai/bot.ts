@@ -174,6 +174,7 @@ export function decideOptional(s: GameState, p: PlayerState, uid: number, pitch:
     case 'destroyTop': choice = { accept: true }; cost = 0.4 + (oc.minPower !== undefined ? 1.5 : 0); break;
     case 'destroyOwn': choice = { accept: true }; cost = 1; break;
     case 'tapHero': case 'tapOwn': choice = { accept: true }; cost = 0.3; break; // tapping is nearly free
+    case 'banishSoul': choice = { accept: true }; cost = 1.2; break;
     case 'destroySelf': choice = { accept: true }; cost = 2; break;
     case 'arsenalToBottom': choice = { accept: true }; cost = p.arsenal[0] ? cardPlayValue(cardOf(p.arsenal[0])) * 0.8 : 99; break;
     case 'banishGraveMatch': case 'decompose': choice = { accept: true }; cost = 0.3; break;

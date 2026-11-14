@@ -265,6 +265,8 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const manualAllowed = !online || !!online.sandbox;
   const [manual, setManual] = useState(!!sandbox);
   const [moveMenu, setMoveMenu] = useState<{ inst: CardInst; player: PlayerId } | null>(null);
+  /** a card in the arena with more than one usable ability (an ally's attack and its instant): pick one */
+  const [actMenu, setActMenu] = useState<{ inst: CardInst; opts: typeof options } | null>(null);
   const [ordering, setOrdering] = useState<{ action: Action; order: number[] } | null>(null);
   const [vibrate, setVibrate] = useState(hapticsEnabled);
   const [emoteOpen, setEmoteOpen] = useState(false);
@@ -617,6 +619,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       return setDefendSel(defendSel.includes(inst.uid) ? defendSel.filter((u) => u !== inst.uid) : [...defendSel, inst.uid]);
     }
     const acts = options.filter((o) => o.uid === inst.uid && o.kind === 'activation');
+    if (acts.length > 1 && !pending) return setActMenu({ inst, opts: acts });
     if (acts.length && !pending) return startPlay(acts[0]);
     setDetail(cardOf(inst));
   };
@@ -1064,6 +1067,19 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </GameOverOverlay>
       )}
       {manual && <div className="manual-banner">✋ Manual moves on: tap a card to move it · <button className="small" onClick={() => setManual(false)}>Done</button></div>}
+      {actMenu && (
+        <div className="modal-bg" onClick={() => setActMenu(null)}>
+          <div className="modal move-menu" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: 0 }}>{cardOf(actMenu.inst).name}</h3>
+            {actMenu.opts.map((o) => (
+              <button key={o.index} className="primary" onClick={() => { setActMenu(null); startPlay(o); }}>
+                {o.label.split(': ').slice(1).join(': ') || o.label}{o.cost ? ` (${o.cost})` : ''}
+              </button>
+            ))}
+            <button onClick={() => { setActMenu(null); setDetail(cardOf(actMenu.inst)); }}>Card details</button>
+          </div>
+        </div>
+      )}
       {moveMenu && (() => {
         const pl = state.players[moveMenu.player];
         const isHero = moveMenu.inst.uid === pl.hero.uid;

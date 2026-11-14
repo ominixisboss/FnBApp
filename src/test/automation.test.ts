@@ -287,3 +287,38 @@ describe('tapping', () => {
     expect(sc.coverage).toBe('full');
   });
 });
+
+describe('ally attacks', () => {
+  it('an ally attacks with its own power, stays in the arena and taps', () => {
+    const c = findCard('Barnacle')!;
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9995, cardId: c.id, owner: 0 }, ward: 0 });
+    const opt = playOptions(s, 0).find((o) => o.uid === 9995 && o.kind === 'activation');
+    expect(opt).toBeDefined();
+    s = applyAction(s, { type: 'activate', uid: 9995, index: opt!.index, pitch: [] });
+    for (let i = 0; i < 4 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    const l = currentLink(s)!;
+    expect(l.ally).toBe(true);
+    expect(linkPower(l)).toBe(c.power ? Number(c.power) : 4);
+    expect(s.players[0].turn.weaponAttacked).toBeFalsy();
+    const life = s.players[1].life;
+    s = applyAction(s, { type: 'defend', uids: [] });
+    s = applyAction(s, { type: 'pass' });
+    s = applyAction(s, { type: 'pass' });
+    expect(s.players[1].life).toBe(life - linkPower(l));
+    expect(s.players[0].permanents.find((p) => p.inst.uid === 9995)?.tapped).toBe(true);
+    expect(playOptions(s, 0).some((o) => o.uid === 9995)).toBe(false);
+  });
+  it('"Once per Turn Action - {r}{r}: Attack" can be used once a turn, and "When <name> attacks" is its on-attack ability', () => {
+    const c = findCard('Aegis, Archangel of Protection')!;
+    expect(getScript(c).onAttack.some((e) => e.kind === 'mayThen')).toBe(true);
+    let s = game([]);
+    s.players[0].permanents.push({ inst: { uid: 9994, cardId: c.id, owner: 0 }, ward: 4 });
+    s.players[0].actionPoints = 2;
+    const opt = playOptions(s, 0).find((o) => o.uid === 9994 && o.kind === 'activation')!;
+    s = applyAction(s, { type: 'activate', uid: 9994, index: opt.index, pitch: [] });
+    for (let i = 0; i < 4 && !currentLink(s); i++) s = applyAction(s, s.pendingChoices?.length ? { type: 'choose', yes: false, picks: [] } : { type: 'pass' });
+    expect(currentLink(s)?.ally).toBe(true);
+    expect(playOptions(s, 0).some((o) => o.uid === 9994 && o.kind === 'activation')).toBe(false);
+  });
+});

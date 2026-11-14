@@ -7,6 +7,8 @@ import type { Card } from '../data/types';
 export type AttackFilter =
   | { kind: 'any' }
   | { kind: 'attackAction' }
+  /** an ally's attack */
+  | { kind: 'ally' }
   | { kind: 'weapon' }
   | { kind: 'subtype'; value: string } // dagger, sword, arrow, ...
   | { kind: 'class'; value: string } // Warrior, Ninja, ...
@@ -205,6 +207,8 @@ export type OptionalCostKind =
   | { kind: 'discard'; pitch?: number; power?: number; type?: string }
   /** destroy the card that has the ability (an equipment, aura or item) */
   | { kind: 'destroySelf' }
+  /** banish a card from your hero's soul */
+  | { kind: 'banishSoul' }
   /** {t} your hero */
   | { kind: 'tapHero' }
   /** {t} a cog / an ally you control, or {t} this */
@@ -309,6 +313,8 @@ export interface CardScript {
   endPhaseWear?: boolean;
   /** "This may only defend an attack if the attack's controller has destroyed a Might token / drawn a card this turn" */
   defendIf?: { token?: string; drew?: boolean };
+  /** an ally that "can only attack if you've attacked with a weapon this turn" */
+  attackIfWeapon?: boolean;
   /** "Play this only if <condition>" */
   playIf?: Condition;
   onPlay: Effect[]; // resolution of non-attacks, or "when you play this" for attacks
@@ -380,6 +386,7 @@ const CLASS_WORDS = [
 function parseFilter(words: string): AttackFilter | null {
   const w = words.trim();
   if (w === '') return { kind: 'any' };
+  if (/^ally$/i.test(w)) return { kind: 'ally' };
   if (/^weapon$/i.test(w)) return { kind: 'weapon' };
   const sub = SUBTYPES.find((s) => w.toLowerCase() === s);
   if (sub) return { kind: 'subtype', value: sub };
@@ -722,6 +729,7 @@ function parseOptionalCost(raw: string): OptionalCostKind | null {
   if ((m = t.match(/^discard (?:a|an) (?:(red|yellow|blue) )?card$/))) return { kind: 'discard', pitch: m[1] ? { red: 1, yellow: 2, blue: 3 }[m[1] as 'red'] : undefined };
   if ((m = t.match(/^pay ((?:\{r\})+)$/))) return { kind: 'pay', amount: m[1].length / 3 };
   if (/^destroy this$/.test(t)) return { kind: 'destroySelf' };
+  if (/^banish a card from your hero's soul$/.test(t)) return { kind: 'banishSoul' };
   if (/^\{t\} your hero$/.test(t)) return { kind: 'tapHero' };
   if (/^\{t\} this$/.test(t)) return { kind: 'tapOwn', what: 'this' };
   if ((m = t.match(/^\{t\} (?:a|an) (cog|ally) you control$/))) return { kind: 'tapOwn', what: m[1] as 'cog' | 'ally' };
@@ -821,6 +829,7 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
   if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
+  if (/^this can only attack if you've attacked with a weapon this turn$/i.test(s)) return (sc.attackIfWeapon = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
   if (/^at the beginning of your action phase, destroy this$/i.test(s)) { sc.destroyAt = 'actionPhase'; return true; }
   if (/^at the start of your turn, destroy this$/i.test(s)) { sc.destroyAt = 'startOfTurn'; return true; }
@@ -849,8 +858,15 @@ function compile(c: Card): CardScript {
   for (const k of c.keywords) if (!/^(intimidate|amp \d+|opt \d+|reload)$/i.test(k)) keywordSentence(sc, k);
   let fusion: string | null = null;
 
-  // strip reminder text
-  const text = c.text.replace(/\([^)]*\)/g, '').trim();
+  // strip reminder text; an ally's or weapon's own name in its text means "this" ("When Aegis attacks", "Whenever Kyloria hits a hero")
+  let text = c.text.replace(/\([^)]*\)/g, '').trim();
+  if (c.types.includes('Ally') || c.types.includes('Weapon')) {
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const names = [...new Set([c.name, c.name.split(',')[0]])].filter((x) => x.length > 2).map(esc).join('|');
+    text = text.replace(new RegExp(`\\b(?:${names})(?= (?:attacks|hits|is|enters|leaves|deals|gets|has|can)\\b)`, 'g'), 'this');
+    text = text.replace(/\bWhenever this (attacks|hits)\b/g, 'When this $1').replace(/\bWhen this dies\b/g, 'When this is destroyed')
+      .replace(/\b(?:he|she|it) deals (\d+) arcane damage to them\b/g, 'deal $1 arcane damage to them');
+  }
   if (!text) return finish(sc, c);
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   for (let li = 0; li < lines.length; li++) {
@@ -976,7 +992,8 @@ function compile(c: Card): CardScript {
         i++;
         continue;
       }
-      const opt = i + 1 < sentences.length ? parseOptional(sentences[i], sentences[i + 1]) : null;
+      // allies attack through an activated ability, so their "you may" costs are on-attack abilities, not play costs
+      const opt = i + 1 < sentences.length && !c.types.includes('Ally') ? parseOptional(sentences[i], sentences[i + 1]) : null;
       if (opt && !sc.optional) {
         sc.optional = opt;
         i++;
@@ -992,7 +1009,7 @@ function compile(c: Card): CardScript {
         continue;
       }
       const may = i + 1 < sentences.length ? parseMayThen(sentences[i], sentences[i + 1]) : null;
-      if (may && (may.list !== 'onHit' || isAttack)) {
+      if (may && (may.list !== 'onHit' || isAttack || c.types.includes('Ally'))) {
         sc[may.list].push(may.effect);
         i++;
         continue;
@@ -1390,6 +1407,7 @@ export function describeFilter(f: AttackFilter): string {
     case 'any': return 'attack';
     case 'keyword': return `attack with ${f.value.toLowerCase()}`;
     case 'attackAction': return 'attack action card';
+    case 'ally': return 'ally attack';
     case 'weapon': return 'weapon attack';
     case 'subtype': return `${f.value} attack`;
     case 'class': return `${f.value} attack`;

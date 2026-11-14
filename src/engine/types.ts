@@ -150,8 +150,11 @@ export interface Defender {
 
 export interface ChainLink {
   attacker: PlayerId;
-  inst: CardInst; // attack card or weapon
+  inst: CardInst; // attack card, weapon or ally
+  /** a weapon or an ally attacks (the card stays where it is); see `ally` */
   fromWeapon: boolean;
+  /** an ally attacks: like a weapon attack, but it isn't one ("weapon attacks get +1{p}" don't apply) */
+  ally?: boolean;
   fromArsenal: boolean;
   basePower: number;
   powerMod: number;

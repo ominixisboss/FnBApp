@@ -264,12 +264,13 @@ export function equipDefense(e: { inst: CardInst; defenseMod: number }): number 
   return Math.max(0, (defenseOf(cardOf(e.inst)) ?? 0) + e.defenseMod);
 }
 
-export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: boolean }): boolean {
+export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: boolean; ally?: boolean }): boolean {
   const c = cardOf(l.inst);
   switch (f.kind) {
     case 'any': return true;
     case 'attackAction': return !l.fromWeapon;
-    case 'weapon': return l.fromWeapon;
+    case 'weapon': return l.fromWeapon && !l.ally;
+    case 'ally': return !!l.ally;
     case 'subtype': return c.types.some((t) => t.toLowerCase() === f.value);
     case 'class': return c.types.includes(f.value);
     case 'anyClass': return f.values.some((v) => c.types.includes(v));
@@ -1187,6 +1188,7 @@ export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: nu
   switch (oc.cost.kind) {
     case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (!oc.cost.power || powerOf(cardOf(h)) >= oc.cost.power) && typeMatches(cardOf(h), oc.cost.type));
     case 'destroySelf': return p.permanents.some((pm) => pm.inst.uid === playingUid) || p.equipment.some((e) => e.inst.uid === playingUid && !e.destroyed);
+    case 'banishSoul': return (p.soul ?? []).length > 0;
     case 'tapHero': return !p.heroTapped;
     case 'tapOwn': return !!untappedOwn(p, oc.cost.what, playingUid);
     case 'all': return oc.cost.costs.every((k) => k.kind === 'pay' || optionalPayable(p, { ...oc, cost: k }, playingUid));
@@ -1356,6 +1358,13 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
     }
     case 'pay':
       return null; // paid together with the card's cost
+    case 'banishSoul': {
+      const x = (p.soul ?? []).shift();
+      if (!x) throw new Error('Your soul is empty.');
+      p.banished.push(x);
+      log(s, p.id, `${p.name} banishes ${cardOf(x).name} from their soul.`);
+      return cardOf(x);
+    }
     case 'tapHero':
       if (p.heroTapped) throw new Error('Your hero is already tapped.');
       p.heroTapped = true;
@@ -1567,12 +1576,15 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const sources = [
     ...p.weapons.map((w) => ({ inst: w.inst, used: w.usedThisTurn })),
     ...p.equipment.filter((e) => !e.destroyed).map((e) => ({ inst: e.inst, used: e.usedThisTurn })),
-    ...p.permanents.map((pm) => ({ inst: pm.inst, used: false })),
+    ...p.permanents.map((pm) => ({ inst: pm.inst, used: false, perm: true })),
   ];
   for (const src of sources) {
     const sc = getScript(cardOf(src.inst));
     sc.activations.forEach((a, index) => {
       if (a.oncePerTurn && src.used) return;
+      // an ally's (or other permanent's) once-per-turn ability; allies attack only during your action phase
+      if (a.oncePerTurn && 'perm' in src && !a.tapSelf && p.turn.flags[`act${src.inst.uid}:${index}`]) return;
+      if (a.attack && sc.attackIfWeapon && !p.turn.weaponAttacked) return;
       if (a.tapSelf && !untappedOwn(p, 'this', src.inst.uid)) return;
       if (a.tapHero && p.heroTapped) return;
       if (a.tapCog && !untappedOwn(p, 'cog', src.inst.uid)) return;
@@ -1943,6 +1955,7 @@ function doActivate(s: GameState, uid: number, index: number, pitch: number[]) {
     if (w && a.oncePerTurn) w.usedThisTurn = true;
     const e = p.equipment.find((e) => e.inst.uid === uid);
     if (e && a.oncePerTurn) e.usedThisTurn = true;
+    if (a.oncePerTurn && p.permanents.some((pm) => pm.inst.uid === uid)) p.turn.flags[`act${uid}:${index}`] = 1;
     if (a.tapSelf) { const t = untappedOwn(p, 'this', uid); if (t) tapThing(s, p, t); }
     if (a.tapHero) { p.heroTapped = true; log(s, pid, `${p.name} taps their hero.`, RULES.tap); }
     if (a.tapCog) { const t = untappedOwn(p, 'cog', uid); if (t) tapThing(s, p, t); }
@@ -1997,8 +2010,13 @@ function resolveActivation(s: GameState, p: PlayerState, inst: CardInst, index: 
 function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: boolean, fromArsenal: boolean, mode?: Mode, optional?: { oc: OptionalCost; used: Card | null }) {
   const c = cardOf(inst);
   const sc = getScript(c);
+  // an ally attacks with its own power and stays in the arena (like a weapon), but it isn't a weapon attack
+  const allyPm = fromWeapon ? p.permanents.find((pm) => pm.inst.uid === inst.uid && has(cardOf(pm.inst), 'Ally')) : undefined;
+  const weapon = fromWeapon && !allyPm;
   const link: ChainLink = {
-    attacker: p.id, inst, fromWeapon, fromArsenal, basePower: basePowerFor(p, c) + (fromWeapon ? p.weapons.find((w) => w.inst.uid === inst.uid)?.counters ?? 0 : 0), powerMod: fromWeapon ? p.turn.flags.weaponBonus ?? 0 : 0,
+    attacker: p.id, inst, fromWeapon, fromArsenal, ally: allyPm ? true : undefined,
+    basePower: basePowerFor(p, c) + (weapon ? p.weapons.find((w) => w.inst.uid === inst.uid)?.counters ?? 0 : 0),
+    powerMod: weapon ? p.turn.flags.weaponBonus ?? 0 : 0,
     goAgain: sc.goAgain, dominate: sc.dominate, overpower: sc.overpower, piercing: sc.piercing,
     defenders: [], reactions: [], damage: null, hit: false, extraOnHit: mode?.onHit ?? [],
     noEquipDefense: sc.noEquipDefense || undefined,
@@ -2030,12 +2048,13 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     link.wagers![link.wagers!.length - 1].goldSwap = true;
   }
   if (s.players.length > 2 && link.defender !== undefined) { const d = s.players[link.defender]; (d.attackedBy ??= {})[p.id] = (d.attackedBy[p.id] ?? 0) + 1; }
-  if (fromWeapon) p.turn.weaponAttacked = true;
+  if (weapon) p.turn.weaponAttacked = true;
+  if (allyPm) p.turn.flags.allyAttacks = (p.turn.flags.allyAttacks ?? 0) + 1;
   const target = s.players[link.defender];
   target.turn.attackedTimes = (target.turn.attackedTimes ?? 0) + 1;
   for (const pl of s.players) if (pl.id !== p.id && pl.id !== link.defender && !pl.eliminated) ability(pl)?.onOtherAttack?.(heroCtx(s, pl), link);
   // "when you play an attack action card / activate a weapon attack" abilities (the attack is on the chain now)
-  if (fromWeapon || (has(c, 'Attack') && has(c, 'Action'))) fireTriggers(s, p, fromWeapon ? 'weaponAttack' : 'playAttackAction', link);
+  if (weapon || (!fromWeapon && has(c, 'Attack') && has(c, 'Action'))) fireTriggers(s, p, weapon ? 'weaponAttack' : 'playAttackAction', link);
   if (!s.chain.includes(link) || (s.phase as string) === 'gameOver') return;
   // pending "next attack" effects
   const grantedOnAttack: Effect[] = [];
@@ -2059,7 +2078,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     else if (name === 'Quicken') { destroy(); link.goAgain = true; }
     else if (name === 'Courage') { destroy(); link.powerMod += 1; }
     else if (name === 'Embodiment of Lightning' && !fromWeapon) { destroy(); link.goAgain = true; }
-    else if (name === 'Blade Dance' && fromWeapon) { destroy(); link.goAgain = true; }
+    else if (name === 'Blade Dance' && weapon) { destroy(); link.goAgain = true; }
   }
   if (!fromWeapon) {
     resolveEffects(s, p, sc.onPlay, inst);
@@ -2147,7 +2166,7 @@ function doDefend(s: GameState, uids: number[], boosts: number[] = [], pitch: nu
   for (const x of l.defenders) {
     const c = cardOf(x.inst);
     const db = getScript(c).defendBonus;
-    if (db?.when === 'weaponAttack' && l.fromWeapon) { x.defense += db.amount; log(s, d.id, `${c.name} gets +${db.amount} defense against a weapon attack.`); }
+    if (db?.when === 'weaponAttack' && l.fromWeapon && !l.ally) { x.defense += db.amount; log(s, d.id, `${c.name} gets +${db.amount} defense against a weapon attack.`); }
     if (x.kind !== 'equipment' && has(c, 'Action')) for (const g of grants) {
       if ((g.cards === 'attackAction') === has(c, 'Attack')) { x.defense += g.amount; log(s, d.id, `${c.name} gets +${g.amount} defense.`); }
     }
@@ -2291,7 +2310,8 @@ function resolveDamage(s: GameState) {
   l.hit = dealt > 0;
   if (raw === 0) log(s, null, `${cardOf(l.inst).name} is fully blocked.`);
   if (l.hit && s.phase !== 'gameOver' && !allyTarget) { // hitting an ally isn't hitting a hero
-    if (l.fromWeapon) {
+    if (l.ally) attacker.turn.flags.allyHits = (attacker.turn.flags.allyHits ?? 0) + 1;
+    else if (l.fromWeapon) {
       attacker.turn.weaponHits += 1;
       const hits = (attacker.turn.flags[`hits${l.inst.uid}`] = (attacker.turn.flags[`hits${l.inst.uid}`] ?? 0) + 1);
       const w = attacker.weapons.find((x) => x.inst.uid === l.inst.uid);
@@ -2628,7 +2648,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'oppCreateToken': { const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp; createToken(s, t, e.name, 1); break; }
       case 'weaponsPowerTurn': {
         p.turn.flags.weaponBonus = (p.turn.flags.weaponBonus ?? 0) + e.amount;
-        if (l && l.fromWeapon && l.attacker === p.id) l.powerMod += e.amount;
+        if (l && l.fromWeapon && !l.ally && l.attacker === p.id) l.powerMod += e.amount;
         log(s, p.id, `${p.name}'s weapons get +${e.amount}{p} until end of turn.`);
         break;
       }
