@@ -1766,3 +1766,12 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 
 /* a tapped hero tilts less, so it stays inside its slot */
 .hero-box .is-tapped { transform: rotate(8deg); }
+
+/* card-text symbols ({r}, {p}, {d}, {h} ...) drawn inline */
+.sym { display: inline-block; margin: 0 .08em; font-style: normal; line-height: 1; }
+.sym-res { color: #e9c46a; }
+.sym-pow { color: #e76f51; }
+.sym-def { filter: saturate(.7); }
+.sym-life { color: #e5484d; }
+.sym-int { filter: saturate(.7); }
+.sym-tap, .sym-chi, .sym-x { color: var(--accent, #e9c46a); font-weight: 700; }

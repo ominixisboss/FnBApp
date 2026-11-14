@@ -3,6 +3,7 @@ import { PITCH_COLOR } from '../../data/types';
 import { getScript } from '../../engine/cardScript';
 import { heroAutomation } from '../../engine/heroes';
 import CardView from './CardView';
+import { SymText } from '../symbols';
 import { useEffect, useState } from 'react';
 
 // official keyword definitions (public/data/keywords.json, from the card data source), loaded once
@@ -47,7 +48,7 @@ export default function CardDetail({ card, onClose, actions }: { card: Card; onC
               {card.intellect !== null && <span className="stat">Intellect {card.intellect}</span>}
               {card.arcane !== null && <span className="stat">Arcane {card.arcane}</span>}
             </div>
-            {card.text && <div className="rules-text">{card.text}</div>}
+            {card.text && <div className="rules-text"><SymText text={card.text} /></div>}
             <div className="row">
               {card.keywords.map((k) => <span key={k} className="tag">{k}</span>)}
             </div>

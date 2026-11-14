@@ -8,6 +8,7 @@ import { cardPlayValue } from '../../engine/game';
 import { heroAutomation } from '../../engine/heroes';
 import { ARCHETYPE_GUIDES, GENERAL_TIPS } from '../../learn/heroGuides';
 import CardView from '../components/CardView';
+import { SymText } from '../symbols';
 
 export default function GuidesPage({ heroId }: { heroId?: string }) {
   const heroes = useMemo(() => heroesFor('blitz').sort((a, b) => a.name.localeCompare(b.name)), []);
@@ -61,7 +62,7 @@ function Guide({ heroId }: { heroId: string }) {
         <div className="col" style={{ gap: '.4rem' }}>
           <h1 style={{ margin: 0 }}>{hero.name}</h1>
           <div className="muted">{arch.label} · {hero.health ?? '?'} life · intellect {hero.intellect ?? '?'}</div>
-          <p className="guide-ability">{hero.text}</p>
+          <p className="guide-ability"><SymText text={hero.text} /></p>
           <div className={`small ${auto.level === 'none' ? 'err' : 'muted'}`}>In this app: {auto.summary}{auto.level === 'partial' ? ' (partly automated)' : ''}</div>
           <div className="row" style={{ marginTop: '.4rem' }}>
             <a className="btn-link primary" href={`#play/as/${hero.id}`}>Play as {hero.name.split(',')[0]}</a>
