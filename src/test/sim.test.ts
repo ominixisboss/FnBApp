@@ -68,3 +68,22 @@ describe('background bot', () => {
     expect(() => applyAction(s, d.action)).not.toThrow();
   });
 });
+
+describe('difficulty ladder', () => {
+  // mirror matches (same hero and deck on both sides, alternating who goes first)
+  const winRate = (a: Difficulty, b: Difficulty, games: number, offset: number) => {
+    const hs = heroesFor('blitz');
+    let wins = 0, done = 0;
+    for (let g = 0; g < games; g++) {
+      const deck = toDeckList(autoBuildDeck(hs[(g * 7) % hs.length].id, 'blitz', offset + g));
+      let s = createGame([{ name: 'A', isBot: true, difficulty: a, deck }, { name: 'B', isBot: true, difficulty: b, deck }], offset + 600 + g, 'blitz', (g % 2) as 0 | 1);
+      for (let i = 0; i < 4000 && s.phase !== 'gameOver'; i++) s = applyAction(s, chooseAction(s, s.pendingChoices?.[0]?.player ?? s.pendingTriggers?.player ?? s.priority).action);
+      if (s.phase === 'gameOver' && s.winner !== null) { done++; if (s.winner === 0) wins++; }
+    }
+    return wins / Math.max(1, done);
+  };
+  it('Normal beats Easy and Hard beats Normal clearly', () => {
+    expect(winRate('normal', 'easy', 80, 1300)).toBeGreaterThan(0.65);
+    expect(winRate('hard', 'normal', 120, 1700)).toBeGreaterThan(0.6);
+  }, 120_000);
+});
