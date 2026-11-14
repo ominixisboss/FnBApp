@@ -1778,3 +1778,7 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 
 /* Cloaked equipment while face-down: only you can see it */
 .face-down { filter: grayscale(.85) brightness(.55); }
+
+/* the macro chip sits under the event chip when both are shown */
+.macro-chip { top: calc(124px + var(--sa-t)); }
+@media (max-width: 640px) and (orientation: portrait) { .macro-chip { top: calc(64px + var(--sa-t)); } }

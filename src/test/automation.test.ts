@@ -476,3 +476,22 @@ describe('cloaked equipment', () => {
     expect(defendOptions(s, 0).some((o) => o.uid === e.inst.uid)).toBe(false);
   });
 });
+
+describe('macros', () => {
+  it('Treasure Island: the first attack each turn adds a gold counter; damage to a hero loots it as Gold', () => {
+    const mk = (): DeckList => ({ heroId: findCard('Dorinthea')!.id, weaponIds: [], equipmentIds: [], cardIds: Array(30).fill(filler()) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk() }, { name: 'P1', isBot: false, deck: mk() }], 9, 'blitz', 0, { macro: 'Treasure Island' }));
+    s.players[0].resources = 10;
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    expect(s.treasureGold).toBe(1);
+    s = applyAction(s, { type: 'defend', uids: [] });
+    for (let i = 0; i < 3 && s.chain.length && !s.log.some((x) => /loots/.test(x.text)); i++) s = applyAction(s, { type: 'pass' });
+    expect(s.treasureGold).toBe(0);
+    expect(s.players[0].permanents.some((p) => getDb().cards.find((x) => x.id === p.inst.cardId)?.name === 'Gold')).toBe(true);
+  });
+  it('Expedition cards put a gold counter on Treasure Island', () => {
+    expect(getScript(findCard('Expedition to Azuro Keys')!).onAttack.some((e) => e.kind === 'treasurePut')).toBe(true);
+    expect(getScript(findCard('Divvy Up')!).coverage).toBe('full');
+  });
+});

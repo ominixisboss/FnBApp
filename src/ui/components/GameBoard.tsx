@@ -852,6 +852,9 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         })}
       </div>
 
+      {state.macro === 'Treasure Island' && (
+        <div className="event-chip macro-chip" title="Treasure Island: the first time a hero is attacked each turn, it gets a gold counter. Dealing damage to an opposing hero loots that many counters as Gold tokens.">🏝 Treasure Island: <b>{state.treasureGold ?? 0}</b> gold</div>
+      )}
       {state.lastEvent && (
         <div className="event-chip" title={readable(getDb().byId.get(state.lastEvent)?.text ?? '')}>🎪 Event: <b>{getDb().byId.get(state.lastEvent)?.name}</b>{state.eventDeck ? <span className="muted"> · {state.eventDeck.length} left</span> : null}</div>
       )}

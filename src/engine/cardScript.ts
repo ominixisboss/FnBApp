@@ -86,6 +86,10 @@ export type Effect =
   /** the defending hero banishes a card from their hand / a card in their arsenal (Agents of Chaos) */
   | { kind: 'oppBanishHand' }
   | { kind: 'oppBanishArsenal' }
+  /** Treasure Island: put a gold counter on it / remove one (a Thief makes a Gold) / Divvy Up */
+  | { kind: 'treasurePut' }
+  | { kind: 'treasureTake'; thiefGold: boolean }
+  | { kind: 'treasureDivvy' }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -483,6 +487,10 @@ export function parseEffect(raw: string): Effect[] | null {
   if (parts.length > 1) {
     const out: Effect[] = [];
     for (const p of parts) {
+      if (/^if you do and you are a thief, create a gold token\.?$/i.test(p) && out[out.length - 1]?.kind === 'treasureTake') continue;
+      if (/^(?:you may )?remove a gold counter from treasure island\.?$/i.test(p)) { out.push({ kind: 'treasureTake', thiefGold: true }); continue; }
+      if (/^remove half the gold counters from treasure island, rounded up\.?$/i.test(p)) { out.push({ kind: 'treasureDivvy' }); continue; }
+      if (/^if you are a thief, instead remove all of them\.?$/i.test(p) || /^create gold tokens equal to the number of gold counters removed this way\.?$/i.test(p)) { if (out[out.length - 1]?.kind === 'treasureDivvy') continue; }
       const rollPrev = out[out.length - 1];
       const rf = rollPrev?.kind === 'rollDie' ? parseRollFollowUp(p) : null;
       if (rf && rollPrev?.kind === 'rollDie') { rollPrev.then.push(rf); continue; }
@@ -702,6 +710,11 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if (/^(?:you may )?put a gold counter on treasure island$/i.test(s)) return [{ kind: 'treasurePut' }];
+  if (/^remove half the gold counters from treasure island, rounded up$/i.test(s)) return [{ kind: 'treasureDivvy' }];
+  if (/^(?:you may )?remove a gold counter from treasure island$/i.test(s)) return [{ kind: 'treasureTake', thiefGold: true }];
+  if (/^(?:you may )?remove a gold counter from treasure island\. if you do and you are a thief, create a gold token$/i.test(s)) return [{ kind: 'treasureTake', thiefGold: true }];
+  if (/^remove half the gold counters from treasure island, rounded up\. if you are a thief, instead remove all of them\. create gold tokens equal to the number of gold counters removed this way$/i.test(s)) return [{ kind: 'treasureDivvy' }];
   if (/^they banish a card from their hand$/i.test(s)) return [{ kind: 'oppBanishHand' }];
   if (/^banish a card in their arsenal$/i.test(s)) return [{ kind: 'oppBanishArsenal' }];
   if ((m = s.match(/^(?:you may )?look at the top (card|\d+ cards) of (your|their|target hero's) deck$/i))) return [{ kind: 'lookTop', n: /^\d/.test(m[1]) ? parseInt(m[1], 10) : 1, theirs: m[2].toLowerCase() !== 'your' || undefined }];
@@ -1393,6 +1406,8 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     if (e) return void (sc.onClashWin ??= []).push(...e);
   }
   if (/^if this would be put into your graveyard from anywhere, instead banish it\.?$/i.test(sent)) { sc.banishInsteadOfGrave = true; return; }
+  if (/^(if you are a thief, instead remove all of them|create gold tokens equal to the number of gold counters removed this way)\.?$/i.test(sent) && sc.onPlay.some((e) => e.kind === 'treasureDivvy')) return;
+  if (/^if you do and you are a thief, create a gold token\.?$/i.test(sent) && [...sc.onAttack, ...sc.onDefend, ...sc.onPlay].some((e) => e.kind === 'treasureTake')) return;
   if ((m = sent.match(/^while this is equipped face-down, when an attack (with go again|with \{p\} greater than its base|hits you and its controller has played or activated an attack reaction this chain link)(?: hits you)?, destroy this and create (?:a|an) ([A-Z][\w' ]*?) token under each opponent's control\.?$/i))) {
     sc.concealed = { when: /go again/.test(m[1]) ? 'goAgain' : /greater/.test(m[1]) ? 'aboveBase' : 'reaction', token: m[2] };
     return;

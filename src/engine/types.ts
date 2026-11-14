@@ -252,7 +252,13 @@ export interface PendingChoice {
   then?: { player: PlayerId; src: CardInst; effects: import('../engine/cardScript').Effect[] }[];
 }
 
+export type Macro = 'Treasure Island' | 'Omens of Arcana';
+
 export interface GameState {
+  /** an optional table-wide macro card (Treasure Island, Omens of Arcana) */
+  macro?: Macro;
+  /** Treasure Island's gold counters */
+  treasureGold?: number;
   /** Yorick: every hero shares one deck and one graveyard (the players' arrays are the same objects) */
   sharedZones?: boolean;
   /** Pit Fight: the order heroes were knocked out (first out first) */
