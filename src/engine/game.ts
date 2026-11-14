@@ -4,7 +4,7 @@ import { card, findCard, getDb, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
 import { getHeroAbility } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
-import type { AttackFilter, Condition, Effect, Mode, OptionalCost } from './cardScript';
+import type { AttackFilter, Condition, Effect, Mode, OptionalCost, OptionalCostKind } from './cardScript';
 import type { Layer, PermanentState } from './types';
 import type {
   Action, CardInst, ChainLink, Difficulty, GameState, OptionalChoice, PendingChoice, PlayerId, PlayerState, TurnEffect,
@@ -627,6 +627,14 @@ function doChoose(s: GameState, a: Extract<Action, { type: 'choose' }>) {
       if (name) cleanseName(s, p, t, c.resume.n, name, 'Righteous Cleansing');
       break;
     }
+    case 'mayThen': {
+      const r = c.resume;
+      if (!a.yes || !mayPayable(p, r.cost, r.src)) { log(s, p.id, `${p.name} doesn't ${r.text.split(' to ')[0]}.`); break; }
+      try { payMay(s, p, r.cost, r.src); } catch { log(s, p.id, `${p.name} can't pay for that.`); break; }
+      log(s, p.id, `${cardOf(r.src).name}: ${p.name} chooses to ${r.text}.`);
+      resolveEffects(s, p, r.then, r.src);
+      break;
+    }
     case 'event': resolveEventChoice(s, p, c.resume.key, picks, !!a.yes, c, c.resume.data); break;
     case 'eventOrder': {
       const top = (s.eventDeck ?? []).splice(0, c.options.length);
@@ -1140,7 +1148,8 @@ function applyAdditionalPayoff(s: GameState, p: PlayerState, c: Card, inst: Card
 export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: number): boolean {
   const others = p.hand.filter((h) => h.uid !== playingUid);
   switch (oc.cost.kind) {
-    case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (!oc.cost.power || powerOf(cardOf(h)) >= oc.cost.power));
+    case 'discard': return others.some((h) => oc.cost.kind === 'discard' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (!oc.cost.power || powerOf(cardOf(h)) >= oc.cost.power) && typeMatches(cardOf(h), oc.cost.type));
+    case 'destroySelf': return p.permanents.some((pm) => pm.inst.uid === playingUid);
     case 'pay': return true;
     case 'banishGrave': return p.graveyard.length >= oc.cost.n;
     case 'destroyTop': return p.deck.length > 0;
@@ -1154,6 +1163,14 @@ export function optionalPayable(p: PlayerState, oc: OptionalCost, playingUid: nu
     case 'reveal': return others.some((h) => oc.cost.kind === 'reveal' && cardOf(h).types.includes(oc.cost.talent));
     case 'charge': return others.some((h) => oc.cost.kind === 'charge' && (!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
   }
+}
+
+/** "an instant card", "an attack action card", "a non-attack action card" */
+export function typeMatches(c: Card, type?: string): boolean {
+  if (!type) return true;
+  if (type === 'Attack') return has(c, 'Attack') && has(c, 'Action');
+  if (type === 'NonAttack') return has(c, 'Action') && !has(c, 'Attack');
+  return has(c, type);
 }
 
 function graveMatches(c: Card, cost: OptionalCost['cost']): boolean {
@@ -1204,7 +1221,7 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
       return cardOf(inst);
     }
     case 'discard': {
-      const inst = pick((c) => (!cost.pitch || pitchOf(c) === cost.pitch) && (!cost.power || powerOf(c) >= cost.power));
+      const inst = pick((c) => (!cost.pitch || pitchOf(c) === cost.pitch) && (!cost.power || powerOf(c) >= cost.power) && typeMatches(c, cost.type));
       if (cost.power) { p.turn.beatChest = true; log(s, p.id, `${p.name} beats their chest!`, 'Beat Chest: as an additional cost to play this, you may discard a card with 6 or more power.'); }
       p.graveyard.push(inst);
       noteDiscard(s, p, inst);
@@ -1299,7 +1316,23 @@ function payOptional(s: GameState, p: PlayerState, oc: OptionalCost, choice: Opt
     }
     case 'pay':
       return null; // paid together with the card's cost
+    case 'destroySelf': {
+      const pm = p.permanents.find((x) => x.inst.uid === playingUid);
+      if (!pm) throw new Error('It is no longer in the arena.');
+      removePermanent(s, p, pm.inst.uid);
+      return cardOf(pm.inst);
+    }
   }
+}
+
+/** "You may <cost>. If you do, <then>": can it be paid, and pay it (the ability's card is `src`). */
+function mayPayable(p: PlayerState, cost: OptionalCostKind, src: CardInst): boolean {
+  if (cost.kind === 'pay') return availableResources(p) >= cost.amount;
+  return optionalPayable(p, { timing: 'play', cost, effects: [], costText: '', effectText: '' }, src.uid);
+}
+function payMay(s: GameState, p: PlayerState, cost: OptionalCostKind, src: CardInst) {
+  if (cost.kind === 'pay') { pay(s, p, cost.amount, autoPitch(p, Math.max(0, cost.amount - p.resources)) ?? []); return; }
+  payOptional(s, p, { timing: 'play', cost, effects: [], costText: '', effectText: '' }, { accept: true }, src.uid);
 }
 
 /** Apply an accepted optional cost's payoff (respecting "if a card with N+ power ... this way"). */
@@ -1590,6 +1623,8 @@ function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
     log(s, p.id, `${p.name} pitches ${c.name} (+${pitchOf(c)}).`);
     if (c.types.includes('Chi')) p.turn.flags.chi = (p.turn.flags.chi ?? 0) + pitchOf(c);
     ability(p)?.onPitch?.(heroCtx(s, p), c);
+    const op = getScript(c).onPitch;
+    if (op?.length) resolveEffects(s, p, op, inst);
   }
   if (p.resources < cost) throw new Error(`Not enough resources (need ${cost}, have ${p.resources})`);
   p.resources -= cost;
@@ -1917,6 +1952,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
     if (e.kind === 'nextAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return false; }
     if (e.kind === 'nextAttackGoAgain' && matchesFilter(e.filter, link)) { link.goAgain = true; return false; }
     if (e.kind === 'nextAttackDominate') { link.dominate = true; return false; }
+    if (e.kind === 'turnAttackPower' && matchesFilter(e.filter, link)) { link.powerMod += e.amount; return true; }
+    if (e.kind === 'turnAttackDominate') { link.dominate = true; return true; }
     if (e.kind === 'nextAttackGoldPower') { const g = p.permanents.filter((pm) => cardOf(pm.inst).name === 'Gold').length; link.powerMod += g; if (g) log(s, p.id, `${c.name} gets +${g}{p} for ${p.name}'s Gold (${e.source}).`); return false; }
     if (e.kind === 'nextAttackOnHit' && matchesFilter(e.filter, link)) { link.extraOnHit = [...link.extraOnHit, ...e.effects]; return false; }
     if (e.kind === 'nextAttackOnAttack' && matchesFilter(e.filter, link)) { grantedOnAttack.push(...e.effects); return false; }
@@ -2357,6 +2394,7 @@ export function dealDamage(s: GameState, target: PlayerId, amount: number, arcan
       dmg -= prevented;
       e.amount = 0;
       log(s, target, `${prevented} damage prevented (${e.source}).`);
+      if (prevented > 0 && e.thenToken) createToken(s, p, e.thenToken, 1);
     }
   }
   p.effects = p.effects.filter((e) => !(e.kind === 'preventNext' && e.amount <= 0));
@@ -2590,7 +2628,7 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         else log(s, p.id, `${p.name} finds no ${e.name} in their deck.`);
         break;
       }
-      case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName }); break;
+      case 'preventNext': p.effects.push({ kind: 'preventNext', amount: e.amount, source: srcName, thenToken: e.thenToken }); break;
       case 'createToken': createToken(s, p, e.name, e.amount); break;
       case 'banishTopOpp':
         for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
@@ -2640,6 +2678,18 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
           log(s, p.id, `${p.name} discards ${cardOf(d).name} at random.`);
         }
         if (e.then && e.ifPower !== undefined && best >= e.ifPower) resolveEffects(s, p, e.then, src);
+        break;
+      }
+      case 'turnAttackPower':
+        p.effects.push({ kind: 'turnAttackPower', amount: e.amount, filter: e.filter, source: srcName });
+        if (l && l.attacker === p.id && matchesFilter(e.filter, l)) l.powerMod += e.amount;
+        log(s, p.id, `${describeFilter(e.filter)} get +${e.amount}{p} this turn.`);
+        break;
+      case 'turnAttackDominate': p.effects.push({ kind: 'turnAttackDominate', source: srcName }); if (l && l.attacker === p.id) l.dominate = true; break;
+      case 'mayThen': {
+        if (!mayPayable(p, e.cost, src)) { log(s, p.id, `${srcName}: can't ${e.text.split(' to ')[0]}, so nothing happens.`); break; }
+        if (p.isBot) { payMay(s, p, e.cost, src); log(s, p.id, `${srcName}: ${p.name} chooses to ${e.text}.`); resolveEffects(s, p, e.then, src); break; }
+        ask(s, { player: p.id, kind: 'yesno', prompt: `${srcName}: ${e.text}?`, options: [{ uid: src.uid, cardId: src.cardId }], resume: { type: 'mayThen', cost: e.cost, then: e.then, src, text: e.text } });
         break;
       }
       case 'destroyOwnThen': {
@@ -2848,6 +2898,8 @@ export function pendingEffectsText(p: PlayerState): string[] {
     if (e.kind === 'nextWagerPower') return `Next attack that wagers +${e.amount} power (${e.source})`;
     if (e.kind === 'nextAttackOnHit') return `Next ${describeFilter(e.filter)} gets an on-hit effect (${e.source})`;
     if (e.kind === 'nextAttackDominate') return `Next attack gets dominate (${e.source})`;
+    if (e.kind === 'turnAttackPower') return `${describeFilter(e.filter)} +${e.amount} power this turn (${e.source})`;
+    if (e.kind === 'turnAttackDominate') return `Attacks get dominate this turn (${e.source})`;
     if (e.kind === 'nextAttackGoldPower') return `Next attack +1 power for each Gold you control (${e.source})`;
     if (e.kind === 'costLess') return `Next ${describeFilter(e.filter)} costs ${e.amount} less (${e.source})`;
     return `Prevent next ${e.amount} damage (${e.source})`;

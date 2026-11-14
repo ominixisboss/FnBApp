@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable, typeMatches,
   equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -1146,7 +1146,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         const oc = inst && getScript(cardOf(inst)).optional;
         if (!inst || !oc) return null;
         const needsCard = ['discard', 'handToBottom', 'banishHand', 'discardOrTop', 'reveal', 'charge'].includes(oc.cost.kind);
-        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || !oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch));
+        const eligible = me.hand.filter((h) => h.uid !== inst.uid && (oc.cost.kind === 'reveal' ? cardOf(h).types.includes(oc.cost.talent) : (oc.cost.kind !== 'discard' && oc.cost.kind !== 'charge') || ((!oc.cost.pitch || pitchOf(cardOf(h)) === oc.cost.pitch) && (oc.cost.kind !== 'discard' || typeMatches(cardOf(h), oc.cost.type)))));
         const advice = decideOptional(state, me, inst.uid, []);
         const yes = (choice: OptionalChoice) => startPlay(optPick.opt, optPick.mode, choice);
         return (

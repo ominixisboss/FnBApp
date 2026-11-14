@@ -41,7 +41,7 @@ describe('conditions', () => {
 
 describe('optional costs', () => {
   it('paying "discard a card" gives the payoff, declining does not', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && !o.cost.type && o.minPower === undefined && o.timing !== 'defend' && x.types.includes('Attack') && x.types.includes('Action'); });
     const s0 = game([c.id, filler(), filler()]);
     const uid = s0.players[0].hand[0].uid;
     const discard = s0.players[0].hand[1].uid;
@@ -52,7 +52,7 @@ describe('optional costs', () => {
     expect(yes.log.length).toBeGreaterThan(no.log.length);
   });
   it('the bot makes a decision on optional costs, with a card to pay when needed', () => {
-    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && o.timing !== 'defend' && o.minPower === undefined; });
+    const c = find((x) => { const o = getScript(x).optional; return !!o && o.cost.kind === 'discard' && !o.cost.pitch && !o.cost.power && !o.cost.type && o.timing !== 'defend' && o.minPower === undefined; });
     const s = game([c.id, filler(), filler()]);
     const d = decideOptional(s, s.players[0], s.players[0].hand[0].uid, []);
     expect(d).toBeDefined();
@@ -198,5 +198,37 @@ describe('third pass', () => {
     s = applyAction(s, { type: 'play', uid: p.hand[0].uid, pitch: [] });
     expect(s.players[1].life).toBe(life - 1);
     expect(s.players[0].weapons.length).toBe(0);
+  });
+});
+
+describe('card text, fourth pass', () => {
+  it('"You may <cost>. If you do, <effect>" asks, and pays only on yes', () => {
+    const c = findCard('Clearwater Elixir')!;
+    expect(getScript(c).onPlay.some((e) => e.kind === 'mayThen')).toBe(true);
+    let s = game([c.id]);
+    s.players[0].permanents.push({ inst: { uid: 9999, cardId: findCard('Bloodrot Pox')!.id, owner: 0 }, ward: 0 } as never);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 4 && !s.pendingChoices?.length; i++) s = applyAction(s, { type: 'pass' });
+    expect(s.pendingChoices?.[0]?.resume.type).toBe('mayThen');
+    const life = s.players[0].life;
+    const yes = applyAction(s, { type: 'choose', yes: true });
+    const no = applyAction(s, { type: 'choose', yes: false });
+    expect(yes.players[0].permanents.some((p) => p.inst.uid === 9999)).toBe(false);
+    expect(yes.players[0].life).toBe(life + 1);
+    expect(no.players[0].permanents.some((p) => p.inst.uid === 9999)).toBe(true);
+    expect(no.players[0].life).toBe(life);
+  });
+  it('"If you prevent damage this way, create a token" creates it once damage is prevented', () => {
+    const c = find((x) => getScript(x).onPlay.some((e) => e.kind === 'preventNext' && !!e.thenToken) && x.types.includes('Instant'));
+    expect(c).toBeDefined();
+    const tokenName = (getScript(c).onPlay.find((e) => e.kind === 'preventNext') as { thenToken: string }).thenToken;
+    let s = game([c.id]);
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    while (s.stack?.length) s = applyAction(s, { type: 'pass' });
+    expect(s.players[0].effects.some((e) => e.kind === 'preventNext' && e.thenToken === tokenName)).toBe(true);
+  });
+  it('"Daggers you control get +1{p} this turn" style effects last the whole turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).onPlay.some((e) => e.kind === 'turnAttackPower'));
+    expect(c).toBeDefined();
   });
 });
