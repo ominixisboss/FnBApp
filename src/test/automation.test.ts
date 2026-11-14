@@ -232,3 +232,31 @@ describe('card text, fourth pass', () => {
     expect(c).toBeDefined();
   });
 });
+
+describe('triggered abilities of permanents', () => {
+  it('parses "When an attack you control hits a hero, you may destroy this. If you do, ..."', () => {
+    const t = getScript(findCard('Aether Crackers')!).triggers;
+    expect(t?.[0]?.on).toBe('hit');
+    expect(t?.[0]?.effects[0]?.kind).toBe('mayThen');
+  });
+  it('"At the start of your turn, put this into your soul" fires at the start of its controller\'s turn', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).triggers?.some((t) => t.on === 'startTurn' && t.effects.some((e) => e.kind === 'selfToSoul')))!;
+    expect(c).toBeDefined();
+    let s = game([], []);
+    s.players[1].permanents.push({ inst: { uid: 9998, cardId: c.id, owner: 1 }, ward: 0 });
+    for (let i = 0; i < 6 && s.turnPlayer === 0; i++) s = applyAction(s, s.phase === 'arsenal' ? { type: 'arsenal', uid: null } : { type: 'pass' });
+    expect(s.turnPlayer).toBe(1);
+    expect(s.players[1].permanents.some((p) => p.inst.uid === 9998)).toBe(false);
+    expect((s.players[1].soul ?? []).some((x) => x.uid === 9998)).toBe(true);
+  });
+  it('"When you play an attack action card, destroy this" fires when the attack starts', () => {
+    const c = getDb().cards.find((x) => legal(x) && getScript(x).triggers?.some((t) => t.on === 'playAttackAction' && t.effects.some((e) => e.kind === 'destroySelf')))!;
+    expect(c).toBeDefined();
+    let s = game([filler()]);
+    s.players[0].permanents.push({ inst: { uid: 9997, cardId: c.id, owner: 0 }, ward: 0 });
+    s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+    for (let i = 0; i < 3 && !currentLink(s); i++) s = applyAction(s, { type: 'pass' });
+    expect(currentLink(s)).toBeDefined();
+    expect(s.players[0].permanents.some((p) => p.inst.uid === 9997)).toBe(false);
+  });
+});

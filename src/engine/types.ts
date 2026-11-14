@@ -60,6 +60,7 @@ export type TurnEffect =
   /** every attack matching the filter this turn */
   | { kind: 'turnAttackPower'; amount: number; filter: AttackFilter; source: string }
   | { kind: 'turnAttackDominate'; source: string }
+  | { kind: 'turnAttackGoAgain'; filter: AttackFilter; source: string }
   /** the next attack gets +X{p} when it attacks, X = Gold you control (Benefactor of Bloodworth Goldmane) */
   | { kind: 'nextAttackGoldPower'; source: string };
 

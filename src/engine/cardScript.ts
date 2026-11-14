@@ -54,6 +54,21 @@ export type Effect =
   /** every attack matching the filter this turn gets +N{p} */
   | { kind: 'turnAttackPower'; amount: number; filter: AttackFilter }
   | { kind: 'turnAttackDominate' }
+  /** destroy the permanent (aura, item, ally, equipment) that has the ability */
+  | { kind: 'destroySelf' }
+  /** "destroy this unless you remove a steam / balance / doom counter from it" */
+  | { kind: 'counterUpkeep'; counter: string }
+  /** "remove a verse counter from this" (+ "If you do, <then>") */
+  | { kind: 'removeCounter'; counter: string; then?: Effect[] }
+  /** "put this into your soul" (a Light aura) */
+  | { kind: 'selfToSoul' }
+  | { kind: 'nextAttackDominate' }
+  /** "your dagger attacks get go again this turn" */
+  | { kind: 'turnAttackGoAgain'; filter: AttackFilter }
+  /** "remove all +1{p} counters from weapons / swords you control" */
+  | { kind: 'clearWeaponCounters'; sub?: string }
+  /** "destroy all Runechants you control" */
+  | { kind: 'destroyAllOwn'; name: string }
   | { kind: 'mayThen'; cost: OptionalCostKind; then: Effect[]; text: string }
   | { kind: 'banishTopSelf'; amount: number }
   /** create a card (e.g. Crouching Tiger) in your hand */
@@ -252,6 +267,10 @@ export interface CardScript {
   boost: boolean;
   phantasm: boolean;
   steam: number; // enters the arena with N steam counters
+  /** "This enters the arena with N verse / balance / doom / energy counters" */
+  startCounters?: { counter: string; n: number };
+  /** "When this has none, destroy it" (its counters) */
+  destroyAtZero?: boolean;
   steamUpkeep: boolean; // start of turn: destroy unless you remove a steam counter
   destroyAt?: 'actionPhase' | 'startOfTurn';
   bloodDebt: boolean;
@@ -285,6 +304,8 @@ export interface CardScript {
   optional?: OptionalCost;
   /** "When this is pitched, <effects>" */
   onPitch?: Effect[];
+  /** a permanent's "when / whenever / at the beginning of ..." abilities */
+  triggers?: Trigger[];
   /** "Instant - Discard this: <effect>" usable from hand */
   handActivation?: { cost: number; effects: Effect[]; text: string };
   /** "(If <condition>, ) you may play this from your banished zone" */
@@ -580,8 +601,19 @@ export function parseEffect(raw: string): Effect[] | null {
   if (/^the attack gets go again$/i.test(s)) return [{ kind: 'targetAttackGoAgain', filter: { kind: 'any' } }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
+  if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if ((m = s.match(/^destroy (?:this|it) unless you remove (?:a|an) (\w+) counter from (?:it|this)$/i))) return [{ kind: 'counterUpkeep', counter: m[1].toLowerCase() }];
+  if ((m = s.match(/^remove (?:a|an) (\w+) counter from this$/i))) return [{ kind: 'removeCounter', counter: m[1].toLowerCase() }];
+  if (/^put this into your (?:hero's )?soul$/i.test(s)) return [{ kind: 'selfToSoul' }];
+  if (/^your next attack this turn gets dominate$/i.test(s)) return [{ kind: 'nextAttackDominate' }];
+  if ((m = s.match(/^your (\w+?)s? attacks get go again this turn$/i))) { const f = parseFilter(m[1].toLowerCase()); if (f) return [{ kind: 'turnAttackGoAgain', filter: f }]; }
+  if ((m = s.match(/^remove all \+1\{p\} counters from (weapons|swords) you control$/i))) return [{ kind: 'clearWeaponCounters', sub: m[1].toLowerCase() === 'swords' ? 'Sword' : undefined }];
+  if ((m = s.match(/^destroy all ([A-Z][\w' ]*?)s? you control$/))) return [{ kind: 'destroyAllOwn', name: m[1] }];
+  if (/^sharpen all swords you control$/i.test(s)) return [{ kind: 'sharpen', times: 1 }];
+  // "destroy this, then <effect>" / "destroy this and <effect>"
+  if ((m = s.match(/^destroy this,? (?:and|then) (.+)$/i))) { const e = parseEffect(m[1]); return e ? [{ kind: 'destroySelf' }, ...e] : null; }
   // "X and Y"
-  const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw|this gets|it gets)\b)/i);
+  const and = s.split(/ and (?=(?:draw|gain|create|deal|you gain|you draw|this gets|it gets|the attack gets|amp \d)\b)/i);
   if (and.length > 1) {
     const out: Effect[] = [];
     for (const p of and) {
@@ -757,6 +789,8 @@ function keywordSentence(sc: CardScript, sentence: string): boolean {
   if (/^reload$/i.test(s)) { sc.onPlay.push({ kind: 'reload' }); return true; }
   if (/^blood debt$/i.test(s)) return (sc.bloodDebt = true);
   if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) steam counters?$/i))) return !!(sc.steam = toNum(m[1].toLowerCase()));
+  if ((m = s.match(/^this enters the arena with (a|an|one|two|three|\d+) (balance|doom|verse|energy|frost|endurance|suspense|bind|flow|lesson) counters?(?: on it)?$/i))) { sc.startCounters = { counter: m[2].toLowerCase(), n: toNum(m[1].toLowerCase()) }; return true; }
+  if (/^when (?:this|it) has none, destroy it$/i.test(s)) return (sc.destroyAtZero = true);
   if (/^at the start of your turn, destroy this unless you remove a steam counter from it$/i.test(s)) return (sc.steamUpkeep = true);
   if (/^at the beginning of your action phase, destroy this$/i.test(s)) { sc.destroyAt = 'actionPhase'; return true; }
   if (/^at the start of your turn, destroy this$/i.test(s)) { sc.destroyAt = 'startOfTurn'; return true; }
@@ -918,10 +952,96 @@ function compile(c: Card): CardScript {
         i++;
         continue;
       }
+      const before = sc.unparsed.length;
       handleSentence(sc, sentences[i], isAttack, isPermanentLike);
+      // a permanent's triggered ability nothing else understood
+      const lastHere = i + 1 >= sentences.length;
+      const nextLineFirst = lastHere && li + 1 < lines.length ? lines[li + 1].split(/(?<=\.)\s+(?=[A-Z])/)[0] : undefined;
+      const trig = sc.unparsed.length > before && isPermanentLike && !isAttack ? parseTrigger(sentences[i], sentences[i + 1] ?? nextLineFirst) : null;
+      if (trig) {
+        sc.unparsed.length = before;
+        (sc.triggers ??= []).push(...trig.triggers);
+        if (trig.usedNext && !lastHere) i++;
+        else if (trig.usedNext && nextLineFirst) {
+          // the payoff was the next line's first sentence
+          lines[li + 1] = lines[li + 1].slice(nextLineFirst.length).trim();
+          if (!lines[li + 1]) lines.splice(li + 1, 1);
+        }
+      }
     }
   }
   return finish(sc, c);
+}
+
+/** what a permanent's "when / whenever / at the beginning of ..." ability waits for */
+export type TriggerEvent =
+  | 'startTurn' | 'actionPhase' | 'endPhase' | 'chainClose' | 'leaves'
+  | 'playAttackAction' | 'weaponAttack' | 'playAction' | 'playNonAttackAction' | 'playAura'
+  | 'hit' | 'beatChest' | 'winWager' | 'boost';
+
+export interface Trigger {
+  on: TriggerEvent;
+  /** 'hit' / attacks: which attacks count ("a sword attack you control hits") */
+  filter?: AttackFilter;
+  /** "Once per turn, ..." */
+  once?: boolean;
+  effects: Effect[];
+  text: string;
+}
+
+const PLAY_EVENTS: Record<string, TriggerEvent> = {
+  'an attack action card': 'playAttackAction', 'an action card': 'playAction', 'a non-attack action card': 'playNonAttackAction', 'an aura': 'playAura',
+};
+
+/** "Whenever you play an attack action card" -> the events it waits for, or null */
+export function parseTriggerHead(raw: string): { on: TriggerEvent[]; filter?: AttackFilter; once?: boolean } | null {
+  let h = raw.trim().toLowerCase().replace(/\.$/, '');
+  let once: boolean | undefined;
+  if (h.startsWith('once per turn, ')) { once = true; h = h.slice('once per turn, '.length); }
+  let m: RegExpMatchArray | null;
+  const one = (on: TriggerEvent, filter?: AttackFilter) => ({ on: [on], filter, once });
+  if (/^at the start of your turn$/.test(h)) return one('startTurn');
+  if (/^at the (?:beginning|start) of your action phase$/.test(h)) return one('actionPhase');
+  if (/^at the beginning of your end phase$/.test(h)) return one('endPhase');
+  if (/^when the combat chain closes$/.test(h)) return one('chainClose');
+  if (/^when this leaves the arena$/.test(h)) return one('leaves');
+  if (/^whenever you beat chest$/.test(h)) return one('beatChest');
+  if (/^whenever you win a wager$/.test(h)) return one('winWager');
+  if (/^whenever you boost$/.test(h)) return one('boost');
+  if (/^when(?:ever)? you activate a weapon attack$/.test(h)) return one('weaponAttack');
+  if (/^when(?:ever)? you play an attack action card or activate a weapon attack$/.test(h)) return { on: ['playAttackAction', 'weaponAttack'], once };
+  if (/^at the beginning of your action phase or when you play an attack action card$/.test(h)) return { on: ['actionPhase', 'playAttackAction'], once };
+  if ((m = h.match(/^when(?:ever)? you play (an attack action card|an action card|a non-attack action card|an aura)$/))) return one(PLAY_EVENTS[m[1]]);
+  // "when an attack action card you control hits", "whenever a weapon attack you control hits", "when your sword attack hits", "whenever a dagger you own hits a hero"
+  if ((m = h.match(/^when(?:ever)? (?:an?|your) (?:([a-z]+) )?(attack action card|attack|[a-z]+) (?:you (?:control|own) )?hits(?: a hero)?$/))) {
+    const word = m[2] === 'attack' || m[2] === 'attack action card' ? (m[1] ?? '') : m[2];
+    if (m[2] === 'attack action card' && !m[1]) return one('hit', { kind: 'attackAction' });
+    const f = parseFilter(/^[a-z]/.test(word) && CLASS_WORDS.some((c) => c.toLowerCase() === word) ? CLASS_WORDS.find((c) => c.toLowerCase() === word)! : word);
+    if (f) return one('hit', f);
+  }
+  return null;
+}
+
+/** A permanent's triggered ability: "<head>, <effects>" (or "<head>, you may <cost>." + "If you do, <effects>.") */
+export function parseTrigger(sent: string, next?: string): { triggers: Trigger[]; usedNext: boolean } | null {
+  const ms = sent.match(/^((?:once per turn, )?(?:when|whenever|at the beginning of|at the start of) [^,]+?), (.+?)\.?$/i);
+  if (!ms) return null;
+  const head = parseTriggerHead(ms[1]);
+  if (!head) return null;
+  let effects = parseEffect(ms[2]);
+  let usedNext = false;
+  if (effects && next && /^remove (?:a|an) \w+ counter from this\.?$/i.test(ms[2]) && /^if you do/i.test(next)) effects = null; // its payoff is on the next sentence
+  const rc = ms[2].match(/^remove (?:a|an) (\w+) counter from this\.?$/i);
+  const rcThen = rc && next?.match(/^if you do,? (.+?)\.?$/i);
+  const rcEff = rcThen && parseEffect(rcThen[1]);
+  if (rc && rcEff) { effects = [{ kind: 'removeCounter', counter: rc[1].toLowerCase(), then: rcEff }]; usedNext = true; }
+  if (!effects && next) {
+    const may = parseMayThen(ms[2], next);
+    if (may && may.list === 'onPlay') { effects = [may.effect]; usedNext = true; }
+  }
+  if (!effects) return null;
+  const text = ms[2].replace(/\.$/, '');
+  return { triggers: head.on.map((on) => ({ on, filter: head.filter, once: head.once, effects: effects!, text })), usedNext };
 }
 
 /** "When this hits, you may <cost>." + "If you do, <effects>." as an effect on the matching trigger */
@@ -1213,7 +1333,7 @@ function finish(sc: CardScript, c: Card): CardScript {
   else {
     const parsedSomething =
       sc.onPlay.length + sc.onHit.length + sc.onAttack.length + sc.conditional.length + sc.activations.length + sc.modes.length + sc.onDestroy.length > 0 ||
-      !!sc.optional || !!sc.handActivation ||
+      !!sc.optional || !!sc.handActivation || !!sc.triggers?.length || !!sc.onPitch?.length || sc.onDefend.length > 0 ||
       sc.goAgain || sc.dominate || sc.ward > 0;
     sc.coverage = parsedSomething ? 'partial' : 'none';
   }
