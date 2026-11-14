@@ -2859,6 +2859,14 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
       case 'banishTopOpp':
         for (let i = 0; i < e.amount; i++) { const t = opp.deck.shift(); if (t) { opp.banished.push(t); log(s, opp.id, `${cardOf(t).name} is banished from the top of ${opp.name}'s deck.`); banishedFromOpp(s, p, t); } }
         break;
+      case 'oppBanishHand': case 'oppBanishArsenal': {
+        const t = l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp;
+        const zone = e.kind === 'oppBanishHand' ? t.hand : t.arsenal;
+        // they choose: the card they'd miss least
+        const x = [...zone].sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
+        if (x) { removeFrom(zone, x.uid); t.banished.push(x); log(s, t.id, `${t.name} banishes ${cardOf(x).name} from their ${e.kind === 'oppBanishHand' ? 'hand' : 'arsenal'}.`); banishedFromOpp(s, p, x); }
+        break;
+      }
       case 'oppDiscardRandom':
         for (let i = 0; i < e.amount; i++) {
           if (!opp.hand.length) break;

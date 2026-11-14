@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import './setup';
 import { findCard, getDb } from '../data/cardDb';
-import { applyAction, createGame, HERO_INDEX, playOptions } from '../engine/game';
+import { applyAction, cardOf, createGame, HERO_INDEX, playOptions } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import { chooseAction } from '../ai/bot';
 import { getHeroAbility } from '../engine/heroes';
@@ -157,5 +157,27 @@ describe('Smash Palace event deck', () => {
     const life = s.players[0].life;
     s = applyAction(s, { type: 'choose', picks: [] }); // take it
     expect(s.players[0].life).toBe(life - 3);
+  });
+});
+
+describe('Arakni, Marionette and the Agents of Chaos', () => {
+  it('becomes a random Agent of Chaos when an opponent is marked, and returns to the brood at the next end phase', () => {
+    const mari = findCard('Arakni, Marionette')!;
+    const filler = findCard('Wounding Blow', 3)!.id;
+    const mk = (heroId: string) => ({ heroId, weaponIds: [], equipmentIds: [], cardIds: Array(30).fill(filler) });
+    let s = structuredClone(createGame([{ name: 'P0', isBot: false, deck: mk(mari.id) }, { name: 'P1', isBot: false, deck: mk(findCard('Dorinthea')!.id) }], 11, 'cc'));
+    s.turnPlayer = 0; s.priority = 0;
+    s.players[1].marked = true;
+    const endTurn = () => { for (let i = 0; i < 6 && s.phase !== 'arsenal'; i++) s = applyAction(s, { type: 'pass' }); s = applyAction(s, { type: 'arsenal', uid: null }); };
+    endTurn();
+    const agent = cardOf(s.players[0].hero);
+    expect(agent.types).toContain('Demi-Hero');
+    expect(s.players[0].broodOf).toBe(mari.id);
+    // P1's turn, then P0's: at P0's end phase the agent returns to the brood
+    endTurn();
+    s.players[1].marked = false;
+    endTurn();
+    expect(cardOf(s.players[0].hero).name).toBe('Arakni, Marionette');
+    expect(s.players[0].broodOf).toBeUndefined();
   });
 });

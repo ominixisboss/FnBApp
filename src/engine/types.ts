@@ -92,6 +92,8 @@ export interface PlayerState {
   focus?: PlayerId;
   /** Shiyana: the hero she is copying until the start of her next turn */
   copyOf?: string;
+  /** Arakni, Marionette became an Agent of Chaos: the hero card it returns to ("return to the brood") */
+  broodOf?: string;
   /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */
   inventory?: string[];
   /** Yoji: the next damage to this hero this turn is dealt to that player instead (1 of it prevented) */

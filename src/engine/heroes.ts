@@ -1,7 +1,7 @@
 // Hero abilities. Each ability is matched by the hero's rules text, so young and
 // adult versions of a hero that share text share an implementation.
 import type { Card } from '../data/types';
-import { card, findCard, has } from '../data/cardDb';
+import { card, findCard, getDb, has } from '../data/cardDb';
 import type { CardInst, ChainLink, GameState, PlayerState } from './types';
 import { getScript } from './cardScript';
 
@@ -139,7 +139,117 @@ const countTokens = (p: PlayerState, name: string) => p.permanents.filter((pm) =
 const lowestValue = (list: CardInst[]) =>
   [...list].sort((a, b) => (cardOf(b).pitch ?? 0) - (cardOf(a).pitch ?? 0) || Number(cardOf(a).power ?? 0) - Number(cardOf(b).power ?? 0))[0];
 
+/** Agents of Chaos: the Demi-Heroes Arakni, Marionette becomes */
+const agentsOfChaos = () => getDb().cards.filter((c) => c.types.includes('Demi-Hero') && /return to the brood/i.test(c.text));
+/** "At the beginning of your end phase, return to the brood." */
+const returnToBrood = ({ s, p, api }: HeroCtx) => {
+  if (s.turnPlayer !== p.id || !p.broodOf) return;
+  const was = cardOf(p.hero).name;
+  p.hero.cardId = p.broodOf;
+  p.broodOf = undefined;
+  api.log(p, `${was} returns to the brood: ${p.name} is ${cardOf(p.hero).name} again.`);
+};
+/** "Once per Turn Attack Reaction - Discard an Assassin card: Target <Assassin / dagger> attack gets +3{p}. If it has stealth, ..." */
+const agentReaction = (label: string, attackOk: (c: Card) => boolean, stealthBonus?: (l: ChainLink) => void): HeroActivation => ({
+  label, instant: true, oncePerTurn: true,
+  cost: () => 0,
+  canUse: ({ s, p }) => {
+    const l = s.chain[s.chain.length - 1];
+    return s.phase === 'reaction' && !!l && l.attacker === p.id && l.damage === null && attackOk(cardOf(l.inst)) && p.hand.some((h) => cardOf(h).types.includes('Assassin'));
+  },
+  resolve: ({ s, p, api }) => {
+    const l = s.chain[s.chain.length - 1];
+    const d = lowestValue(p.hand.filter((h) => cardOf(h).types.includes('Assassin')));
+    if (!l || !d) return;
+    api.discard(p, d);
+    l.powerMod += 3;
+    api.log(p, `${cardOf(l.inst).name} gets +3{p}.`);
+    if (stealthBonus && cardOf(l.inst).keywords.includes('Stealth')) stealthBonus(l);
+  },
+  botValue: ({ p }) => (p.hand.filter((h) => cardOf(h).types.includes('Assassin')).length > 1 ? 1.5 : 0.6),
+});
+
 export const HERO_ABILITIES: HeroAbility[] = [
+  {
+    id: 'marionette',
+    summary: 'Your stealth attacks at a marked hero get +1{p} and go again when they hit. At the beginning of your end phase, if an opponent is marked, become a random Agent of Chaos (it returns to the brood at your next end phase).',
+    match: (t) => t.startsWith('Your attacks with stealth that are attacking a marked hero get +1{p}'),
+    onAttack: ({ s, p }, l) => {
+      if (l.attacker !== p.id || !cardOf(l.inst).keywords.includes('Stealth') || !s.players[l.defender ?? -1]?.marked) return;
+      l.powerMod += 1;
+      l.extraOnHit = [...l.extraOnHit, { kind: 'thisGoAgain' }];
+    },
+    endPhase: ({ s, p, api }) => {
+      if (s.turnPlayer !== p.id || p.broodOf || !s.players.some((q) => q.id !== p.id && !q.eliminated && q.marked)) return;
+      const agents = agentsOfChaos();
+      if (!agents.length) return;
+      const agent = agents[Math.floor(api.random() * agents.length)];
+      p.broodOf = p.hero.cardId;
+      p.hero.cardId = agent.id;
+      api.log(p, `An opponent is marked: ${p.name} becomes ${agent.name}, an Agent of Chaos.`);
+    },
+  },
+  {
+    id: 'agentWidow',
+    summary: 'Agent of Chaos. Once per turn Attack Reaction, discard an Assassin card: your Assassin attack gets +3{p}; with stealth, "when this hits a hero, they banish a card from their hand". Returns to the brood at your end phase.',
+    match: (t) => t.startsWith('Once per Turn Attack Reaction - Discard an Assassin card: Target Assassin attack gets +3{p}. If it has stealth, it gets "When this hits a hero, they banish a card from their hand."'),
+    activations: [agentReaction('Discard an Assassin card: +3{p}', (c) => c.types.includes('Assassin'), (l) => { l.extraOnHit = [...l.extraOnHit, { kind: 'oppBanishHand' }]; })],
+    endPhase: returnToBrood,
+  },
+  {
+    id: 'agentFunnel',
+    summary: 'Agent of Chaos. Once per turn Attack Reaction, discard an Assassin card: your Assassin attack gets +3{p}; with stealth, "when this hits a hero, banish a card in their arsenal". Returns to the brood at your end phase.',
+    match: (t) => t.startsWith('Once per Turn Attack Reaction - Discard an Assassin card: Target Assassin attack gets +3{p}. If it has stealth, it gets "When this hits a hero, banish a card in their arsenal."'),
+    activations: [agentReaction('Discard an Assassin card: +3{p}', (c) => c.types.includes('Assassin'), (l) => { l.extraOnHit = [...l.extraOnHit, { kind: 'oppBanishArsenal' }]; })],
+    endPhase: returnToBrood,
+  },
+  {
+    id: 'agentRedback',
+    summary: 'Agent of Chaos. Once per turn Attack Reaction, discard an Assassin card: your Assassin attack gets +3{p}, and go again if it has stealth. Returns to the brood at your end phase.',
+    match: (t) => t.startsWith('Once per Turn Attack Reaction - Discard an Assassin card: Target Assassin attack gets +3{p}. If it has stealth, it gets go again.'),
+    activations: [agentReaction('Discard an Assassin card: +3{p}', (c) => c.types.includes('Assassin'), (l) => { l.goAgain = true; })],
+    endPhase: returnToBrood,
+  },
+  {
+    id: 'agentTarantula',
+    summary: 'Agent of Chaos. Whenever a dagger you own hits a hero, they lose 1{h}. Once per turn Attack Reaction, discard an Assassin card: your dagger attack gets +3{p}. Returns to the brood at your end phase.',
+    match: (t) => t.startsWith('Whenever a dagger you own hits a hero, they lose 1{h}.'),
+    activations: [agentReaction('Discard an Assassin card: dagger +3{p}', (c) => c.types.includes('Dagger'))],
+    onHit: ({ s, p, api }, l) => {
+      if (l.attacker !== p.id || !cardOf(l.inst).types.includes('Dagger')) return;
+      const t = s.players[l.defender ?? -1];
+      if (t) { t.life -= 1; api.log(t, `${t.name} loses 1 life (${t.life}) from ${cardOf(p.hero).name}.`); }
+    },
+    endPhase: returnToBrood,
+  },
+  {
+    id: 'agentOrbWeaver',
+    summary: 'Agent of Chaos. Once per turn Instant, discard an Assassin card: your next stealth attack this turn gets +3{p}. Returns to the brood at your end phase.',
+    partial: true, // the Graphene Chelicera token weapon isn't equipped
+    match: (t) => t.startsWith('Graphene Chelicerae cost you {r} less to activate.'),
+    activations: [{
+      label: 'Discard an Assassin card: next stealth attack +3{p}', instant: true, oncePerTurn: true,
+      cost: () => 0,
+      canUse: ({ p }) => p.hand.some((h) => cardOf(h).types.includes('Assassin')),
+      resolve: ({ p, api }) => {
+        const d = lowestValue(p.hand.filter((h) => cardOf(h).types.includes('Assassin')));
+        if (!d) return;
+        api.discard(p, d);
+        p.effects.push({ kind: 'nextAttackPower', amount: 3, filter: { kind: 'keyword', value: 'Stealth' }, source: 'Arakni, Orb-Weaver' });
+        api.log(p, `${p.name}'s next attack with stealth this turn gets +3{p}.`);
+      },
+      botValue: () => 0.8,
+    }],
+    endPhase: returnToBrood,
+  },
+  {
+    id: 'agentTrapDoor',
+    summary: 'Agent of Chaos. Returns to the brood at your end phase.',
+    partial: true, // "when you become this, search your deck for a card and banish it face-down" isn't automated
+    match: (t) => t.startsWith('When you become this, you may search your deck for a card, banish it face-down'),
+    endPhase: returnToBrood,
+  },
+
   {
     id: 'dorinthea',
     summary: 'The first time your weapon attack hits each turn, that weapon can attack again.',
