@@ -27,7 +27,7 @@ export function SymText({ text }: { text: string }) {
         const m = part.match(/^\{([a-z])\}$/);
         const sym = m && SYMBOLS[m[1]];
         if (!sym) return <Fragment key={i}>{part}</Fragment>;
-        return <span key={i} className={`sym sym-${sym.cls}`} role="img" aria-label={sym.word} title={sym.word}>{sym.icon}</span>;
+        return <span key={i} className={`glyph glyph-${sym.cls}`} role="img" aria-label={sym.word} title={sym.word}>{sym.icon}</span>;
       })}
     </>
   );

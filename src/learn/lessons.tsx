@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { SymText } from '../ui/symbols';
 
 export interface Lesson {
   id: string;
@@ -171,8 +172,57 @@ export const LESSONS: Lesson[] = [
     ),
   },
   {
+    id: 'advanced',
+    title: '9. Advanced mechanics',
+    body: (
+      <>
+        <p>Card text uses small symbols. In this app they appear as icons:</p>
+        <ul>
+          <li><SymText text="{r}" /> resource, <SymText text="{p}" /> power, <SymText text="{d}" /> defense, <SymText text="{h}" /> life, <SymText text="{i}" /> intellect</li>
+          <li><SymText text="{t}" /> tap and <SymText text="{u}" /> untap</li>
+        </ul>
+        <h3>Tapping</h3>
+        <p>
+          Some costs say <SymText text="{t}" />: turn the card sideways. A tapped hero, ally, item or cog can’t pay another <SymText text="{t}" /> cost until it
+          untaps at the start of its controller’s turn. Tapped cards tilt and show a ⟲ badge. Equipment and weapons that tap count as used for the turn.
+        </p>
+        <h3>Allies</h3>
+        <p>
+          Allies are permanents with power and life. One that says “Action - <SymText text="{t}" />: Attack” attacks with its own power, and it stays in the arena afterwards.
+          An ally attack isn’t a weapon attack, so “weapon attacks get +1<SymText text="{p}" />” doesn’t apply. Attacks can target allies, and an ally is destroyed when damage reaches its life.
+          Tap an ally to use it. If it has two abilities, you’ll get a menu.
+        </p>
+        <h3>Triggered abilities</h3>
+        <p>
+          Auras, items, allies, equipment and weapons often say “When…”, “Whenever…” or “At the beginning of…”. These happen by themselves:
+          at the start of your turn, at the start of your action phase or end phase, when the combat chain closes, when you play an attack, when one hits, when you boost, beat chest or win a wager.
+          “You may” abilities ask you first. The log shows each one as it happens.
+        </p>
+        <h3>The attacking card’s own abilities</h3>
+        <p>
+          Some attacks have instant abilities, like “Instant - <SymText text="{t}" /> a cog you control: This gets +1<SymText text="{p}" />”. They can be used while the card is the
+          active attack. Tap it on the combat chain.
+        </p>
+        <h3>Meld</h3>
+        <p>
+          A meld card (“Arcane Seeds // Life”) has two halves. Play the left half, the right half, or both. The Action half needs an action point like any action. The Instant half can be played any time you could play an instant.
+        </p>
+        <h3>Transcend</h3>
+        <p>
+          Mystic cards say “If you’ve played another blue card this turn, transcend”. Once you transcend, every “If you’ve transcended this turn” payoff is on for the rest of the turn.
+        </p>
+        <h3>Dice, “counts as” and Pit Fight</h3>
+        <ul>
+          <li>“Roll a 6 sided die”: the roll appears in the log, and the card uses the number rolled.</li>
+          <li>“This counts as a Gold / Runechant”: it is counted and spent as one. A card that counts as a Runechant goes off like one when you attack, plus its own “usurp” bonus.</li>
+          <li>In Pit Fight, “each opponent”, “each other hero” and “each hero” really means everyone else at the table.</li>
+        </ul>
+      </>
+    ),
+  },
+  {
     id: 'app',
-    title: '9. How this simulator works',
+    title: '10. How this simulator works',
     body: (
       <>
         <p>
@@ -184,8 +234,12 @@ export const LESSONS: Lesson[] = [
           Card text is compiled automatically from templated sentences such as “Draw a card”, “Deal 2 arcane damage”, “Your next attack
           this turn gets +2{'{p}'}”, “When this hits, …” and “If this was played from arsenal, …”. Each card’s detail page shows how much of its text is automated.
         </p>
+        <p>
+          Hero abilities are automated, and so are triggered abilities, tapping, ally attacks, meld, transcend and dice.
+          About two in five cards have their full text automated, and another quarter have part of it. The cards people play most come first.
+        </p>
         <C>
-          <b>Not everything is automated yet</b>: hero abilities and many unique card effects aren’t. Open the <b>🛠 Manual</b> panel in a
+          <b>Not everything is automated yet</b>: many unique card effects aren’t. Open the <b>🛠 Manual</b> panel in a
           game to adjust life, draw, add resources or action points, change attack power, or create tokens. That lets you apply any text yourself.
         </C>
       </>
@@ -216,4 +270,13 @@ export const GLOSSARY: [string, string][] = [
   ['Intellect', 'You draw up to this many cards at the end of your turn.'],
   ['Legendary', 'Only one copy allowed in a deck.'],
   ['Specialization', 'Only the named hero can include this card.'],
+  ['Tap ({t}) / Untap ({u})', 'Turn a card sideways to pay a cost; it untaps at the start of its controller’s turn.'],
+  ['Ally', 'A permanent with power and life that can attack with its own ability and stays in the arena.'],
+  ['Meld', 'A two-halved card: play either half, or both.'],
+  ['Transcend', 'A Mystic card turns over; “if you’ve transcended this turn” payoffs apply.'],
+  ['Usurp', 'When an attack uses up a card that counts as a Runechant, that card’s own bonus applies.'],
+  ['Crush', 'A bonus when this deals 4 or more damage to a hero.'],
+  ['Wager', 'Both heroes stake something; if the attack hits, its attacker wins the wager, otherwise the defending hero does.'],
+  ['Clash', 'Each hero reveals the top card of their deck; the one with the greater power wins.'],
+  ['Protect', '(Pit Fight) This can defend an attack aimed at another hero.'],
 ];

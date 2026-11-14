@@ -1768,10 +1768,10 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 .hero-box .is-tapped { transform: rotate(8deg); }
 
 /* card-text symbols ({r}, {p}, {d}, {h} ...) drawn inline */
-.sym { display: inline-block; margin: 0 .08em; font-style: normal; line-height: 1; }
-.sym-res { color: #e9c46a; }
-.sym-pow { color: #e76f51; }
-.sym-def { filter: saturate(.7); }
-.sym-life { color: #e5484d; }
-.sym-int { filter: saturate(.7); }
-.sym-tap, .sym-chi, .sym-x { color: var(--accent, #e9c46a); font-weight: 700; }
+.glyph { display: inline-block; margin: 0 .08em; font-style: normal; line-height: 1; }
+.glyph-res { color: #e9c46a; }
+.glyph-pow { color: #e76f51; }
+.glyph-def { filter: saturate(.7); }
+.glyph-life { color: #e5484d; }
+.glyph-int { filter: saturate(.7); }
+.glyph-tap, .glyph-chi, .glyph-x { color: var(--accent, #e9c46a); font-weight: 700; }
