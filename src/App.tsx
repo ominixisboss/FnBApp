@@ -1,33 +1,62 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { loadCardDb } from './data/cardDb';
 import type { CardDb } from './data/cardDb';
 import HomePage from './ui/pages/HomePage';
-import CardsPage from './ui/pages/CardsPage';
-import DecksPage from './ui/pages/DecksPage';
-import PlayPage, { TABLE_DECK } from './ui/pages/PlayPage';
-import LearnPage from './ui/pages/LearnPage';
+import { TABLE_DECK } from './online/tableDeck';
 import { animationsEnabled, setAnimations } from './ui/components/Fx';
 import { musicEnabled, setBaseMood, setMusicEnabled, startMusic } from './ui/music';
 import { canLeave } from './ui/navGuard';
 import { HoverCardLayer } from './ui/components/HoverCard';
-import ProfilePage, { Avatar } from './ui/pages/ProfilePage';
-import AccountPage from './ui/pages/AccountPage';
-import PuzzlesPage from './ui/pages/PuzzlesPage';
-import GauntletPage from './ui/pages/GauntletPage';
-import LimitedPage from './ui/pages/LimitedPage';
-import TournamentPage from './ui/pages/TournamentPage';
-import ToolsPage from './ui/pages/ToolsPage';
-import CupsPage from './ui/pages/CupsPage';
+import { Avatar } from './ui/components/Avatar';
 import { checkServer, useAuth } from './ui/auth';
 import { loadProfile } from './stats/profile';
 import { loadMatches } from './stats/matches';
 import { online, useOnline } from './online/client';
-import ReplayPage from './ui/pages/ReplayPage';
-import PrivacyPage from './ui/pages/PrivacyPage';
-import GuidesPage from './ui/pages/GuidesPage';
-import DrillsPage from './ui/pages/DrillsPage';
-import CampaignPage from './ui/pages/CampaignPage';
 import { computeProgress } from './stats/progress';
+
+const PAGE_LOADERS = {
+  CardsPage: () => import('./ui/pages/CardsPage'),
+  DecksPage: () => import('./ui/pages/DecksPage'),
+  LearnPage: () => import('./ui/pages/LearnPage'),
+  AccountPage: () => import('./ui/pages/AccountPage'),
+  PuzzlesPage: () => import('./ui/pages/PuzzlesPage'),
+  GauntletPage: () => import('./ui/pages/GauntletPage'),
+  LimitedPage: () => import('./ui/pages/LimitedPage'),
+  TournamentPage: () => import('./ui/pages/TournamentPage'),
+  ToolsPage: () => import('./ui/pages/ToolsPage'),
+  CupsPage: () => import('./ui/pages/CupsPage'),
+  ReplayPage: () => import('./ui/pages/ReplayPage'),
+  PrivacyPage: () => import('./ui/pages/PrivacyPage'),
+  GuidesPage: () => import('./ui/pages/GuidesPage'),
+  DrillsPage: () => import('./ui/pages/DrillsPage'),
+  CampaignPage: () => import('./ui/pages/CampaignPage'),
+  PlayPage: () => import('./ui/pages/PlayPage'),
+  ProfilePage: () => import('./ui/pages/ProfilePage'),
+};
+/** once the app is up, fetch the other pages in the background so they're ready (and cached for offline use) */
+function preloadPages() {
+  const go = () => { for (const load of Object.values(PAGE_LOADERS)) void load().catch(() => {}); };
+  const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
+  if (idle) idle(go); else setTimeout(go, 2000);
+}
+// pages load when they're first opened (a smaller first download)
+const CardsPage = lazy(PAGE_LOADERS.CardsPage);
+const DecksPage = lazy(PAGE_LOADERS.DecksPage);
+const LearnPage = lazy(PAGE_LOADERS.LearnPage);
+const AccountPage = lazy(PAGE_LOADERS.AccountPage);
+const PuzzlesPage = lazy(PAGE_LOADERS.PuzzlesPage);
+const GauntletPage = lazy(PAGE_LOADERS.GauntletPage);
+const LimitedPage = lazy(PAGE_LOADERS.LimitedPage);
+const TournamentPage = lazy(PAGE_LOADERS.TournamentPage);
+const ToolsPage = lazy(PAGE_LOADERS.ToolsPage);
+const CupsPage = lazy(PAGE_LOADERS.CupsPage);
+const ReplayPage = lazy(PAGE_LOADERS.ReplayPage);
+const PrivacyPage = lazy(PAGE_LOADERS.PrivacyPage);
+const GuidesPage = lazy(PAGE_LOADERS.GuidesPage);
+const DrillsPage = lazy(PAGE_LOADERS.DrillsPage);
+const CampaignPage = lazy(PAGE_LOADERS.CampaignPage);
+const PlayPage = lazy(PAGE_LOADERS.PlayPage);
+const ProfilePage = lazy(PAGE_LOADERS.ProfilePage);
 
 // [route, label, short label (phones), icon]
 const ROUTES = [
@@ -62,7 +91,7 @@ export default function App() {
   const [route, ...rest] = hash.split('/');
   const [anim, setAnim] = useState(animationsEnabled);
   useEffect(() => {
-    loadCardDb().then(setDb, (e) => setError(String(e)));
+    loadCardDb().then((d) => { setDb(d); preloadPages(); }, (e) => setError(String(e)));
   }, []);
   useEffect(() => setAnimations(anim), [anim]);
   const [music, setMusic] = useState(musicEnabled);
@@ -128,6 +157,7 @@ export default function App() {
         {!db && !error && <p className="muted">Loading the card database…</p>}
         {db && (
           <div key={route} className="page-anim">
+            <Suspense fallback={<p className="muted">Loading…</p>}>
             {route === '' && <HomePage db={db} />}
             {route === 'learn' && <LearnPage lesson={rest[0]} />}
             {route === 'play' && <PlayPage />}
@@ -146,6 +176,7 @@ export default function App() {
             {route === 'guides' && <GuidesPage heroId={rest[0]} />}
             {route === 'drills' && <DrillsPage />}
             {route === 'campaign' && <CampaignPage id={rest[0]} />}
+            </Suspense>
           </div>
         )}
       </main>

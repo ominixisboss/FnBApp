@@ -90,6 +90,11 @@ export type Effect =
   | { kind: 'treasurePut' }
   | { kind: 'treasureTake'; thiefGold: boolean }
   | { kind: 'treasureDivvy' }
+  /** "Target <X> attack gets 'When this hits ...'" / dominate / overpower / "damage can't be prevented" */
+  | { kind: 'targetAttackOnHit'; filter: AttackFilter; effects: Effect[] }
+  | { kind: 'targetAttackKeyword'; filter: AttackFilter; keyword: 'dominate' | 'overpower' | 'unpreventable' }
+  /** steal (gain control of) a Gold token / an aura token / an item / an ally they control; temporary: until the end of this action phase */
+  | { kind: 'steal'; what: 'gold' | 'auraToken' | 'item' | 'ally'; temporary?: boolean }
   | { kind: 'counterUpkeep'; counter: string }
   /** "remove a verse counter from this" (+ "If you do, <then>") */
   | { kind: 'removeCounter'; counter: string; then?: Effect[] }
@@ -458,7 +463,9 @@ const HERO_CLASSES = ['Brute', 'Guardian', 'Warrior', 'Ninja', 'Wizard', 'Pirate
 
 function parseFilter(words: string): AttackFilter | null {
   const w = words.trim();
+  let m0: RegExpMatchArray | null;
   if (w === '') return { kind: 'any' };
+  if ((m0 = w.match(/^(stealth|combo|crush)kw$/i))) return { kind: 'keyword', value: m0[1][0].toUpperCase() + m0[1].slice(1).toLowerCase() };
   if (/^ally$/i.test(w)) return { kind: 'ally' };
   if (/^weapon$/i.test(w)) return { kind: 'weapon' };
   const sub = SUBTYPES.find((s) => w.toLowerCase() === s);
@@ -477,7 +484,9 @@ function parseFilter(words: string): AttackFilter | null {
 
 /** Parse one effect clause such as "Draw a card" into effects. */
 export function parseEffect(raw: string): Effect[] | null {
-  const s = raw.trim().replace(/\.$/, '').trim();
+  // "target attack action card with stealth", "your next attack with stealth": the keyword becomes the filter word
+  const s = raw.trim().replace(/\.$/, '').trim().replace(/^(target|your next) (attack(?: action card)?) with (stealth|combo|crush)\b/i, (_x, a: string, b: string, kw: string) => `${a} ${kw.toLowerCase()}kw ${b}`)
+    .replace(/^your (attacks) with (stealth|combo|crush) get\b/i, (_x, a: string, kw: string) => `your ${kw.toLowerCase()}kw ${a} get`);
   let m: RegExpMatchArray | null;
   if (!s) return [];
   if (/^put a card from your arsenal on the bottom of your deck\. if you do, draw a card$/i.test(s)) return [{ kind: 'arsenalCycle' }];
@@ -654,6 +663,21 @@ export function parseEffect(raw: string): Effect[] | null {
     }
     if (out.length) return out;
   }
+  // "Target Lightning attack action card gets +3{p} and "When this hits a hero, deal 4 damage to them.""
+  if ((m = s.match(/^target (?:([\w ]+?) )?attack(?: action card)? gets (.+)$/i)) && /"/.test(m[2])) {
+    const f = parseFilter(m[1] ?? '');
+    const items = m[2].match(/"[^"]*"|[^,"]+/g)?.flatMap((x) => (x.startsWith('"') ? [x.trim()] : x.split(/(?:^|\s+)and(?:\s+|$)/i).map((y) => y.trim()))).filter((x) => x && x !== 'and') ?? [];
+    const out: Effect[] = [];
+    for (const it of f ? items : []) {
+      let k: RegExpMatchArray | null;
+      if ((k = it.match(/^\+(\d+)\{p\}$/))) out.push({ kind: 'targetAttackPower', amount: +k[1], filter: f! });
+      else if (/^go again$/i.test(it)) out.push({ kind: 'targetAttackGoAgain', filter: f! });
+      else if (/^(dominate|overpower)$/i.test(it)) out.push({ kind: 'targetAttackKeyword', filter: f!, keyword: it.toLowerCase() as 'dominate' });
+      else if (/^"damage (?:this would deal|that would be dealt by this) can't be prevented\.?"$/i.test(it)) out.push({ kind: 'targetAttackKeyword', filter: f!, keyword: 'unpreventable' });
+      else { const e = parseHitGrant(it); if (!e) { out.length = 0; break; } out.push({ kind: 'targetAttackOnHit', filter: f!, effects: e }); }
+    }
+    if (out.length) return out;
+  }
   // "the next Runeblade attack action card you play this turn gets go again and "When this hits, ...""
   if ((m = s.match(/^the next (\w+) attack action card you play this turn gets (.+)$/i))) {
     const f = { kind: 'classAttackAction' as const, value: titleCase(m[1]) };
@@ -663,7 +687,7 @@ export function parseEffect(raw: string): Effect[] | null {
       let k: RegExpMatchArray | null;
       if ((k = it.match(/^\+(\d+)\{p\}$/))) out.push({ kind: 'nextAttackPower', amount: +k[1], filter: f });
       else if (/^go again$/i.test(it)) out.push({ kind: 'nextAttackGoAgain', filter: f });
-      else if ((k = it.match(/^"when this hits(?: a hero)?, (.+?)\.?"$/i))) { const e = parseEffect(k[1]); if (!e) return null; out.push({ kind: 'nextAttackOnHit', filter: f, effects: e }); }
+      else if ((k = it.match(/^"when this hits/i))) { const e = parseHitGrant(it); if (!e) return null; out.push({ kind: 'nextAttackOnHit', filter: f, effects: e }); }
       else return null;
     }
     if (out.length) return out;
@@ -714,6 +738,10 @@ export function parseEffect(raw: string): Effect[] | null {
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{d\} this chain link$/i))) return [{ kind: 'thisDefense', amount: +m[1] }];
   if ((m = s.match(/^(?:this|it) gets \+(\d+)\{p\} and \+(\d+)\{d\}$/i))) return [{ kind: 'thisPower', amount: +m[1] }, { kind: 'thisDefense', amount: +m[2] }];
   if (/^destroy this$/i.test(s)) return [{ kind: 'destroySelf' }];
+  if ((m = s.match(/^steal (a gold token|an aura token|an item|an ally) (?:they|the attacking hero|the defending hero) controls?( until (?:the )?end of (?:this action phase|turn))?$/i)))
+    return [{ kind: 'steal', what: ({ 'a gold token': 'gold', 'an aura token': 'auraToken', 'an item': 'item', 'an ally': 'ally' } as const)[m[1].toLowerCase() as 'an item'], temporary: !!m[2] || undefined }];
+  if ((m = s.match(/^deal (\d+) damage to them$/i))) return [{ kind: 'damage', amount: +m[1] }];
+  if (/^destroy (?:a|the) card in their arsenal$/i.test(s)) return [{ kind: 'oppArsenalDestroy' }];
   if (/^(?:you may )?put a gold counter on treasure island$/i.test(s)) return [{ kind: 'treasurePut' }];
   if (/^remove half the gold counters from treasure island, rounded up$/i.test(s)) return [{ kind: 'treasureDivvy' }];
   if (/^(?:you may )?remove a gold counter from treasure island$/i.test(s)) return [{ kind: 'treasureTake', thiefGold: true }];
@@ -1279,6 +1307,15 @@ function parseMeld(c: Card, text: string): { modes: Mode[]; goAgain: boolean } |
   const [ln, rn] = c.name.split(' // ');
   const mode = (label: string, onPlay: Effect[]): Mode => ({ label, onPlay, onAttack: [], onHit: [], parsed: true });
   return { modes: [mode(ln, left.effects), mode(rn, right.effects), mode(`Meld: ${ln} and ${rn}`, [...left.effects, ...right.effects])], goAgain: left.goAgain };
+}
+
+/** a quoted on-hit grant: '"When this hits (a Warrior hero), <effects>."' */
+function parseHitGrant(q: string): Effect[] | null {
+  const k = q.match(/^"when this hits(?: (?:an? ([A-Z][a-z]+) )?hero)?, (.+?)\.?"$/i);
+  if (!k) return null;
+  const e = parseEffect(k[2]);
+  if (!e) return null;
+  return k[1] ? [{ kind: 'ifOppClass', cls: k[1], then: e }] : e;
 }
 
 /** "When this hits, you may <cost>." + "If you do, <effects>." as an effect on the matching trigger */

@@ -107,6 +107,12 @@ export interface HeroAbility {
   cardCostMod?(ctx: HeroCtx, c: Card): number;
   /** cards you may play from your banished zone */
   playFromBanished?(ctx: HeroCtx, c: Card): boolean;
+  /** Killjoy: may attack any opposing hero (Pit Fight) */
+  attackAny?: boolean;
+  /** a trap you control triggered while defending (Riptide) */
+  onTrap?(ctx: HeroCtx, link: ChainLink): void;
+  /** Blasmophet: instead of losing {h} from blood debt (return true when handled) */
+  bloodDebtInstead?(ctx: HeroCtx, debt: number): boolean;
   /** Levia: skip blood debt this end phase */
   skipBloodDebt?(ctx: HeroCtx): boolean;
   /** Lyath: halve base power / defense */
@@ -139,6 +145,16 @@ const countTokens = (p: PlayerState, name: string) => p.permanents.filter((pm) =
 const lowestValue = (list: CardInst[]) =>
   [...list].sort((a, b) => (cardOf(b).pitch ?? 0) - (cardOf(a).pitch ?? 0) || Number(cardOf(a).power ?? 0) - Number(cardOf(b).power ?? 0))[0];
 
+/** A Levia demi-hero form in this player's inventory */
+const leviaForm = (p: PlayerState, name: string) => p.inventory?.find((id) => card(id).name === name);
+/** Transform: the hero card becomes the demi-hero from the inventory (life and everything else stays) */
+export function transformInto(p: PlayerState, cardId: string, api: HeroApi) {
+  const was = cardOf(p.hero).name;
+  p.inventory = (p.inventory ?? []).filter((x) => x !== cardId);
+  p.hero.cardId = cardId;
+  api.log(p, `${was} transforms into ${cardOf(p.hero).name}.`);
+}
+
 /** Agents of Chaos: the Demi-Heroes Arakni, Marionette becomes */
 const agentsOfChaos = () => getDb().cards.filter((c) => c.types.includes('Demi-Hero') && /return to the brood/i.test(c.text));
 /** "At the beginning of your end phase, return to the brood." */
@@ -170,6 +186,42 @@ const agentReaction = (label: string, attackOk: (c: Card) => boolean, stealthBon
 });
 
 export const HERO_ABILITIES: HeroAbility[] = [
+  {
+    id: 'cindra',
+    summary: 'Whenever you hit a marked hero, create a Fealty token. Once per turn Instant {r}{r}{r} (1 less per Draconic chain link): equip up to 2 Draconic daggers from your graveyard.',
+    match: (t) => t.startsWith('Whenever you hit a marked hero, create a Fealty token') && t.includes('Equip up to 2 Draconic daggers from your graveyard'),
+    onHit({ p, opp, api }) { if (opp.marked) api.createToken(p, 'Fealty', 1); },
+    activations: [{
+      label: 'Equip up to 2 Draconic daggers from your graveyard', instant: true, oncePerTurn: true,
+      cost: ({ s, p }) => Math.max(0, 3 - s.chain.filter((l) => l.attacker === p.id && cardOf(l.inst).types.includes('Draconic')).length),
+      canUse: ({ p }) => p.weapons.length < 2 && p.graveyard.some((g) => { const c = cardOf(g); return c.types.includes('Dagger') && c.types.includes('Draconic') && c.types.includes('Weapon'); }),
+      resolve: ({ p, api }) => {
+        for (let i = 0; i < 2 && p.weapons.length < 2; i++) {
+          const g = p.graveyard.find((x) => { const c = cardOf(x); return c.types.includes('Dagger') && c.types.includes('Draconic') && c.types.includes('Weapon'); });
+          if (!g) break;
+          p.graveyard = p.graveyard.filter((x) => x !== g);
+          p.weapons.push({ inst: g, usedThisTurn: false });
+          api.log(p, `${p.name} equips ${cardOf(g).name} from the graveyard.`);
+        }
+      },
+      botValue: () => 1.8,
+    }],
+  },
+  {
+    id: 'blasmophet',
+    summary: 'Levia transformed. Once each turn, you may play a card with blood debt from your banished zone. If you would lose {h} from blood debt, instead banish the top card of your deck.',
+    match: (t) => t.includes('you may transform into Blasmophet, Levia Consumed'),
+    playFromBanished: ({ p }, c) => !flag(p, 'blasmoPlayed') && /blood debt/i.test(c.text),
+    onPlayCard: ({ p }, c) => { if (/blood debt/i.test(c.text) && Object.keys(p.turn.flags).some((k) => k.startsWith('banishedPlay') && p.turn.flags[k])) setFlag(p, 'blasmoPlayed'); },
+    bloodDebtInstead: ({ p, api }) => { const t = p.deck.shift(); if (t) { p.banished.push(t); api.log(p, `Blasmophet: instead of losing life to blood debt, ${p.name} banishes ${cardOf(t).name} from the top of their deck.`); } return true; },
+  },
+  {
+    id: 'levia-redeemed',
+    summary: 'Levia transformed. Cards you own lose blood debt.',
+    match: (t) => t.includes('Transform into Levia, Redeemed'),
+    skipBloodDebt: () => true,
+  },
+
   {
     id: 'marionette',
     summary: 'Your stealth attacks at a marked hero get +1{p} and go again when they hit. At the beginning of your end phase, if an opponent is marked, become a random Agent of Chaos (it returns to the brood at your next end phase).',
@@ -314,8 +366,7 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'fealty-on-marked-hit',
-    summary: 'Whenever you hit a marked hero, create a Fealty token.',
-    partial: true,
+    summary: 'Whenever you hit a marked hero, create a Fealty token. (Fang: with 3 or more Fealty, dagger attacks cost {r} less.)',
     match: (t) => t.startsWith('Whenever you hit a marked hero, create a Fealty token'),
     onHit({ p, opp, api }) {
       if (opp.marked) api.createToken(p, 'Fealty', 1);
@@ -372,8 +423,9 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'kayo-6',
-    summary: 'Instant {r}{r}{r}{r}: your attacking attack action card has 6 base power.',
-    partial: true,
+    summary: 'Instant {r}{r}{r}{r}, tap: your attacking attack action card has 6 base power. Whenever the crowd boos you, create a Vigor token.',
+    partial: true, // "you start the game with 1 weapon zone" isn't enforced by the deck builder
+    onBoo: ({ p, api }) => api.createToken(p, 'Vigor', 1),
     match: (t) => /Instant - \{r\}\{r\}\{r\}\{r\}, \{t\}: Target attack action card you control has 6 base/.test(t),
     activations: [{
       label: 'Attack has 6 base power', instant: true, oncePerTurn: true,
@@ -489,10 +541,21 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'kassai',
-    summary: 'If you’ve drawn a card this turn, your sword attacks cost {r} less.',
-    partial: true,
+    summary: 'If you’ve drawn a card this turn, your sword attacks cost {r} less. Once per turn Action, banish 2 red and 2 yellow cards from your graveyard: the next time a weapon hits a hero this turn, create a Gold token. Go again.',
     match: (t) => t.startsWith('If you\'ve drawn a card this turn, your sword attacks cost {r} less'),
     activationCostMod: ({ p }, source) => (p.turn.drew && source.types.includes('Sword') ? -1 : 0),
+    activations: [{
+      label: 'Banish 2 red and 2 yellow: next weapon hit makes a Gold', instant: false, oncePerTurn: true, goAgain: true,
+      cost: () => 0,
+      canUse: ({ p }) => p.graveyard.filter((g) => cardOf(g).pitch === 1).length >= 2 && p.graveyard.filter((g) => cardOf(g).pitch === 2).length >= 2,
+      resolve: ({ p, api }) => {
+        for (const pitch of [1, 2]) for (let i = 0; i < 2; i++) { const g = p.graveyard.find((x) => cardOf(x).pitch === pitch); if (g) { p.graveyard = p.graveyard.filter((x) => x !== g); p.banished.push(g); } }
+        setFlag(p, 'kassaiGold');
+        api.log(p, `${p.name} banishes 2 red and 2 yellow cards: the next time a weapon hits a hero this turn, create a Gold token.`);
+      },
+      botValue: ({ p }) => (p.weapons.length ? 1.6 : -1),
+    }],
+    onHit: ({ p, api }, l) => { if (flag(p, 'kassaiGold') && l.fromWeapon && !l.ally) { p.turn.flags.kassaiGold = 0; api.createToken(p, 'Gold', 1); } },
   },
   {
     id: 'tuffnut',
@@ -532,10 +595,17 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'lyath',
-    summary: 'The base power and defense of your cards are halved (rounded up).',
-    partial: true,
+    summary: 'The base power and defense of your cards are halved (rounded up). Instant {r}{r}, tap: the crowd boos you and your defending action cards get +1{d} this turn. Whenever the crowd boos you, create a Might token.',
     match: (t) => t.startsWith('The base {p} and {d} of cards you control are halved'),
     halveStats: true,
+    onBoo: ({ p, api }) => api.createToken(p, 'Might', 1),
+    activations: [{
+      label: 'The crowd boos you: defending action cards +1{d}', instant: true, oncePerTurn: false,
+      cost: () => 2,
+      canUse: ({ p }) => !flag(p, 'lyathDef'),
+      resolve: ({ p, api }) => { setFlag(p, 'lyathDef'); api.crowd(p, false); api.log(p, `${p.name}'s defending action cards get +1{d} this turn.`); },
+      botValue: ({ s, p }) => (s.phase === 'reaction' && s.chain.length && s.chain[s.chain.length - 1].attacker !== p.id ? 1.2 : -1),
+    }],
   },
   {
     id: 'valda',
@@ -562,23 +632,46 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'genis',
-    summary: 'Once per turn Action {r}{r}: (opponent declines to cycle) you draw a card. Go again.',
-    partial: true,
+    summary: 'Once per turn Action {r}{r}: each other hero may cycle a card (bottom of deck, then draw); for each who does you create a Silver, and if nobody does you draw. Go again.',
     match: (t) => t.startsWith('Once per Turn Action - {r}{r}: Each other hero may put a card from their hand on the bottom'),
     activations: [{
-      label: 'Draw a card', instant: false, oncePerTurn: true, goAgain: true,
+      label: 'Offer a cycle (draw if nobody takes it)', instant: false, oncePerTurn: true, goAgain: true,
       cost: () => 2,
       canUse: () => true,
-      resolve: ({ p, api }) => api.draw(p, 1),
+      resolve: ({ s, p, api }) => {
+        let silver = 0;
+        for (const q of s.players) {
+          if (q.id === p.id || q.eliminated || !q.hand.length) continue;
+          // bots cycle their weakest card when it's a blue they don't need; people are asked
+          if (!q.isBot) { api.ask(q, p, 'genisCycle', `${p.name} (Genis): put a card from your hand on the bottom of your deck and draw a card? ${p.name} gets a Silver.`, false, [q.id]); continue; }
+          const worst = lowestValue(q.hand);
+          if (worst && (cardOf(worst).pitch ?? 0) === 3 && Number(cardOf(worst).power ?? 0) < 4) {
+            q.hand = q.hand.filter((x) => x !== worst); q.deck.push(worst); api.draw(q, 1); silver++;
+            api.log(q, `${q.name} cycles a card.`);
+          }
+        }
+        if (silver) api.createToken(p, 'Silver', silver);
+        else if (!s.players.some((q) => q.id !== p.id && !q.isBot && !q.eliminated && q.hand.length)) api.draw(p, 1);
+      },
       botValue: () => 1.5,
     }],
+    onChoice: ({ s, p, api }, key, yes, data) => {
+      if (key !== 'genisCycle') return;
+      const q = s.players[data?.[0] ?? -1];
+      if (q && yes && q.hand.length) { const worst = lowestValue(q.hand)!; q.hand = q.hand.filter((x) => x !== worst); q.deck.push(worst); api.draw(q, 1); api.createToken(p, 'Silver', 1); }
+      else api.draw(p, 1);
+    },
   },
   {
     id: 'baalghor',
-    summary: 'Cards you pitch are banished instead of going to the bottom of your deck.',
-    partial: true,
+    summary: 'Cards you pitch are banished instead of going to the bottom of your deck. Attack action cards played from your banished zone get +3{p}.',
     match: (t) => t.startsWith('Whenever you pitch a card, banish it'),
     pitchToBanished: true,
+    onAttack: ({ p, api }, l) => {
+      if (l.attacker !== p.id || l.fromWeapon || !p.turn.flags[`banishedPlay${l.inst.uid}`]) return;
+      l.powerMod += 3;
+      api.log(p, `${cardOf(l.inst).name} was played from the banished zone: +3{p}.`);
+    },
   },
   {
     id: 'jarl',
@@ -653,6 +746,13 @@ HERO_ABILITIES.push(
     match: (t) => t.startsWith('If a card with 6 or more {p} has been put into your banished zone this turn, cards you own lose blood debt'),
     startOfTurn({ p }) { p.turn.flags.banStart = p.banished.length; },
     skipBloodDebt({ p }) { return p.banished.slice(p.turn.flags.banStart ?? 0).some((b) => Number(cardOf(b).power ?? 0) >= 6); },
+    activations: [{
+      label: 'Transform into Levia, Redeemed', instant: false, oncePerTurn: true,
+      cost: () => 0,
+      canUse: ({ p }) => !!leviaForm(p, 'Levia, Redeemed') && p.banished.filter((b) => /blood debt/i.test(cardOf(b).text)).length >= 13,
+      resolve: ({ p, api }) => { for (const b of p.banished) b.faceDown = true; transformInto(p, leviaForm(p, 'Levia, Redeemed')!, api); },
+      botValue: () => 5,
+    }],
   },
   {
     id: 'azalea-ace',
@@ -803,8 +903,8 @@ HERO_ABILITIES.push(
   },
   {
     id: 'killjoy',
-    summary: 'Whenever you steal a Gold, the crowd boos you. The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}.',
-    partial: true, // attacking any opposing hero only matters with more than one opponent
+    summary: 'You may attack any opposing hero. Whenever you steal a Gold, the crowd boos you. The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}.',
+    attackAny: true,
     match: (t) => t.includes('The first time the crowd boos you each turn, each hero with more {h} than you loses 1{h}'),
     onSteal: ({ p, api }, c) => { if (c.name === 'Gold') api.crowd(p, false); },
     onBoo: ({ s, p, api }) => {
@@ -1142,8 +1242,8 @@ HERO_ABILITIES.push(
   },
   {
     id: 'riptide',
-    summary: 'Whenever you play a card from hand, you may put a card from your hand face down into your empty arsenal.',
-    partial: true, // traps triggering isn't automated
+    summary: 'Whenever you play a card from hand, you may put a card from your hand face down into your empty arsenal. Whenever a trap you control triggers, deal 1 damage to the attacking hero.',
+    onTrap: ({ s, api }, l) => { const t = s.players[l.attacker]; if (t) api.dealDamage(t, 1, false, 'Riptide'); },
     match: (t) => t.startsWith('Whenever you play a card from hand, you may put a card from hand face-down into your arsenal'),
     onPlayCard: ({ p, api }) => { if (!p.arsenal.length && p.hand.length) api.askReload(p); },
   },

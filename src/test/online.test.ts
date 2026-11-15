@@ -70,6 +70,20 @@ describe('online play', () => {
     expect((await fetch(`${BASE}/api/decks`)).status).toBe(401);
   });
 
+  it('a private room keeps the host\'s macro (Treasure Island)', async () => {
+    const a = await account('mac1');
+    const b = await account('mac2');
+    const ca = await connect(a.token);
+    const cb = await connect(b.token);
+    ca.ws.send(JSON.stringify({ t: 'host', deck: toDeckList(autoBuildDeck(findCard('Dorinthea')!.id, 'blitz', 1)), format: 'blitz', macro: 'Treasure Island' }));
+    await until(() => !!ca.waiting?.code);
+    cb.ws.send(JSON.stringify({ t: 'join', code: ca.waiting!.code, deck: toDeckList(autoBuildDeck(findCard('Bravo')!.id, 'blitz', 2)) }));
+    await until(() => ca.states.length > 0 && cb.states.length > 0);
+    expect(ca.states.at(-1)!.macro).toBe('Treasure Island');
+    expect(cb.states.at(-1)!.macro).toBe('Treasure Island');
+    ca.ws.close(); cb.ws.close();
+  });
+
   it('plays a full game between two players through the server', async () => {
     const a = await account('alice');
     const b = await account('bob');
