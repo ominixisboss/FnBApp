@@ -11,8 +11,10 @@ export interface PuzzleDef {
   title: string;
   /** what the player is told */
   text: string;
-  me: { hero: string; hand: string[]; arsenal?: string; weapons?: string[]; equipment?: string[]; life?: number };
+  me: { hero: string; hand: string[]; arsenal?: string; weapons?: string[]; equipment?: string[]; life?: number; permanents?: string[] };
   opp: { hero: string; life: number; hand?: string[]; equipment?: string[] };
+  /** training positions: what to try, shown on the board */
+  guide?: string;
   /** the winning line, as card names in order (shown after a reveal) */
   solution?: string[];
 }
@@ -36,6 +38,8 @@ export function buildPuzzle(def: PuzzleDef): GameState {
   }
   me.hand = def.me.hand.map((c) => inst(s, c, 0));
   if (def.me.arsenal) me.arsenal = [inst(s, def.me.arsenal, 0)];
+  // allies, auras and items already in the arena (training positions)
+  for (const c of def.me.permanents ?? []) me.permanents.push({ inst: inst(s, c, 0), ward: 0 });
   if (def.me.life) me.life = def.me.life;
   me.actionPoints = 1;
   opp.actionPoints = 0;

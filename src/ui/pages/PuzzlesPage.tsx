@@ -4,17 +4,21 @@ import { getDb } from '../../data/cardDb';
 import { applyAction } from '../../engine/game';
 import { describeAction } from '../../ai/bot';
 import { PUZZLES } from '../../learn/puzzles';
+import { TRAINING } from '../../learn/training';
 import { buildPuzzle, puzzleFailed, settle, solve } from '../../learn/puzzleEngine';
 import type { PuzzleDef } from '../../learn/puzzleEngine';
 import { loadFeats, updateFeats } from '../../stats/progress';
 import type { GameState } from '../../engine/types';
 import GameBoard from '../components/GameBoard';
 import CardView from '../components/CardView';
+import { SymText } from '../symbols';
 
 const heroName = (id: string) => getDb().byId.get(id)?.name.split(',')[0] ?? '?';
 
 export default function PuzzlesPage({ id }: { id?: string }) {
   const [solved, setSolved] = useState(() => new Set(loadFeats().puzzles));
+  const ti = TRAINING.findIndex((p) => p.id === id);
+  if (ti >= 0) return <PuzzleRun key={id} def={TRAINING[ti]} next={TRAINING[ti + 1]} onSolved={() => setSolved(new Set(loadFeats().puzzles))} />;
   const idx = PUZZLES.findIndex((p) => p.id === id);
   if (idx >= 0) {
     const next = PUZZLES[idx + 1];
@@ -25,8 +29,25 @@ export default function PuzzlesPage({ id }: { id?: string }) {
       <div>
         <h1 style={{ marginBottom: '.2rem' }}>🧩 Lethal puzzles</h1>
         <p className="muted" style={{ marginTop: 0 }}>Win this turn. Each position has exactly enough damage, if you play your cards in the right order, pitch the right ones and attack where the opponent can’t block well. The bots can’t solve these. Can you?</p>
-        <p className="small">Solved {solved.size} / {PUZZLES.length}</p>
+        <p className="small">Solved {PUZZLES.filter((p) => solved.has(p.id)).length} / {PUZZLES.length}</p>
       </div>
+      <div>
+        <h2 style={{ margin: '.2rem 0' }}>🎓 Training: newer mechanics</h2>
+        <p className="muted small" style={{ marginTop: 0 }}>Short guided positions, one mechanic each. These are meant to be easy.</p>
+        <div className="puzzle-grid">
+          {TRAINING.map((p, i) => (
+            <a key={p.id} href={`#puzzles/${p.id}`} className={`puzzle-tile panel ${solved.has(p.id) ? 'solved' : ''}`}>
+              <div className="pt-hero"><CardView card={getDb().byId.get(p.me.hero)!} width={64} tilt={false} noPopout /></div>
+              <div className="col" style={{ gap: '.15rem' }}>
+                <b>T{i + 1}. {p.title}</b>
+                <span className="small muted">{p.guide?.split('.')[0]}.</span>
+              </div>
+              {solved.has(p.id) && <span className="pt-done">✓</span>}
+            </a>
+          ))}
+        </div>
+      </div>
+      <h2 style={{ margin: '.2rem 0' }}>🧩 Lethal puzzles</h2>
       <div className="puzzle-grid">
         {PUZZLES.map((p, i) => {
           const blockers = p.opp.hand?.length ?? 0;
@@ -92,8 +113,9 @@ function PuzzleRun({ def, next, onSolved }: { def: PuzzleDef; next?: PuzzleDef; 
         </div>}
       />
       <div className="puzzle-banner">
-        <b>🧩 {def.title}</b>
+        <b>{def.guide ? '🎓' : '🧩'} {def.title}</b>
         <span>Win this turn: deal {def.opp.life} damage.</span>
+        {def.guide && <span className="puzzle-guide"><SymText text={def.guide} /></span>}
       </div>
       {failed && (
         <div className="modal-bg">

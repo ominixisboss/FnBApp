@@ -2171,7 +2171,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
     const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (isA(pm.inst, 'Runechant')) {
+    // Runechants go off when you play an attack action card or activate a weapon attack (not an ally's attack)
+    if (isA(pm.inst, 'Runechant') && !allyPm) {
       // a card that counts as a Runechant ("Runechant of Envy") is usurped: its own payoff too
       const usurp = name !== 'Runechant' ? getScript(cardOf(pm.inst)).onUsurp : undefined;
       if (usurp?.length) { log(s, p.id, `${c.name} usurps ${name}.`); resolveEffects(s, p, usurp, pm.inst); }
