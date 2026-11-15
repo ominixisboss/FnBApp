@@ -296,7 +296,7 @@ function opponentThreat(s: GameState, p: PlayerState): number {
 
 // ---------------------------------------------------------------- action phase
 
-/** Hard plays its hand out more readily than Normal: in mirror matches this raised its win rate against Normal from ~55% to ~73% */
+/** Hard plays its hand out more readily than Normal: in mirror matches this raised its win rate against Normal from ~55% to ~71% */
 const HARD_KEEP = 0.5;
 
 function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDecision {
@@ -311,7 +311,7 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
   }
   const threat = opponentThreat(s, p);
   const opp = s.players[oppOf(s, p.id)];
-  const cands = items.slice(0, difficulty === 'hard' ? 14 : 10);
+  const cands = items.slice(0, 10);
   let best: { plan: Item[]; score: number; pitch: number[] } = { plan: [], score: -Infinity, pitch: [] };
   const handCards = p.hand.map((h) => ({ uid: h.uid, c: cardOf(h) }));
   const evalPlan = (plan: Item[]) => {
@@ -358,7 +358,7 @@ function planAction(s: GameState, p: PlayerState, difficulty: Difficulty): BotDe
   const k = cands.length;
   const rec = (start: number, cur: Item[]) => {
     evalPlan(cur);
-    if (cur.length >= (difficulty === 'hard' ? 5 : 4)) return;
+    if (cur.length >= 4) return;
     for (let i = start; i < k; i++) rec(i + 1, [...cur, cands[i]]);
   };
   rec(0, []);

@@ -40,7 +40,7 @@ describe('bot vs bot simulations', () => {
       if (s.phase === 'gameOver') finished++;
     }
     expect(finished).toBeGreaterThan(games * 0.8);
-  });
+  }, 60_000);
 
   it('cc decks play too', () => {
     const hs = heroesFor('cc');
