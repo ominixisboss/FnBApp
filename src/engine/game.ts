@@ -132,6 +132,7 @@ const newTurnInfo = () => ({ attacks: 0, attackActionHits: 0, weaponHits: 0, pla
 function heroApi(s: GameState): HeroApi {
   return {
     log: (p, text) => log(s, p ? p.id : null, text),
+    resolve: (p, effects, inst) => resolveEffects(s, p, effects, inst),
     createToken: (p, name, amount) => createToken(s, p, name, amount),
     draw: (p, amount) => { draw(s, p, amount); log(s, p.id, `${p.name} draws ${amount} card${amount > 1 ? 's' : ''}.`); },
     dealDamage: (t, amount, arcane, source) => { dealDamage(s, t.id, amount, arcane, source); },
@@ -312,11 +313,16 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
     const slots = new Set<string>();
     let hands = 0;
     p.inventory = [...(ps.deck.inventoryIds ?? []), ...ps.deck.cardIds.filter(isDemiHero)];
-    const noWeapons = !!getHeroAbility(hero)?.noWeapons;
+    const heroAb = getHeroAbility(hero);
+    const noWeapons = !!heroAb?.noWeapons;
+    // Kayo: 1 weapon zone (one weapon of any size); Zane: 2H swords count as 1H
+    let weaponsLeft = heroAb?.oneWeaponZone ? 1 : 99;
     for (const wid of noWeapons ? [] : ps.deck.weaponIds) {
       const w = card(wid);
-      const size = w.types.includes('2H') ? 2 : 1;
-      if (hands + size > 2) continue;
+      const size = w.types.includes('2H') && !(heroAb?.twoHandSwordsAsOne && w.types.includes('Sword')) ? 2 : 1;
+      if (weaponsLeft <= 0) continue;
+      if (hands + size > 2 && !heroAb?.oneWeaponZone) continue;
+      weaponsLeft--;
       hands += size;
       p.weapons.push({ inst: mk(s, wid, id), usedThisTurn: false });
     }
@@ -330,7 +336,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
       }
       if (slots.has(slot)) { p.inventory.push(eid); continue; }
       slots.add(slot);
-      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false, faceDown: getScript(e).cloaked || undefined });
+      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false, faceDown: getScript(e).cloaked || heroAb?.cloakAll || undefined });
     }
     s.players[id] = p;
   });
@@ -367,6 +373,7 @@ function draw(s: GameState, p: PlayerState, count = 1, triggers = true) {
   }
   if (!triggers || n === 0) return;
   p.turn.drew = true;
+  if (s.phase === 'action' && s.turnPlayer === p.id) ability(p)?.onDraw?.(heroCtx(s, p), n);
   if (s.phase === 'action' || s.phase === 'defend' || s.phase === 'reaction') {
     for (const o of s.players) if (o.id !== p.id && !o.eliminated) ability(o)?.onOpponentDraw?.(heroCtx(s, o), n);
   }
@@ -384,6 +391,7 @@ function startTurn(s: GameState) {
   p.effects = [];
   p.weapons.forEach((w) => (w.usedThisTurn = false));
   p.equipment.forEach((e) => (e.usedThisTurn = false));
+  p.playableBanished = undefined; // "until the start of your next turn"
   // untap step: the hero and its permanents untap
   p.heroTapped = false;
   for (const pm of p.permanents) pm.tapped = false;
@@ -1060,6 +1068,11 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
   const id = s.lastEvent;
   const hero = () => s.players.find((q) => q.hero.uid === picks[0]);
   switch (key) {
+    case 'lookBottom': {
+      const t = s.players[_data?.[0] ?? p.id];
+      if (picks.length && t.deck[0]?.uid === picks[0]) { t.deck.push(t.deck.shift()!); log(s, p.id, `${p.name} puts it on the bottom.`); }
+      break;
+    }
     case 'equip':
       if (yes && id) equipCard(s, p, id); else if (id) (s.eventDiscard ??= []).push(id);
       break;
@@ -1500,6 +1513,10 @@ function optionalPayoff(s: GameState, p: PlayerState, oc: OptionalCost, used: Ca
     log(s, p.id, `${cardOf(inst).name}: the paid card didn't have ${oc.minPower}+ power.`);
     return;
   }
+  if (oc.needWatery && (!used || !getScript(used).wateryGrave)) {
+    log(s, p.id, `${cardOf(inst).name}: that card didn't have watery grave.`);
+    return;
+  }
   resolveEffects(s, p, oc.effects, inst);
 }
 
@@ -1608,15 +1625,15 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const ab0 = ability(p);
   for (const b of p.banished) {
     const c = cardOf(b);
-    const free = !!p.turn.flags[`playBanished${b.uid}`];
+    const free = !!p.turn.flags[`playBanished${b.uid}`] || !!p.playableBanished?.includes(b.uid);
     if (!free && !ab0?.playFromBanished?.(heroCtx(s, p), c)) continue;
     if (fromBanished.includes(b) || !timingOk(s, pid, c)) continue;
-    const cost = p.turn.flags[`freePlay${b.uid}`] ? frostbite(p) : effectiveCost(s, p, c);
+    const cost = p.turn.flags[`freePlay${b.uid}`] ? frostbite(p) : Math.max(frostbite(p), effectiveCost(s, p, c) - (getScript(c).costLessBanished ?? 0));
     if (availableResources(p) < cost) continue;
     out.push({ uid: b.uid, kind: 'card', index: 0, cost, label: c.name });
   }
   for (const g of p.graveyard) {
-    if (!p.turn.flags[`playGrave${g.uid}`]) continue;
+    if (!p.turn.flags[`playGrave${g.uid}`] && !ab0?.playFromGraveyard?.(heroCtx(s, p), cardOf(g))) continue;
     const c = cardOf(g);
     if (!timingOk(s, pid, c)) continue;
     const cost = effectiveCost(s, p, c);
@@ -1633,8 +1650,9 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   for (const inst of [...p.hand, ...p.arsenal, ...fromBanished]) {
     const c = cardOf(inst);
     if (!timingOk(s, pid, c)) continue;
-    const cost = effectiveCost(s, p, c);
     const sc = getScript(c);
+    const banishedLess = sc.costLessBanished && fromBanished.includes(inst) ? sc.costLessBanished : 0;
+    const cost = Math.max(frostbite(p), effectiveCost(s, p, c) - banishedLess);
     const extra = (sc.additionalCost.discardRandom ?? 0) + (sc.additionalCost.banishRandomHand ?? 0) + (sc.additionalCost.handToBottom ?? 0);
     if ((sc.additionalCost.banishSoul ?? 0) > (p.soul ?? []).length) continue;
     if (extra > 0 && p.hand.filter((h) => h.uid !== inst.uid).length < extra) continue;
@@ -1954,7 +1972,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
   } else if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
     const pm: PermanentState = { inst, ward: sc.ward, steam: sc.steam || undefined, suspense: sc.suspense ? 2 : undefined, counters: sc.startCounters?.n };
     p.permanents.push(pm);
-    if (sc.crank && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
+    if ((sc.crank || (ability(p)?.id === 'maxx' && c.name.startsWith('Hyper Driver'))) && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
       pm.steam = (pm.steam ?? 0) - 1;
       p.actionPoints += 1;
       ability(p)?.onCrank?.(heroCtx(s, p));
@@ -2163,7 +2181,8 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   for (const pm of [...p.permanents]) {
     const name = cardOf(pm.inst).name;
     const destroy = () => removePermanent(s, p, pm.inst.uid);
-    if (isA(pm.inst, 'Runechant')) {
+    // Runechants go off when you play an attack action card or activate a weapon attack (not an ally's attack)
+    if (isA(pm.inst, 'Runechant') && !allyPm) {
       // a card that counts as a Runechant ("Runechant of Envy") is usurped: its own payoff too
       const usurp = name !== 'Runechant' ? getScript(cardOf(pm.inst)).onUsurp : undefined;
       if (usurp?.length) { log(s, p.id, `${c.name} usurps ${name}.`); resolveEffects(s, p, usurp, pm.inst); }
@@ -2457,6 +2476,9 @@ function resolveDamage(s: GameState) {
     } else if (ability(attacker)?.banishStealthBlockers && cardOf(l.inst).keywords.includes('Stealth') && has(cardOf(d.inst), 'Action')) {
       dp.banished.push(d.inst);
       log(s, dp.id, `${cardOf(d.inst).name} is banished (Nuu).`);
+    } else if (getScript(cardOf(d.inst)).defendBanish) {
+      dp.banished.push(d.inst);
+      log(s, dp.id, `${cardOf(d.inst).name} is banished.`);
     } else {
       toGraveyard(dp, d.inst);
     }
@@ -3003,6 +3025,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         const t = e.theirs ? (l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp) : p;
         const top = t.deck.slice(0, e.n);
         log(s, p.id, `${p.name} looks at the top ${e.n === 1 ? 'card' : `${e.n} cards`} of ${t.id === p.id ? 'their' : `${t.name}'s`} deck.`);
+        if (e.mayBottom && top.length) {
+          // a bot sends a strong card of the opponent's (or a weak one of its own) to the bottom
+          const strong = (x: CardInst) => powerOf(cardOf(x)) + (defenseOf(cardOf(x)) ?? 0) >= 6;
+          if (!p.isBot) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top card of ${t.id === p.id ? 'your' : `${t.name}'s`} deck. Pick it to put it on the bottom, or skip to leave it.`, confirm: 'Put on bottom', skippable: true, options: [{ uid: top[0].uid, cardId: top[0].cardId }], resume: { type: 'event', key: 'lookBottom', data: [t.id] } });
+          else if (t.id === p.id ? !strong(top[0]) : strong(top[0])) { t.deck.push(t.deck.shift()!); log(s, p.id, `${p.name} puts it on the bottom.`); }
+          break;
+        }
         if (!p.isBot && top.length) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${t.id === p.id ? 'your' : `${t.name}'s`} deck (look only).`, confirm: 'OK', skippable: true, botPick: null, options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'event', key: 'look' } });
         break;
       }

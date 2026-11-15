@@ -94,6 +94,8 @@ export interface PlayerState {
   focus?: PlayerId;
   /** Shiyana: the hero she is copying until the start of her next turn */
   copyOf?: string;
+  /** banished cards this player may play until the start of their next turn (Arakni, Trap-Door) */
+  playableBanished?: number[];
   /** Arakni, Marionette became an Agent of Chaos: the hero card it returns to ("return to the brood") */
   broodOf?: string;
   /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */

@@ -1782,3 +1782,6 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 /* the macro chip sits under the event chip when both are shown */
 .macro-chip { top: calc(124px + var(--sa-t)); }
 @media (max-width: 640px) and (orientation: portrait) { .macro-chip { top: calc(14px + var(--sa-t)); } }
+
+/* training positions: the hint under the puzzle banner */
+.puzzle-guide { display: block; font-size: .82rem; color: #e9dcc4; max-width: 520px; line-height: 1.35; }

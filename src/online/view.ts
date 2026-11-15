@@ -3,6 +3,7 @@
 // your right neighbour is the last seat). Used by the server for online games; the client
 // renders it like a local game.
 import { HIDDEN_ID } from '../data/cardDb';
+import { heroAbilityOf } from '../engine/game';
 import type { CardInst, GameState, PlayerId } from '../engine/types';
 
 const hide = (list: CardInst[]): CardInst[] => list.map((c) => ({ ...c, cardId: HIDDEN_ID }));
@@ -17,7 +18,10 @@ export function viewFor(full: GameState, viewer: PlayerId): GameState {
   const n = s.players.length;
   // hidden information
   for (const p of s.players) {
+    const top = p.deck[0];
     p.deck = hide(p.deck);
+    // Dash: "You may look at the top card of your deck at any time"
+    if (p.id === viewer && top && heroAbilityOf(p)?.seeTop) p.deck[0] = top;
     if (p.id === viewer) continue;
     p.hand = hide(p.hand);
     p.arsenal = p.arsenal.map((c) => (c.faceUp ? c : { ...c, cardId: HIDDEN_ID }));

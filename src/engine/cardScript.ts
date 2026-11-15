@@ -82,7 +82,7 @@ export type Effect =
   /** prevent the next N arcane damage that would be dealt to you this turn */
   | { kind: 'preventArcane'; amount: number }
   /** "Look at the top N cards of your (their) deck": shown to you, nothing moves */
-  | { kind: 'lookTop'; n: number; theirs?: boolean }
+  | { kind: 'lookTop'; n: number; theirs?: boolean; mayBottom?: boolean }
   /** the defending hero banishes a card from their hand / a card in their arsenal (Agents of Chaos) */
   | { kind: 'oppBanishHand' }
   | { kind: 'oppBanishArsenal' }
@@ -280,6 +280,8 @@ export interface OptionalCost {
   cost: OptionalCostKind;
   /** "If a card with N or more {p} is discarded this way" */
   minPower?: number;
+  /** "If that card has watery grave": the discarded / destroyed card must have it */
+  needWatery?: boolean;
   effects: Effect[];
   costText: string;
   effectText: string;
@@ -411,6 +413,10 @@ export interface CardScript {
   noEquipDefense: boolean;
   /** where the attack card goes when it hits ("put it into your soul" / "on the bottom of its owner's deck") */
   hitDestination?: 'soul' | 'deckBottom';
+  /** "If you play this from your banished zone, this costs {r}{r} less to play" */
+  costLessBanished?: number;
+  /** "When this defends, banish it when the combat chain closes" (a defending card) */
+  defendBanish?: boolean;
   costLessIf?: string; // "If you control a <X>, this costs {r} less"
   unity: number; // "Unity - ... this gets +N{d}"
   /** "When this defends, <effects>" */
@@ -468,6 +474,7 @@ function parseFilter(words: string): AttackFilter | null {
   if ((m0 = w.match(/^(stealth|combo|crush)kw$/i))) return { kind: 'keyword', value: m0[1][0].toUpperCase() + m0[1].slice(1).toLowerCase() };
   if (/^ally$/i.test(w)) return { kind: 'ally' };
   if (/^weapon$/i.test(w)) return { kind: 'weapon' };
+  if ((m0 = w.match(/^([12]h) weapon$/i))) return { kind: 'word', value: m0[1].toUpperCase() };
   const sub = SUBTYPES.find((s) => w.toLowerCase() === s);
   if (sub) return { kind: 'subtype', value: sub };
   const cls = CLASS_WORDS.find((c) => w === c);
@@ -486,7 +493,9 @@ function parseFilter(words: string): AttackFilter | null {
 export function parseEffect(raw: string): Effect[] | null {
   // "target attack action card with stealth", "your next attack with stealth": the keyword becomes the filter word
   const s = raw.trim().replace(/\.$/, '').trim().replace(/^(target|your next) (attack(?: action card)?) with (stealth|combo|crush)\b/i, (_x, a: string, b: string, kw: string) => `${a} ${kw.toLowerCase()}kw ${b}`)
-    .replace(/^your (attacks) with (stealth|combo|crush) get\b/i, (_x, a: string, kw: string) => `your ${kw.toLowerCase()}kw ${a} get`);
+    .replace(/^your (attacks) with (stealth|combo|crush) get\b/i, (_x, a: string, kw: string) => `your ${kw.toLowerCase()}kw ${a} get`)
+    // "target attack action card with Herald in its name" -> the name word is the filter
+    .replace(/^[Tt]arget attack action card with ([A-Z][a-z]+) in its name\b/, 'target $1 attack action card');
   let m: RegExpMatchArray | null;
   if (!s) return [];
   if (/^put a card from your arsenal on the bottom of your deck\. if you do, draw a card$/i.test(s)) return [{ kind: 'arsenalCycle' }];
@@ -540,14 +549,14 @@ export function parseEffect(raw: string): Effect[] | null {
     const f = parseFilter(m[1] ?? '');
     return f ? [{ kind: 'nextAttackGoAgain', filter: f }] : null;
   }
-  if ((m = s.match(/^target (?:(\w+(?: or \w+)?) )?attack(?: action card)? gets \+(\d+)\{p\}(?: and go again)?$/i))) {
+  if ((m = s.match(/^target (?:(\w+(?: or \w+| weapon)?) )?attack(?: action card)? gets \+(\d+)\{p\}(?: and go again)?$/i))) {
     const f = parseFilter(m[1] ?? '');
     if (!f) return null;
     const out: Effect[] = [{ kind: 'targetAttackPower', amount: +m[2], filter: f }];
     if (/and go again$/i.test(s)) out.push({ kind: 'targetAttackGoAgain', filter: f });
     return out;
   }
-  if ((m = s.match(/^target (?:(\w+) )?attack(?: action card)? gets go again$/i))) {
+  if ((m = s.match(/^target (?:(\w+(?: weapon)?) )?attack(?: action card)? gets go again$/i))) {
     const f = parseFilter(m[1] ?? '');
     return f ? [{ kind: 'targetAttackGoAgain', filter: f }] : null;
   }
@@ -749,7 +758,7 @@ export function parseEffect(raw: string): Effect[] | null {
   if (/^remove half the gold counters from treasure island, rounded up\. if you are a thief, instead remove all of them\. create gold tokens equal to the number of gold counters removed this way$/i.test(s)) return [{ kind: 'treasureDivvy' }];
   if (/^they banish a card from their hand$/i.test(s)) return [{ kind: 'oppBanishHand' }];
   if (/^banish a card in their arsenal$/i.test(s)) return [{ kind: 'oppBanishArsenal' }];
-  if ((m = s.match(/^(?:you may )?look at the top (card|\d+ cards) of (your|their|target hero's) deck$/i))) return [{ kind: 'lookTop', n: /^\d/.test(m[1]) ? parseInt(m[1], 10) : 1, theirs: m[2].toLowerCase() !== 'your' || undefined }];
+  if ((m = s.match(/^(?:you may )?look at the top (card|\d+ cards) of (your|their|target hero's|the defending hero's|target opponent's) deck$/i))) return [{ kind: 'lookTop', n: /^\d/.test(m[1]) ? parseInt(m[1], 10) : 1, theirs: m[2].toLowerCase() !== 'your' || undefined }];
   if (/^roll a 6 sided die$/i.test(s)) return [{ kind: 'rollDie', then: [] }];
   if (/^transcend$/i.test(s)) return [{ kind: 'transcend' }];
   if ((m = s.match(/^destroy the top (?:(\d+) cards|card) of their deck$/i))) return [{ kind: 'oppMill', amount: m[1] ? +m[1] : 1 }];
@@ -900,7 +909,7 @@ export function parseOptional(a: string, b: string): OptionalCost | null {
   if (!ma) return null;
   const cost = parseOptionalCost(ma[2]);
   if (!cost || cost.kind === 'all') return null; // combined costs only in "you may ... If you do" abilities
-  const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}|an? (red|yellow|blue) card is charged this way|you charged your (?:hero's )?soul this way),? (.+?)\.?$/i);
+  const mb = b.match(/^if (you do|the additional cost (?:was|is) paid|a card with (\d+) or more \{p\} is (?:discarded|banished) this way|the discarded card has (\d+) or more \{p\}|an? (red|yellow|blue) card is charged this way|you charged your (?:hero's )?soul this way|that card has watery grave),? (.+?)\.?$/i);
   if (!mb) return null;
   const effectText = mb[5];
   const effects = parseEffect(effectText);
@@ -910,6 +919,7 @@ export function parseOptional(a: string, b: string): OptionalCost | null {
   const finalCost: OptionalCostKind = mb[4] && cost.kind === 'charge' ? { kind: 'charge', pitch: { red: 1, yellow: 2, blue: 3 }[mb[4].toLowerCase() as 'red'] } : cost;
   return {
     timing: /defends/i.test(ma[1]) ? 'defend' : /attacks/i.test(ma[1]) ? 'attack' : 'play', cost: finalCost, minPower, effects,
+    needWatery: /^if that card has watery grave/i.test(b) || undefined,
     costText: ma[2].replace(/\.$/, ''), effectText: effectText.replace(/\.$/, ''),
   };
 }
@@ -1493,6 +1503,12 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const r = sc.onAttack.find((x) => x.kind === 'revealTop');
     if (r && r.kind === 'revealTop') { r.minusPitch = true; return; }
   }
+  if (/^when this defends, banish it when the combat chain closes\.?$/i.test(sent) && !isPermanentLike) { sc.defendBanish = true; return; }
+  // "...look at the top card of <a> deck. You may put it on the bottom.": the look offers the bottom
+  if (/^you may put it on the bottom(?: of (?:their|your|that hero's) deck)?\.?$/i.test(sent)) {
+    const lt = [...sc.onPlay, ...sc.onHit, ...sc.onAttack, ...sc.conditional.flatMap((c) => c.effects)].reverse().find((e) => e.kind === 'lookTop' && e.n === 1);
+    if (lt && lt.kind === 'lookTop') { lt.mayBottom = true; return; }
+  }
   // Righteous Cleansing's second sentence belongs to "look at the top 5 cards of their deck"
   if (/^banish 1 or more cards with the same name from among them, then put the rest on top in any order\.?$/i.test(sent) && sc.conditional.some((c) => c.effects.some((e) => e.kind === 'cleanseTop'))) return;
   if ((m = sent.match(/^when this attacks a hero, (.+)$/i))) {
@@ -1584,6 +1600,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     const cond = m[1] ? parseCondition(m[1]) : undefined;
     if (!m[1] || cond) return void (sc.fromBanished = { cond: cond ?? undefined });
   }
+  if ((m = sent.match(/^if you play this from your banished zone, this costs ((?:\{r\})+) less to play\.?$/i))) return void (sc.costLessBanished = m[1].length / 3);
   if ((m = sent.match(/^when this is played from your banished zone, (.+)$/i))) {
     const e = parseEffect(m[1].replace(/^it gets/i, 'this gets'));
     if (e) return void sc.conditional.push({ when: 'fromBanished', effects: e });

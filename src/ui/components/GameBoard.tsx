@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Card } from '../../data/types';
 import {
   applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable, typeMatches,
-  equipDefense, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
+  equipDefense, heroAbilityOf, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
 import type { Action, CardInst, EquipState, GameState, OptionalChoice, PlayerId, PlayerState, Zone } from '../../engine/types';
@@ -11,7 +11,7 @@ import type { BotDecision } from '../../ai/bot';
 import { askBot } from '../../ai/botClient';
 import { getScript } from '../../engine/cardScript';
 import { formatName } from '../../deck/deck';
-import { getDb } from '../../data/cardDb';
+import { getDb, HIDDEN_ID } from '../../data/cardDb';
 import CardView, { CardBack } from './CardView';
 import { readable, SymText } from '../symbols';
 import AudioSettings from './AudioSettings';
@@ -1345,7 +1345,10 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           : <div key={p.arsenal[0].uid} className="flip-wrap" data-flip={p.arsenal[0].uid}><CardView card={cardOf(p.arsenal[0])} width={SLOT} onHover={onHover} onClick={() => arsenalClick?.(p.arsenal[0])} className={arsenalClass?.(p.arsenal[0])} marker={marker?.(p.arsenal[0])} /></div>)}
       </Slot>
       <Slot area="deck" label="Deck" filled={p.deck.length > 0} onClick={onDeck} className={onDeck ? 'clickable' : ''}>
-        {p.deck.length > 0 && <CardBack width={SLOT} label={p.deck.length} />}
+        {p.deck.length > 0 && (!isOpp && heroAbilityOf(p)?.seeTop && p.deck[0].cardId !== HIDDEN_ID
+          // Dash: you may look at the top card of your deck at any time
+          ? <CardView card={cardOf(p.deck[0])} width={SLOT} onHover={onHover} badge={`${p.deck.length}`} title={`Top of your deck (${p.deck.length} cards)`} />
+          : <CardBack width={SLOT} label={p.deck.length} />)}
       </Slot>
       {pile('pitch', 'Pitch', p.pitch, 'anim-pitch', `${p.name}'s pitch zone`)}
       {pile('grave', 'Graveyard', p.graveyard, '', `${p.name}'s graveyard`)}
