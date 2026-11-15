@@ -1784,4 +1784,10 @@ button.primary:hover:not(:disabled)::before, .cf-play:hover:not(:disabled)::befo
 @media (max-width: 640px) and (orientation: portrait) { .macro-chip { top: calc(14px + var(--sa-t)); } }
 
 /* training positions: the hint under the puzzle banner */
-.puzzle-guide { display: block; font-size: .82rem; color: #e9dcc4; max-width: 520px; line-height: 1.35; }
+.puzzle-banner.has-guide { flex-wrap: wrap; justify-content: center; row-gap: .25rem; border-radius: 14px; width: max-content; max-width: min(94vw, 560px); }
+.puzzle-guide { flex-basis: 100%; font-size: .8rem; color: #e9dcc4; line-height: 1.35; text-align: center; }
+.guide-toggle { pointer-events: auto; padding: .1rem .5rem; min-height: 28px; font-size: .75rem; margin-left: .3rem; }
+
+/* plays from the banished zone / graveyard, shown above the hand */
+.also-playable { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--hw) * 1.05); z-index: 30; display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; justify-content: center; max-width: min(96vw, 720px); padding: .3rem .5rem; border-radius: 10px; background: rgba(12, 10, 8, .82); border: 1px solid rgba(233, 196, 106, .35); }
+.also-playable button { min-height: 32px; }

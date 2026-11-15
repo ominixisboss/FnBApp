@@ -1,7 +1,7 @@
 // Lethal puzzles: a fixed board where you must win this turn. Includes a brute-force solver used to
 // verify every puzzle (and to show the solution on request).
 import { card } from '../data/cardDb';
-import { applyAction, createGame, playOptions } from '../engine/game';
+import { ALT_INDEX, applyAction, createGame, playOptions } from '../engine/game';
 import { getScript } from '../engine/cardScript';
 import type { Action, CardInst, GameState, PlayerId } from '../engine/types';
 import { chooseAction } from '../ai/bot';
@@ -86,9 +86,19 @@ export function candidateActions(s: GameState): Action[] {
     }
     for (const pitch of pitches) {
       if (o.kind === 'activation') { out.push({ type: 'activate', uid: o.uid, index: o.index, pitch }); continue; }
-      const c = card([...p.hand, ...p.arsenal].find((h) => h.uid === o.uid)!.cardId);
-      const modes = getScript(c).modes.length || 1;
-      for (let mode = 0; mode < modes; mode++) out.push({ type: 'play', uid: o.uid, pitch, mode });
+      const src = [...p.hand, ...p.arsenal, ...p.banished, ...p.graveyard].find((h) => h.uid === o.uid);
+      const c = src ? card(src.cardId) : null;
+      const sc = c ? getScript(c) : null;
+      const modes = sc?.modes.length || 1;
+      const alt = o.index === ALT_INDEX || undefined;
+      for (let mode = 0; mode < modes; mode++) {
+        out.push({ type: 'play', uid: o.uid, pitch, mode, alt });
+        // "you may <cost>. If you do, ...": try paying it with each other card in hand too
+        if (sc?.optional && sc.optional.timing !== 'defend') {
+          out.push({ type: 'play', uid: o.uid, pitch, mode, alt, optional: { accept: true } });
+          for (const h of p.hand) if (h.uid !== o.uid && !pitch.includes(h.uid)) out.push({ type: 'play', uid: o.uid, pitch, mode, alt, optional: { accept: true, uid: h.uid } });
+        }
+      }
     }
   }
   out.push({ type: 'pass' });

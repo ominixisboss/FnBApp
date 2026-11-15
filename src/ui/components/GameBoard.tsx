@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable, typeMatches,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, ALT_INDEX, optionalPayable, typeMatches,
   equipDefense, heroAbilityOf, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -549,7 +549,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setOptPick(null);
     const cost = opt.cost + extraFor(opt, optional);
     const exclude = [...(opt.kind === 'card' ? [opt.uid] : []), ...(optional?.uid !== undefined ? [optional.uid] : [])];
-    const build = (pitch: number[]): Action => (opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    const build = (pitch: number[]): Action => (opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional, alt: opt.index === ALT_INDEX || undefined } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
     if (me.resources >= cost) return act(build([]));
     if (availableResources(me, exclude) < cost) return setError('Not enough resources.');
     if (autoPay && !shiftHeld.current) {
@@ -563,7 +563,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const finishPay = (pitch: number[]) => {
     if (!pending) return;
     const { opt, mode, optional } = pending;
-    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional, alt: opt.index === ALT_INDEX || undefined } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
   };
   const pitchTotal = pending ? me.resources + pending.pitch.reduce((a, u) => a + pitchOf(cardOf(me.hand.find((h) => h.uid === u)!)), 0) : 0;
 
@@ -590,7 +590,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     }
     if (state.phase === 'arsenal') return endTurnAct({ type: 'arsenal', uid: inst.uid });
     const opts = options.filter((o) => o.uid === inst.uid);
-    if (opts.length > 1 || (opts.length === 1 && opts[0].index === HAND_INDEX)) return setChoosePlay(opts); // play it, or discard it for its effect?
+    if (opts.length > 1 || (opts.length === 1 && (opts[0].index === HAND_INDEX || opts[0].index === ALT_INDEX))) return setChoosePlay(opts); // play it, or discard it for its effect?
     if (opts.length === 1) return startPlay(opts[0]);
     setDetail(cardOf(inst));
   };
@@ -853,7 +853,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
       </div>
 
       {state.macro === 'Treasure Island' && (
-        <div className="event-chip macro-chip" title="Treasure Island: the first time a hero is attacked each turn, it gets a gold counter. Dealing damage to an opposing hero loots that many counters as Gold tokens.">🏝 Treasure Island: <b>{state.treasureGold ?? 0}</b> gold</div>
+        <div className="event-chip macro-chip" role="status" aria-live="polite" title="Treasure Island: the first time a hero is attacked each turn, it gets a gold counter. Dealing damage to an opposing hero loots that many counters as Gold tokens.">🏝 Treasure Island: <b>{state.treasureGold ?? 0}</b> gold</div>
       )}
       {state.lastEvent && (
         <div className="event-chip" title={readable(getDb().byId.get(state.lastEvent)?.text ?? '')}>🎪 Event: <b>{getDb().byId.get(state.lastEvent)?.name}</b>{state.eventDeck ? <span className="muted"> · {state.eventDeck.length} left</span> : null}</div>
@@ -919,6 +919,22 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </div>
       </div>
 
+      {/* cards you may play from somewhere other than your hand or arsenal (banished zone, graveyard, an opponent's banished zone) */}
+      {myTurn && !pending && (() => {
+        const mine = new Set([...me.hand, ...me.arsenal].map((h) => h.uid));
+        const extra = options.filter((o) => o.kind === 'card' && !mine.has(o.uid));
+        if (!extra.length) return null;
+        return (
+          <div className="also-playable" role="group" aria-label="Also playable">
+            <span className="small muted">Also playable:</span>
+            {extra.map((o) => (
+              <button key={`${o.uid}-${o.index}`} className="small" onClick={() => startPlay(o)}>
+                <SymText text={o.label} />{o.cost ? ` · ⛀${o.cost}` : ''}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
       {handOpen && !pending && <div className="hand-scrim" onClick={() => setHandOpen(false)} />}
       <div className={`hand-fan ${dragging ? 'is-dragging' : ''} ${handOpen || pending ? 'open' : ''}`} ref={handRef}>
         {me.hand.map((inst, i) => {
@@ -1296,7 +1312,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       {e && !(e.faceDown && isOpp) && (
         <CardView key={`${e.inst.uid}-${e.destroyed}-${!!e.faceDown}`} card={cardOf(e.inst)} width={SLOT} onHover={onHover} onClick={() => onClickArena(e.inst)}
           className={`${e.destroyed ? 'destroyed' : ''} ${e.faceDown ? 'face-down' : ''} ${arenaClass?.(e.inst) ?? ''}`} marker={marker?.(e.inst)}
-          badge={e.destroyed ? 'destroyed' : e.faceDown ? '🔒' : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
+          badge={e.destroyed ? 'destroyed' : e.faceDown ? <span role="img" aria-label="Face-down (cloaked)" title="Face-down (cloaked): turned face-up when it's used">🔒</span> : e.defenseMod ? `⛨${equipDefense(e)}` : undefined} />
       )}
       {e && !e.destroyed && e.defenseMod < 0 && <span className={`cracks c${Math.min(3, -e.defenseMod)}`} aria-hidden />}
     </Slot>
@@ -1331,7 +1347,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
       <Slot area="hero" label="Hero" filled className={`hero-box hero-aura aura-${themeOf(cardOf(p.hero))}`}>
         <CardView card={cardOf(p.hero)} width={SLOT} onHover={onHover} onClick={() => onClickArena(p.hero)} marker={marker?.(p.hero)}
           className={`${state.phase === 'gameOver' && state.winner !== p.id ? 'burn-away' : ''} ${p.heroTapped ? 'is-tapped' : ''} ${arenaClass?.(p.hero) ?? ''}`} />
-        {p.heroTapped && <span className="tapped-badge" title="Tapped: untaps at the start of their turn">⟲</span>}
+        {p.heroTapped && <span className="tapped-badge" role="img" aria-label="Hero tapped" title="Tapped: untaps at the start of their turn">⟲</span>}
         <div key={fx.lifeKey[p.id]} className={`life-orb life ${fx.lifeAnim[p.id]}`} title="Life"><RollingNumber value={p.life} /></div>
         {fx.lifeAnim[p.id] === 'hurt' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`impact${fx.lifeKey[p.id]}`} theme={fx.theme[p.id]} />}
         {fx.lifeAnim[p.id] === 'heal' && fx.lifeKey[p.id] > 0 && <ImpactBurst key={`heal${fx.lifeKey[p.id]}`} heal />}
@@ -1371,7 +1387,7 @@ function PlayerArea({ p, state, isOpp, onHover, onClickArena, onZone, arenaClass
           <div key={inst.uid} data-uid={inst.uid} data-flip={inst.uid} className="anim-pop perm-card">
             <span className="materialize" aria-hidden />
             <CardView card={cardOf(inst)} width="calc(var(--slot) * .62)" onHover={onHover} onClick={() => onClickArena(inst)} className={`${destroyed ? 'destroyed' : ''} ${tapped ? 'is-tapped' : ''} ${arenaClass?.(inst) ?? ''}`} marker={marker?.(inst)} />
-            {tapped && <span className="tapped-badge" title="Tapped: untaps at the start of its controller's turn">⟲</span>}
+            {tapped && <span className="tapped-badge" role="img" aria-label="Tapped" title="Tapped: untaps at the start of its controller's turn">⟲</span>}
           </div>
         ))}
       </div>

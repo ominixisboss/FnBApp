@@ -211,7 +211,7 @@ export const LESSONS: Lesson[] = [
         <p>
           Mystic cards say “If you’ve played another blue card this turn, transcend”. Once you transcend, every “If you’ve transcended this turn” payoff is on for the rest of the turn.
         </p>
-        <C>Try them: <a href="#puzzles/t1">Allies attack</a>, <a href="#puzzles/t2">the attacking card’s ability</a> and <a href="#puzzles/t3">counts as a Runechant</a> are short training positions.</C>
+        <C>Try them: <a href="#puzzles/t1">Allies attack</a>, <a href="#puzzles/t2">the attacking card’s ability</a> <a href="#puzzles/t3">counts as a Runechant</a>, <a href="#puzzles/t4">watery grave</a> and <a href="#puzzles/t5">alternative costs</a> are short training positions.</C>
         <h3>Dice, “counts as” and Pit Fight</h3>
         <ul>
           <li>“Roll a 6 sided die”: the roll appears in the log, and the card uses the number rolled.</li>

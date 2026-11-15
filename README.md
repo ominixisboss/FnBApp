@@ -102,13 +102,13 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,965 |
+| Fully automated | ~2,010 |
 | Partly automated | ~1,350 |
 | Stats only (text not automated) | ~1,505 |
 
 The cards people actually play come first: 92% of the card copies in the bots' meta decklists are fully automated (including Guardian crush payoffs, Frontline and Adversity equipment, Ninja combo grants and Enlightened Strike).
 
-Hero abilities for all 86 heroes are automated. Bolfar's extra hero defends the crush attack with its own block; Yorick's heroes share one deck and one graveyard; Theryon triggers on every automated "destroy a card you don't control". Fightmaster Kox arranges the Smash Palace event deck (see below). Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
+Hero abilities for all heroes are automated, and every one except Shiyana (who doesn't get the extra "cards you own are your hero's class") is fully automated. Bolfar's extra hero defends the crush attack with its own block; Yorick's heroes share one deck and one graveyard; Theryon triggers on every automated "destroy a card you don't control". Fightmaster Kox arranges the Smash Palace event deck (see below). Taylor and The Librarian fetch from the inventory, which is the Classic Constructed pool cards you left out of your loadout.
 
 Recently added: clash, reload, crank, ephemeral, rupture, starfall, high tide, reprise, decompose, chi, and choosing the order of your start-of-turn triggers. `src/test/rules.test.ts` checks rules scenarios (go again, dominate, blade break, temper, arcane barrier, intimidate, the chain closing, trigger order).
 

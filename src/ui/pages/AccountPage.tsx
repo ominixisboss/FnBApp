@@ -29,8 +29,8 @@ export default function AccountPage() {
     <div className="account">
       <div className="panel col" style={{ gap: '.8rem' }}>
         <h1 style={{ margin: 0 }}>{auth.user ? 'Account' : mode === 'login' ? 'Sign in' : 'Create account'}</h1>
-        <div className={`server-status ${auth.available ? 'ok' : auth.available === false ? 'err' : 'muted'}`}>
-          {auth.available === null ? 'Checking for the game server…' : auth.available ? '● Game server online' : '● No game server reachable. Accounts and online play are unavailable here; everything else works offline.'}
+        <div role="status" aria-live="polite" className={`server-status ${auth.available ? 'ok' : auth.available === false ? 'err' : 'muted'}`}>
+          {auth.waking ? 'Waking up the game server… The free server sleeps when nobody is playing; this can take up to a minute.' : auth.available === null ? 'Checking for the game server…' : auth.available ? '● Game server online' : '● No game server reachable. Accounts and online play are unavailable here; everything else works offline.'}
         </div>
 
         {auth.available && auth.ephemeral && (

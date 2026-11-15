@@ -42,7 +42,7 @@ export default function PuzzlesPage({ id }: { id?: string }) {
                 <b>T{i + 1}. {p.title}</b>
                 <span className="small muted">{p.guide?.split('.')[0]}.</span>
               </div>
-              {solved.has(p.id) && <span className="pt-done">✓</span>}
+              {solved.has(p.id) && <span className="pt-done" role="img" aria-label="Solved">✓</span>}
             </a>
           ))}
         </div>
@@ -60,7 +60,7 @@ export default function PuzzlesPage({ id }: { id?: string }) {
                 <span className="small">Opponent at <b>{p.opp.life}</b> life{blockers ? ` · ${blockers} card${blockers > 1 ? 's' : ''} to block with` : ' · no cards in hand'}</span>
                 <span className="small muted">{p.me.hand.length} cards in hand{p.me.arsenal ? ' + 1 in arsenal' : ''}</span>
               </div>
-              {solved.has(p.id) && <span className="pt-done">✓</span>}
+              {solved.has(p.id) && <span className="pt-done" role="img" aria-label="Solved">✓</span>}
             </a>
           );
         })}
@@ -73,6 +73,7 @@ function PuzzleRun({ def, next, onSolved }: { def: PuzzleDef; next?: PuzzleDef; 
   const [attempt, setAttempt] = useState(0);
   const start = useMemo(() => buildPuzzle(def), [def, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
   const [failed, setFailed] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
   const [solution, setSolution] = useState<string[] | 'working' | null>(null);
   const retry = () => { setFailed(false); setAttempt((a) => a + 1); };
   const showSolution = () => {
@@ -112,10 +113,12 @@ function PuzzleRun({ def, next, onSolved }: { def: PuzzleDef; next?: PuzzleDef; 
           <a className="btn-link" href="#puzzles">All puzzles</a>
         </div>}
       />
-      <div className="puzzle-banner">
+      <div className={`puzzle-banner ${def.guide ? 'has-guide' : ''}`} role="region" aria-label="Puzzle goal">
         <b>{def.guide ? '🎓' : '🧩'} {def.title}</b>
         <span>Win this turn: deal {def.opp.life} damage.</span>
-        {def.guide && <span className="puzzle-guide"><SymText text={def.guide} /></span>}
+        {def.guide && (showGuide
+          ? <span className="puzzle-guide"><SymText text={def.guide} /> <button className="small guide-toggle" onClick={() => setShowGuide(false)} aria-label="Hide the hint">Hide</button></span>
+          : <button className="small guide-toggle" onClick={() => setShowGuide(true)}>💡 Hint</button>)}
       </div>
       {failed && (
         <div className="modal-bg">
