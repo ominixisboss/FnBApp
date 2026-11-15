@@ -259,3 +259,49 @@ describe('hero rules from the hero card', () => {
     expect(eligibleForHero(clash, brutus)).toBe(true);
   });
 });
+
+describe('last partial heroes', () => {
+  const twoP = (a: string, b = 'Dorinthea', extraA: Partial<DeckList> = {}, extraB: Partial<DeckList> = {}) => {
+    const s = structuredClone(createGame([{ name: 'A', isBot: false, deck: deck(a, extraA) }, { name: 'B', isBot: false, deck: deck(b, extraB) }], 5, 'cc', 0));
+    s.players[0].actionPoints = 1; s.players[0].resources = 10;
+    return s;
+  };
+  it('Prism awakens a figment into its Archangel', async () => {
+    const { awakenFigment } = await import('../engine/heroes');
+    const s = twoP('Prism, Awakener');
+    const fig = findCard('Figment of War')!;
+    s.players[0].permanents.push({ inst: { uid: 900, cardId: fig.id, owner: 0 }, ward: 0 });
+    expect(awakenFigment(s.players[0], { log: () => {} })).toBe(true);
+    expect(cardOf(s.players[0].permanents.find((pm) => pm.inst.uid === 900)!.inst).name).toBe('Bellona, Archangel of War');
+  });
+  it('Jarl only gives a Frostbite when the opponent has an exposed equipment zone', () => {
+    const ice = getDb().cards.find((c) => c.types.includes('Ice') && c.types.includes('Action') && !c.types.includes('Attack') && (c.cost ?? 0) <= 1 && c.legal.includes('cc'))!;
+    const slot = (z: string) => getDb().cards.find((c) => c.types.includes('Equipment') && c.types.includes(z) && c.types.includes('Generic') && c.legal.includes('cc'))!.id;
+    const run = (equip: string[]) => {
+      let s = twoP('Jarl', 'Dorinthea', { cardIds: [ice.id, ...Array(39).fill(filler())] }, { equipmentIds: equip });
+      const p = s.players[0];
+      const i = [...p.hand, ...p.deck].find((h) => h.cardId === ice.id)!;
+      p.deck = p.deck.filter((h) => h !== i); p.hand = [i, ...p.hand.filter((h) => h !== i)];
+      s = applyAction(s, { type: 'play', uid: i.uid, pitch: [] });
+      return s.players[1].permanents.filter((pm) => cardOf(pm.inst).name === 'Frostbite').length;
+    };
+    expect(run([])).toBe(1);
+    expect(run(['Head', 'Chest', 'Arms', 'Legs'].map(slot))).toBe(0);
+  });
+  it('Nuu may play blue cards from the opponent\'s banished zone for free', () => {
+    let s = twoP('Nuu, Alluring');
+    const blue = findCard('Wounding Blow', 3)!;
+    s.players[1].banished.push({ uid: 950, cardId: blue.id, owner: 1 });
+    expect(playOptions(s, 0).some((o) => o.uid === 950)).toBe(false);
+    s.players[0].turn.flags.nuuFrom = 2;
+    const o = playOptions(s, 0).find((x) => x.uid === 950);
+    expect(o?.cost).toBe(0);
+    s = applyAction(s, { type: 'play', uid: 950, pitch: [] });
+    expect(s.players[1].banished.some((b) => b.uid === 950)).toBe(false);
+  });
+  it('only Shiyana is still partly automated', async () => {
+    const { heroAutomation } = await import('../engine/heroes');
+    const partial = [...new Set(getDb().cards.filter((c) => c.types.includes('Hero') && heroAutomation(c).level !== 'full').map((c) => c.name))];
+    expect(partial).toEqual(['Shiyana, Diamond Gemini']);
+  });
+});

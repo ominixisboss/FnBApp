@@ -68,6 +68,8 @@ export interface HeroAbility {
   summary: string;
   /** true if part of the printed text is still not automated */
   partial?: boolean;
+  /** Victor Goldmane: the first time each turn you'd fail to win a clash, destroy a Gold, bottom a revealed card and clash again */
+  clashReroll?: boolean;
   match(text: string): boolean;
   setup?(ctx: HeroCtx): void;
   startOfTurn?(ctx: HeroCtx): void;
@@ -162,6 +164,21 @@ const lowestValue = (list: CardInst[]) =>
 /** A Levia demi-hero form in this player's inventory */
 const leviaForm = (p: PlayerState, name: string) => p.inventory?.find((id) => card(id).name === name);
 /** Transform: the hero card becomes the demi-hero from the inventory (life and everything else stays) */
+/** Awaken a figment: it becomes the Archangel that shares its name ("Figment of War" -> "Bellona, Archangel of War"). */
+export function awakenFigment(p: PlayerState, api: Pick<HeroApi, 'log'>): boolean {
+  const pm = p.permanents.find((x) => cardOf(x.inst).types.includes('Figment'));
+  if (!pm) return false;
+  const from = cardOf(pm.inst);
+  const suffix = from.name.replace(/^Figment of /, '');
+  const angel = getDb().cards.find((c) => c.name.endsWith(`Archangel of ${suffix}`));
+  if (!angel) return false;
+  pm.inst.cardId = angel.id;
+  pm.damage = 0;
+  pm.ward = getScript(angel).ward;
+  api.log(p, `${from.name} awakens into ${angel.name}.`);
+  return true;
+}
+
 export function transformInto(p: PlayerState, cardId: string, api: HeroApi) {
   const was = cardOf(p.hero).name;
   p.inventory = (p.inventory ?? []).filter((x) => x !== cardId);
@@ -504,16 +521,34 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'vynnset',
-    summary: 'At the start of your turn, banish a card from hand (lowest value) to create a Runechant.',
-    partial: true,
+    summary: 'At the start of your turn, banish a card from your hand to create a Runechant. Whenever you play a Shadow non-attack action card, you may pay 1{h} so your next Runechant damage this turn can\u2019t be prevented.',
     match: (t) => t.startsWith('At the start of your turn, banish a card from your hand. If you do, create a Runechant'),
     startOfTurn({ p, api }) {
       if (!p.hand.length) return;
+      if (!p.isBot && p.hand.length > 1) { api.pick(p, p, 'vynnsetBanish', 'Vynnset: banish a card from your hand to create a Runechant.', p.hand); return; }
       const inst = lowestValue(p.hand);
       p.hand.splice(p.hand.indexOf(inst), 1);
       p.banished.push(inst);
       api.log(p, `${p.name} banishes ${cardOf(inst).name} from hand.`);
       api.createToken(p, 'Runechant', 1);
+    },
+    onPlayCard({ p, opp, api }, c) {
+      if (!c.types.includes('Shadow') || has(c, 'Attack') || !has(c, 'Action') || p.turn.flags.runeUnprev || p.life <= 1) return;
+      // only worth a life when the opponent can prevent arcane damage and there are Runechants to go off
+      const prevents = opp.equipment.some((e) => !e.destroyed && !e.faceDown && (getScript(cardOf(e.inst)).arcaneBarrier > 0 || getScript(cardOf(e.inst)).spellvoid > 0));
+      if (!p.permanents.some((pm) => cardOf(pm.inst).name === 'Runechant')) return;
+      api.ask(p, p, 'vynnsetPay', 'Vynnset: pay 1{h} so your next Runechant damage this turn can\u2019t be prevented?', prevents && p.life > 6);
+    },
+    onChoice({ p, api }, key, yes, _data, picks) {
+      if (key === 'vynnsetPay' && yes) { p.life -= 1; p.turn.flags.runeUnprev = 1; api.log(p, `${p.name} pays 1{h}: the next Runechant damage this turn can\u2019t be prevented.`); }
+      if (key === 'vynnsetBanish') {
+        const inst = p.hand.find((h) => h.uid === picks?.[0]) ?? lowestValue(p.hand);
+        if (!inst) return;
+        p.hand.splice(p.hand.indexOf(inst), 1);
+        p.banished.push(inst);
+        api.log(p, `${p.name} banishes ${cardOf(inst).name} from hand.`);
+        api.createToken(p, 'Runechant', 1);
+      }
     },
   },
   {
@@ -704,10 +739,17 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'jarl',
-    summary: 'Whenever you play an Ice card, the opponent gets a Frostbite token.',
-    partial: true,
+    summary: 'Whenever you play an Ice card, the opponent gets a Frostbite token in an exposed head, chest, arms or legs zone (none if they have no empty one).',
     match: (t) => t.startsWith('Whenever you play an Ice card, create a Frostbite token'),
-    onPlayCard({ opp, api }, c) { if (c.types.includes('Ice')) api.createToken(opp, 'Frostbite', 1); },
+    onPlayCard({ opp, api }, c) {
+      if (!c.types.includes('Ice')) return;
+      // an exposed zone: no equipment there (or it was destroyed), and no Frostbite already filling it
+      const zones = ['Head', 'Chest', 'Arms', 'Legs'];
+      const covered = zones.filter((z) => opp.equipment.some((e) => !e.destroyed && cardOf(e.inst).types.includes(z))).length;
+      const frost = opp.permanents.filter((pm) => cardOf(pm.inst).name === 'Frostbite').length;
+      if (covered + frost >= zones.length) { api.log(opp, `Jarl: ${opp.name} has no exposed equipment zone for a Frostbite.`); return; }
+      api.createToken(opp, 'Frostbite', 1);
+    },
   },
 ];
 
@@ -805,8 +847,8 @@ HERO_ABILITIES.push(
   },
   {
     id: 'enigma-ledger',
+    // "your first Spectral Shield attack costs {r} less": no card in the pool lets a Spectral Shield attack
     summary: 'Once per turn Instant {c}{c}{c} (chi from a pitched Chi card): create a Spectral Shield token with a +1{p} counter.',
-    partial: true,
     match: (t) => t.includes('Once per Turn Instant - {c}{c}{c}: Create a Spectral Shield token with a +1{p} counter'),
     activations: [{
       label: 'Spectral Shield (3 chi)', instant: true, oncePerTurn: true,
@@ -941,8 +983,22 @@ HERO_ABILITIES.push(
   },
   {
     id: 'pleiades',
-    summary: 'Whenever the crowd cheers you, create a Confidence token.',
-    partial: true, // the suspense-counter ability isn't automated
+    summary: 'Instant {t}: move a suspense counter from one of your auras to another aura of suspense (keeps an aura that is about to run out alive). Whenever the crowd cheers you, create a Confidence token.',
+    activations: [{
+      label: 'Move a suspense counter', instant: true, oncePerTurn: false,
+      cost: () => 0,
+      canUse: ({ p }) => p.permanents.filter((pm) => pm.suspense !== undefined).length >= 2 && p.permanents.some((pm) => (pm.suspense ?? 0) > 1),
+      resolve: ({ p, api }) => {
+        const sus = p.permanents.filter((pm) => pm.suspense !== undefined);
+        const from = [...sus].sort((a, b) => (b.suspense ?? 0) - (a.suspense ?? 0))[0];
+        const to = [...sus].filter((pm) => pm !== from).sort((a, b) => (a.suspense ?? 0) - (b.suspense ?? 0))[0];
+        if (!from || !to) return;
+        from.suspense = (from.suspense ?? 1) - 1;
+        to.suspense = (to.suspense ?? 0) + 1;
+        api.log(p, `${p.name} moves a suspense counter from ${cardOf(from.inst).name} to ${cardOf(to.inst).name}.`);
+      },
+      botValue: ({ p }) => (p.permanents.some((pm) => pm.suspense === 1) ? 1 : -1),
+    }],
     match: (t) => t.includes('Whenever the crowd cheers you, create a Confidence token'),
     onCheer: ({ p, api }) => api.createToken(p, 'Confidence', 1),
   },
@@ -1239,23 +1295,39 @@ HERO_ABILITIES.push(
   },
   {
     id: 'nuu',
-    summary: 'Your attacks with stealth banish the action cards that defended them when the chain link resolves.',
-    partial: true, // the {c}{c}{c} look-and-play ability isn't automated
+    summary: 'Your attacks with stealth banish the action cards that defended them when the chain link resolves. Instant {c}{c}{c}: look at the top card of the opponent\u2019s deck and banish it if it\u2019s blue; this turn you may play blue cards from their banished zone without paying their cost.',
     match: (t) => t.startsWith('Your attacks with stealth get "When this chain link resolves, banish all action cards defending this."'),
     banishStealthBlockers: true,
+    // "Instant - {c}{c}{c}: Look at the top card of an opposing hero's deck. If it's blue, you may banish it. Until end of turn, you may play
+    //  blue cards from that hero's banished zone without paying their {r} cost."
+    activations: [{
+      label: 'Look at their top card (3 chi): banish it if blue; play their banished blue cards free this turn', instant: true, oncePerTurn: false,
+      cost: () => 0,
+      canUse: ({ p }) => chiAvailable(p) >= 3,
+      resolve: ({ p, api }) => {
+        spendChi(p, 3, api);
+        const o = api.targets(p)[0];
+        if (!o) return;
+        const top = o.deck[0];
+        if (top && cardOf(top).pitch === 3) { o.deck.shift(); o.banished.push(top); api.log(p, `${p.name} banishes ${cardOf(top).name} from the top of ${o.name}'s deck.`); }
+        else api.log(p, `${p.name} looks at the top card of ${o.name}'s deck${top ? ` (${cardOf(top).name}): it isn't blue` : ''}.`);
+        p.turn.flags.nuuFrom = o.id + 1;
+      },
+      botValue: () => 0.8,
+    }],
   },
   {
     id: 'oldhim',
     summary: 'Once per turn Defense Reaction {r}{r}{r}: if an Earth card was pitched, prevent the next 2 damage; if an Ice card was pitched, the attacking hero puts a card from hand on top of their deck.',
-    partial: true, // checks the cards in your pitch zone rather than exactly the ones pitched for this
     match: (t) => t.includes('Once per Turn Defense Reaction - {r}{r}{r}: If an Earth card is pitched this way, prevent the next 2 damage'),
     activations: [{
       label: 'Defense reaction (Earth: prevent 2, Ice: they lose a card to the deck)', instant: true, oncePerTurn: true,
       cost: () => 3,
       canUse: ({ s, p }) => { const l = s.chain[s.chain.length - 1]; return s.phase === 'reaction' && !!l && l.attacker !== p.id; },
       resolve: ({ p, opp, api }) => {
-        if (p.pitch.some((x) => cardOf(x).types.includes('Earth'))) { p.effects.push({ kind: 'preventNext', amount: 2, source: 'Oldhim' }); api.log(p, 'Oldhim: the next 2 damage is prevented.'); }
-        if (p.pitch.some((x) => cardOf(x).types.includes('Ice')) && opp.hand.length) { const c = lowestValue(opp.hand)!; opp.hand = opp.hand.filter((x) => x !== c); opp.deck.unshift(c); api.log(opp, `${opp.name} puts a card from hand on top of their deck.`); }
+        const paid = (p.lastPaidPitch ?? []).map((id) => getDb().byId.get(id)).filter((c): c is Card => !!c);
+        if (paid.some((c) => c.types.includes('Earth'))) { p.effects.push({ kind: 'preventNext', amount: 2, source: 'Oldhim' }); api.log(p, 'Oldhim: the next 2 damage is prevented.'); }
+        if (paid.some((c) => c.types.includes('Ice')) && opp.hand.length) { const c = lowestValue(opp.hand)!; opp.hand = opp.hand.filter((x) => x !== c); opp.deck.unshift(c); api.log(opp, `${opp.name} puts a card from hand on top of their deck.`); }
       },
       botValue: () => 1,
     }],
@@ -1283,6 +1355,16 @@ HERO_ABILITIES.push(
     summary: 'You may play Evos from your banished zone (Professor Teklovossen: Evos cost {r} less for each opponent).',
     match: (t) => t.includes('You may play Evos from your banished zone'),
     playFromBanished: (_ctx, c) => c.types.includes('Evo'),
+    // "Once per Turn Instant - {r}{r}{r}: You may play your next Evo this turn as though it were an instant. When you do, draw a card."
+    activations: [{
+      label: 'Next Evo as an instant (draw when you play it)', instant: true, oncePerTurn: true,
+      cost: () => 3,
+      canUse: ({ p }) => /Instant - \{r\}\{r\}\{r\}: You may play your next Evo/.test(cardOf(p.hero).text) && !flag(p, 'evoInstant') && [...p.hand, ...p.banished].some((h) => cardOf(h).types.includes('Evo')),
+      resolve: ({ p, api }) => { setFlag(p, 'evoInstant'); api.log(p, `${p.name}'s next Evo this turn can be played as an instant.`); },
+      botValue: () => -1,
+    }],
+    asInstant: ({ p }, c) => c.types.includes('Evo') && flag(p, 'evoInstant') && !flag(p, 'evoInstantUsed'),
+    onPlayCard: ({ p, api }, c) => { if (c.types.includes('Evo') && flag(p, 'evoInstant') && !flag(p, 'evoInstantUsed')) { setFlag(p, 'evoInstantUsed'); api.draw(p, 1); } },
     cardCostMod: ({ s, p }, c) => (c.types.includes('Evo') && cardOf(p.hero).text.startsWith('Evos cost {r} less') ? s.players.length - 1 : 0),
   },
   {
@@ -1316,8 +1398,8 @@ HERO_ABILITIES.push(
   },
   {
     id: 'victor-goldmane',
-    summary: 'The first time each turn you create a Gold token from your own effect, draw a card.',
-    partial: true, // the clash re-roll with a Gold isn't automated
+    summary: 'The first time each turn you create a Gold token from your own effect, draw a card. The first time each turn you would fail to win a clash, you may destroy a Gold: put your revealed card on the bottom and clash again.',
+    clashReroll: true,
     match: (t) => t.startsWith('The first time each turn you create a Gold token from an effect you control, draw a card'),
     onCreateToken: ({ p, api }, t) => { if (t.name === 'Gold' && !flag(p, 'victorGold')) { setFlag(p, 'victorGold'); api.draw(p, 1); } },
   },
@@ -1359,8 +1441,18 @@ HERO_ABILITIES.push(
   },
   {
     id: 'victor-match-fixer',
-    summary: 'Whenever you attack, you may destroy 3 Gold for +3{p} and dominate.',
-    partial: true, // the clash-fixing instant isn't automated
+    summary: 'Instant {t}: the first card an opponent reveals for their next clash this turn gets +1{p}; when they win it, you create a Gold. Whenever you attack, you may destroy 3 Gold for +3{p} and dominate.',
+    activations: [{
+      label: 'Fix their next clash (+1{p} for them; you get a Gold if they win)', instant: true, oncePerTurn: false,
+      cost: () => 0,
+      canUse: ({ api, p }) => api.targets(p).length > 0,
+      resolve: ({ p, api }) => {
+        const o = api.targets(p)[0];
+        o.turn.flags.clashFixedBy = p.id + 1;
+        api.log(p, `${p.name} fixes ${o.name}'s next clash this turn.`);
+      },
+      botValue: () => 0,
+    }],
     match: (t) => t.includes('Whenever you attack, you may destroy 3 Gold you control. If you do, the attack gets +3{p} and dominate'),
     onAttack: ({ p, api }, l) => {
       if (goldCount(p) < 3) return;
@@ -1421,8 +1513,14 @@ HERO_ABILITIES.push(
   },
   {
     id: 'prism-figments',
-    summary: 'Whenever a Herald card is put into your soul during an action phase, search your deck for a figment and put it into the arena.',
-    partial: true, // awakening figments isn't automated
+    summary: 'Whenever a Herald card is put into your soul during an action phase, search your deck for a figment and put it into the arena. Once per turn Instant {r}{r}, banish a soul card: awaken a figment into its Archangel.',
+    activations: [{
+      label: 'Awaken a figment ({r}{r}, banish a soul card)', instant: true, oncePerTurn: true,
+      cost: () => 2,
+      canUse: ({ p }) => (p.soul?.length ?? 0) > 0 && p.permanents.some((x) => cardOf(x.inst).types.includes('Figment')),
+      resolve: ({ p, api }) => { p.banished.push(p.soul!.shift()!); awakenFigment(p, api); },
+      botValue: () => 1.5,
+    }],
     match: (t) => t.startsWith('Whenever a card with Herald in its name is put into your soul during an action phase'),
     onLinkResolve: ({ s, p, api }) => {
       const herald = (p.soul ?? []).filter((x) => cardOf(x).name.includes('Herald')).length;
@@ -1434,6 +1532,8 @@ HERO_ABILITIES.push(
       p.deck.splice(0, p.deck.length, ...api.shuffle(p.deck));
       p.permanents.push({ inst: f, ward: 0 });
       api.log(p, `${p.name} searches for ${cardOf(f).name} and puts it into the arena.`);
+      api.resolve(p, getScript(cardOf(f)).onPlay, f); // "When this enters the arena, ..."
+
     },
   },
 );

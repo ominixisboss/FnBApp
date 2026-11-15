@@ -919,6 +919,22 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
         </div>
       </div>
 
+      {/* cards you may play from somewhere other than your hand or arsenal (banished zone, graveyard, an opponent's banished zone) */}
+      {myTurn && !pending && (() => {
+        const mine = new Set([...me.hand, ...me.arsenal].map((h) => h.uid));
+        const extra = options.filter((o) => o.kind === 'card' && !mine.has(o.uid));
+        if (!extra.length) return null;
+        return (
+          <div className="also-playable" role="group" aria-label="Also playable">
+            <span className="small muted">Also playable:</span>
+            {extra.map((o) => (
+              <button key={`${o.uid}-${o.index}`} className="small" onClick={() => startPlay(o)}>
+                <SymText text={o.label} />{o.cost ? ` · ⛀${o.cost}` : ''}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
       {handOpen && !pending && <div className="hand-scrim" onClick={() => setHandOpen(false)} />}
       <div className={`hand-fan ${dragging ? 'is-dragging' : ''} ${handOpen || pending ? 'open' : ''}`} ref={handRef}>
         {me.hand.map((inst, i) => {

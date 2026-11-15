@@ -2,7 +2,7 @@
 import type { Card } from '../data/types';
 import { card, findCard, getDb, has, n } from '../data/cardDb';
 import { getScript, describeFilter } from './cardScript';
-import { getHeroAbility, transformInto } from './heroes';
+import { awakenFigment, getHeroAbility, transformInto } from './heroes';
 import type { HeroApi, HeroCtx } from './heroes';
 import type { Activation, AttackFilter, Condition, Effect, Mode, OptionalCost, OptionalCostKind, TriggerEvent } from './cardScript';
 import type { Macro, Layer, PermanentState } from './types';
@@ -1153,11 +1153,26 @@ function toGraveyard(p: PlayerState, inst: CardInst) {
 function clash(s: GameState, a: PlayerId = s.turnPlayer, b: PlayerId = oppOf(s, s.turnPlayer)): PlayerId | null {
   const two = [s.players[a], s.players[b]];
   const tops = two.map((pl) => pl.deck[0]);
-  const pw = tops.map((t) => (t ? powerOf(cardOf(t)) : -1));
+  // Victor, Match Fixer: the first card a fixed player reveals for their next clash gets +1{p}
+  const fixedBy = two.map((pl) => pl.turn.flags.clashFixedBy ?? 0);
+  two.forEach((pl) => { if (pl.turn.flags.clashFixedBy) pl.turn.flags.clashFixedBy = 0; });
+  const pw = tops.map((t, i) => (t ? powerOf(cardOf(t)) + (fixedBy[i] ? 1 : 0) : -1));
   const names = two.map((pl, i) => `${pl.name}: ${tops[i] ? `${cardOf(tops[i]!).name} (${pw[i]})` : 'no card'}`);
   let winner: PlayerId | null = pw[0] > pw[1] ? a : pw[1] > pw[0] ? b : null;
   if (winner === null) { const w = two.find((pl) => ability(pl)?.winsTiedClash); if (w) winner = w.id; }
   log(s, null, `Clash! ${names.join(' vs ')} — ${winner === null ? 'no winner' : `${s.players[winner].name} wins`}.`, 'Clash: each hero reveals the top card of their deck. The hero who revealed the card with the greatest {p} wins.');
+  // Victor Goldmane: the first time each turn he'd fail to win, destroy a Gold, bottom his revealed card and clash again
+  const victor = two.find((pl) => pl.id !== winner && ability(pl)?.clashReroll && !pl.turn.flags.clashReroll && pl.permanents.some((pm) => isA(pm.inst, 'Gold')) && pl.deck.length > 1);
+  if (victor) {
+    victor.turn.flags.clashReroll = 1;
+    const at = victor.permanents.findIndex((pm) => isA(pm.inst, 'Gold'));
+    const [g] = victor.permanents.splice(at, 1);
+    graveFromArena(victor, g.inst);
+    victor.deck.push(victor.deck.shift()!);
+    log(s, victor.id, `${victor.name} destroys a Gold, puts the revealed card on the bottom and clashes again.`);
+    return clash(s, a, b);
+  }
+  { const wi = winner === a ? 0 : winner === b ? 1 : -1; if (wi >= 0 && fixedBy[wi]) createToken(s, s.players[fixedBy[wi] - 1], 'Gold', 1); }
   if (winner !== null) {
     s.players[winner].turn.clashesWon = (s.players[winner].turn.clashesWon ?? 0) + 1;
     { const wt = tops[winner === a ? 0 : 1]; const w = wt && getScript(cardOf(wt)).onClashWin; if (wt && w?.length) resolveEffects(s, s.players[winner], w, wt); }
@@ -1681,6 +1696,16 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     if (availableResources(p) < cost) continue;
     out.push({ uid: b.uid, kind: 'card', index: 0, cost, label: c.name });
   }
+  // Nuu: blue cards from that hero's banished zone, without paying their {r} cost
+  if (p.turn.flags.nuuFrom) {
+    const o = s.players[p.turn.flags.nuuFrom - 1];
+    for (const b of o?.banished ?? []) {
+      const c = cardOf(b);
+      if (b.faceDown || c.pitch !== 3 || has(c, 'Hero') || !timingOk(s, pid, c)) continue;
+      if (availableResources(p) < frostbite(p)) continue;
+      out.push({ uid: b.uid, kind: 'card', index: 0, cost: frostbite(p), label: `${c.name} (from ${o.name}'s banished zone)` });
+    }
+  }
   for (const g of p.graveyard) {
     if (!p.turn.flags[`playGrave${g.uid}`] && !ab0?.playFromGraveyard?.(heroCtx(s, p), cardOf(g))) continue;
     const c = cardOf(g);
@@ -1853,6 +1878,7 @@ export function applyAction(prev: GameState, action: Action): GameState {
 }
 
 function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
+  p.lastPaidPitch = [];
   for (const uid of pitch) {
     if (p.resources >= cost) break; // never over-pitch beyond need
     const inst = removeFrom(p.hand, uid);
@@ -1862,6 +1888,7 @@ function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
     if (ability(p)?.pitchToBanished) p.banished.push(inst);
     else p.pitch.push(inst);
     log(s, p.id, `${p.name} pitches ${c.name} (+${pitchOf(c)}).`);
+    p.lastPaidPitch.push(c.id);
     if (c.types.includes('Chi')) p.turn.flags.chi = (p.turn.flags.chi ?? 0) + pitchOf(c);
     ability(p)?.onPitch?.(heroCtx(s, p), c);
     const op = getScript(c).onPitch;
@@ -1882,8 +1909,10 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   const fromArsenal = p.arsenal.some((a) => a.uid === uid);
   const fromBanished = !fromArsenal && p.banished.some((b) => b.uid === uid);
   const fromGrave = !fromArsenal && !fromBanished && !p.hand.some((h) => h.uid === uid) && p.graveyard.some((g) => g.uid === uid);
+  const nuuZone = p.turn.flags.nuuFrom ? s.players[p.turn.flags.nuuFrom - 1]?.banished : undefined;
+  const fromOpp = !fromArsenal && !fromBanished && !fromGrave && !p.hand.some((h) => h.uid === uid) && !!nuuZone?.some((b) => b.uid === uid);
   if (fromBanished && getScript(cardOf(p.banished.find((b) => b.uid === uid)!)).runeGate) p.turn.flags[`runeGated${uid}`] = 1;
-  const zone = fromArsenal ? p.arsenal : fromBanished ? p.banished : fromGrave ? p.graveyard : p.hand;
+  const zone = fromArsenal ? p.arsenal : fromBanished ? p.banished : fromGrave ? p.graveyard : fromOpp ? nuuZone! : p.hand;
   const c = cardOf(zone.find((h) => h.uid === uid)!);
   const sc = getScript(c);
   // Meld: the Action half (and the meld) needs an action; otherwise only the Instant half can be played
@@ -2238,7 +2267,9 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
       const usurp = name !== 'Runechant' ? getScript(cardOf(pm.inst)).onUsurp : undefined;
       if (usurp?.length) { log(s, p.id, `${c.name} usurps ${name}.`); resolveEffects(s, p, usurp, pm.inst); }
       if (p.permanents.includes(pm)) destroy();
-      if (dealDamage(s, link.defender!, 1, true, 'Runechant') > 0) p.turn.arcaneDealt = true;
+      const unprev = !!p.turn.flags.runeUnprev; // Vynnset paid a life for it
+      if (unprev) p.turn.flags.runeUnprev = 0;
+      if (dealDamage(s, link.defender!, 1, true, 'Runechant', unprev) > 0) p.turn.arcaneDealt = true;
     }
     else if (name === 'Quicken') { destroy(); link.goAgain = true; }
     else if (name === 'Courage') { destroy(); link.powerMod += 1; }
@@ -3086,6 +3117,9 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         if (!p.isBot && top.length) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${t.id === p.id ? 'your' : `${t.name}'s`} deck (look only).`, confirm: 'OK', skippable: true, botPick: null, options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'event', key: 'look' } });
         break;
       }
+      case 'awaken':
+        if (!awakenFigment(p, { log: (who, t) => log(s, who?.id ?? null, t) })) log(s, p.id, `${srcName}: there's no figment to awaken.`);
+        break;
       case 'treasurePut':
         if (s.macro !== 'Treasure Island') { log(s, p.id, `${srcName}: there is no Treasure Island.`); break; }
         s.treasureGold = (s.treasureGold ?? 0) + 1;

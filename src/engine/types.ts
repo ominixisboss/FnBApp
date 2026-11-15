@@ -96,6 +96,8 @@ export interface PlayerState {
   copyOf?: string;
   /** banished cards this player may play until the start of their next turn (Arakni, Trap-Door) */
   playableBanished?: number[];
+  /** the cards pitched for the last thing this player paid for ("if an Earth card is pitched this way") */
+  lastPaidPitch?: string[];
   /** Arakni, Marionette became an Agent of Chaos: the hero card it returns to ("return to the brood") */
   broodOf?: string;
   /** cards outside the game this player may fetch (unused Classic Constructed pool: equipment, Tomes) */

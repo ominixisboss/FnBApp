@@ -85,6 +85,8 @@ export type Effect =
   | { kind: 'preventArcane'; amount: number }
   /** "Look at the top N cards of your (their) deck": shown to you, nothing moves */
   | { kind: 'lookTop'; n: number; theirs?: boolean; mayBottom?: boolean }
+  /** "Awaken target figment you control" */
+  | { kind: 'awaken' }
   /** the defending hero banishes a card from their hand / a card in their arsenal (Agents of Chaos) */
   | { kind: 'oppBanishHand' }
   | { kind: 'oppBanishArsenal' }
@@ -577,6 +579,7 @@ export function parseEffect(raw: string): Effect[] | null {
     const inner = parseEffect(m[2].replace(/to (?:them|the defending hero|target hero)$/i, 'to target hero'));
     if (inner) return [...(m[1] ? [{ kind: 'thisPower' as const, amount: +m[1] }] : []), ...inner];
   }
+  if (/^awaken target figment you control$/i.test(s)) return [{ kind: 'awaken' }];
   if (/^(?:this|it) gets go again$/i.test(s)) return [{ kind: 'thisGoAgain' }];
   if (/^(?:this|it) gets dominate$/i.test(s)) return [{ kind: 'thisDominate' }];
   if (/^(?:this|it) gets overpower$/i.test(s)) return [{ kind: 'thisOverpower' }];
