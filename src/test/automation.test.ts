@@ -515,3 +515,35 @@ describe('steal and keyword filters', () => {
     expect(getScript(c).onPlay[0]).toMatchObject({ kind: 'targetAttackPower', filter: { kind: 'keyword', value: 'Stealth' } });
   });
 });
+
+describe('card text pass: watery grave payoffs, banished discounts, look-and-bottom, name targets', () => {
+  it('"If that card has watery grave" pays off only for a watery grave card', () => {
+    const c = findCard('Angry Bones')!;
+    expect(getScript(c).optional?.needWatery).toBe(true);
+    const wg = find((x) => !!getScript(x).wateryGrave && x.types.includes('Action'));
+    const plain = filler();
+    const run = (discard: string) => {
+      let s = game([c.id, discard]);
+      s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [], optional: { accept: true, uid: s.players[0].hand[1].uid } });
+      return linkPower(currentLink(s)!);
+    };
+    expect(run(wg.id)).toBe(run(plain) + 1);
+  });
+  it('"If you play this from your banished zone, this costs less"', () => {
+    const c = findCard('Grim Feast')!;
+    expect(getScript(c).costLessBanished).toBe(2);
+    const s = game([filler()]);
+    const p = s.players[0];
+    p.banished.push({ uid: 999, cardId: c.id, owner: 0 });
+    const o = playOptions(s, 0).find((x) => x.uid === 999);
+    expect(o?.cost).toBe(Math.max(0, (c.cost ?? 0) - 2));
+  });
+  it('"look at the top card ... You may put it on the bottom" and Herald / 1H targets parse', () => {
+    const look = getScript(findCard('Cut to the Chase')!);
+    expect(look.unparsed.join('|')).not.toMatch(/bottom/);
+    expect(JSON.stringify(look)).toMatch(/"mayBottom":true/);
+    const herald = find((x) => /with Herald in its name gets/.test(x.text ?? ''));
+    expect(getScript(herald).unparsed.join('|')).not.toMatch(/Herald/);
+    expect(getScript(findCard('Depths of Despair')!).defendBanish).toBe(true);
+  });
+});

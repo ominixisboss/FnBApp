@@ -1068,6 +1068,11 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
   const id = s.lastEvent;
   const hero = () => s.players.find((q) => q.hero.uid === picks[0]);
   switch (key) {
+    case 'lookBottom': {
+      const t = s.players[_data?.[0] ?? p.id];
+      if (picks.length && t.deck[0]?.uid === picks[0]) { t.deck.push(t.deck.shift()!); log(s, p.id, `${p.name} puts it on the bottom.`); }
+      break;
+    }
     case 'equip':
       if (yes && id) equipCard(s, p, id); else if (id) (s.eventDiscard ??= []).push(id);
       break;
@@ -1508,6 +1513,10 @@ function optionalPayoff(s: GameState, p: PlayerState, oc: OptionalCost, used: Ca
     log(s, p.id, `${cardOf(inst).name}: the paid card didn't have ${oc.minPower}+ power.`);
     return;
   }
+  if (oc.needWatery && (!used || !getScript(used).wateryGrave)) {
+    log(s, p.id, `${cardOf(inst).name}: that card didn't have watery grave.`);
+    return;
+  }
   resolveEffects(s, p, oc.effects, inst);
 }
 
@@ -1619,7 +1628,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     const free = !!p.turn.flags[`playBanished${b.uid}`] || !!p.playableBanished?.includes(b.uid);
     if (!free && !ab0?.playFromBanished?.(heroCtx(s, p), c)) continue;
     if (fromBanished.includes(b) || !timingOk(s, pid, c)) continue;
-    const cost = p.turn.flags[`freePlay${b.uid}`] ? frostbite(p) : effectiveCost(s, p, c);
+    const cost = p.turn.flags[`freePlay${b.uid}`] ? frostbite(p) : Math.max(frostbite(p), effectiveCost(s, p, c) - (getScript(c).costLessBanished ?? 0));
     if (availableResources(p) < cost) continue;
     out.push({ uid: b.uid, kind: 'card', index: 0, cost, label: c.name });
   }
@@ -1641,8 +1650,9 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   for (const inst of [...p.hand, ...p.arsenal, ...fromBanished]) {
     const c = cardOf(inst);
     if (!timingOk(s, pid, c)) continue;
-    const cost = effectiveCost(s, p, c);
     const sc = getScript(c);
+    const banishedLess = sc.costLessBanished && fromBanished.includes(inst) ? sc.costLessBanished : 0;
+    const cost = Math.max(frostbite(p), effectiveCost(s, p, c) - banishedLess);
     const extra = (sc.additionalCost.discardRandom ?? 0) + (sc.additionalCost.banishRandomHand ?? 0) + (sc.additionalCost.handToBottom ?? 0);
     if ((sc.additionalCost.banishSoul ?? 0) > (p.soul ?? []).length) continue;
     if (extra > 0 && p.hand.filter((h) => h.uid !== inst.uid).length < extra) continue;
@@ -2466,6 +2476,9 @@ function resolveDamage(s: GameState) {
     } else if (ability(attacker)?.banishStealthBlockers && cardOf(l.inst).keywords.includes('Stealth') && has(cardOf(d.inst), 'Action')) {
       dp.banished.push(d.inst);
       log(s, dp.id, `${cardOf(d.inst).name} is banished (Nuu).`);
+    } else if (getScript(cardOf(d.inst)).defendBanish) {
+      dp.banished.push(d.inst);
+      log(s, dp.id, `${cardOf(d.inst).name} is banished.`);
     } else {
       toGraveyard(dp, d.inst);
     }
@@ -3012,6 +3025,13 @@ function resolveEffects(s: GameState, p: PlayerState, effects: Effect[], src: Ca
         const t = e.theirs ? (l ? s.players[l.attacker === p.id ? defenderOf(l) : l.attacker] : opp) : p;
         const top = t.deck.slice(0, e.n);
         log(s, p.id, `${p.name} looks at the top ${e.n === 1 ? 'card' : `${e.n} cards`} of ${t.id === p.id ? 'their' : `${t.name}'s`} deck.`);
+        if (e.mayBottom && top.length) {
+          // a bot sends a strong card of the opponent's (or a weak one of its own) to the bottom
+          const strong = (x: CardInst) => powerOf(cardOf(x)) + (defenseOf(cardOf(x)) ?? 0) >= 6;
+          if (!p.isBot) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top card of ${t.id === p.id ? 'your' : `${t.name}'s`} deck. Pick it to put it on the bottom, or skip to leave it.`, confirm: 'Put on bottom', skippable: true, options: [{ uid: top[0].uid, cardId: top[0].cardId }], resume: { type: 'event', key: 'lookBottom', data: [t.id] } });
+          else if (t.id === p.id ? !strong(top[0]) : strong(top[0])) { t.deck.push(t.deck.shift()!); log(s, p.id, `${p.name} puts it on the bottom.`); }
+          break;
+        }
         if (!p.isBot && top.length) ask(s, { player: p.id, kind: 'pick', prompt: `${srcName}: the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${t.id === p.id ? 'your' : `${t.name}'s`} deck (look only).`, confirm: 'OK', skippable: true, botPick: null, options: top.map((x) => ({ uid: x.uid, cardId: x.cardId })), resume: { type: 'event', key: 'look' } });
         break;
       }
