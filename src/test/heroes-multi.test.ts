@@ -1,7 +1,7 @@
 // The last heroes: protect, damage redirection, inventory, opponents' start-of-turn, joke heroes.
 import { describe, expect, it } from 'vitest';
 import './setup';
-import { findCard, getDb } from '../data/cardDb';
+import { eligibleForHero, findCard, getDb } from '../data/cardDb';
 import { applyAction, cardOf, createGame, defendOptions, HERO_INDEX, playOptions, targetableOpponents } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import { chooseAction } from '../ai/bot';
@@ -230,5 +230,32 @@ describe('more hero abilities', () => {
     const before = defendOptions(s, 1).find((o) => o.kind === 'hand')!.defense;
     s.players[1].turn.flags.lyathDef = 1;
     expect(defendOptions(s, 1).find((o) => o.kind === 'hand')!.defense).toBe(before + 1);
+  });
+});
+
+describe('hero rules from the hero card', () => {
+  const filler = () => findCard('Wounding Blow', 3)!.id;
+  const deck = (hero: string, weapons: string[] = [], equipment: string[] = []) => ({ heroId: findCard(hero)!.id, weaponIds: weapons.map((w) => findCard(w)!.id), equipmentIds: equipment.map((e) => findCard(e)!.id), cardIds: Array(30).fill(filler()) });
+  const two = (a: ReturnType<typeof deck>) => createGame([{ name: 'P0', isBot: false, deck: a }, { name: 'P1', isBot: false, deck: deck('Dorinthea') }], 21);
+  it('Kayo has 1 weapon zone; Zane equips two 2H swords', () => {
+    const daggers = getDb().cards.filter((c) => c.types.includes('Weapon') && c.types.includes('1H') && !c.types.includes('Token')).slice(0, 2).map((c) => c.name);
+    expect(two(deck('Kayo', daggers)).players[0].weapons.length).toBe(1);
+    const swords2h = getDb().cards.filter((c) => c.types.includes('Sword') && c.types.includes('2H') && !c.types.includes('Token')).slice(0, 2).map((c) => c.name);
+    const zane = getDb().cards.find((c) => c.types.includes('Hero') && /You may equip 2H swords as though they were 1H/.test(c.text))!;
+    expect(two(deck(zane.name, swords2h)).players[0].weapons.length).toBe(2);
+  });
+  it('Enigma, New Moon: her equipment starts face-down', () => {
+    const eq = getDb().cards.find((c) => c.types.includes('Equipment') && c.types.includes('Chest') && !/cloaked/i.test(c.text) && !c.types.includes('Token'))!;
+    const enigma = getDb().cards.find((c) => c.types.includes('Hero') && c.text.startsWith('Equipment you own get cloaked'))!;
+    const s = two(deck(enigma.name, [], [eq.name]));
+    expect(s.players[0].equipment[0].faceDown).toBe(true);
+  });
+  it('Shiyana may use any hero\'s specialization cards; Brutus any clash card', () => {
+    const shiyana = getDb().cards.find((c) => c.types.includes('Hero') && /You may have specialization cards of any hero/i.test(c.text))!;
+    const spec = getDb().cards.find((c) => c.keywords.some((k) => k.endsWith('Specialization')) && !c.types.includes('Hero'))!;
+    expect(eligibleForHero(spec, shiyana)).toBe(true);
+    const brutus = getDb().cards.find((c) => c.types.includes('Hero') && /cards with clash of any class/i.test(c.text))!;
+    const clash = getDb().cards.find((c) => /\bclash\b/i.test(c.text) && c.types.includes('Guardian') && !c.types.includes('Hero'))!;
+    expect(eligibleForHero(clash, brutus)).toBe(true);
   });
 });

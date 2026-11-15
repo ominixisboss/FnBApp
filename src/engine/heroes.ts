@@ -39,6 +39,8 @@ export interface HeroApi {
   pay(p: PlayerState, amount: number): boolean;
   /** banish an equipment this player controls */
   removeEquipment(p: PlayerState, uid: number): CardInst | null;
+  /** resolve card effects for p with `inst` as their source (a returned aura's "when this enters") */
+  resolve(p: PlayerState, effects: import('./cardScript').Effect[], inst: CardInst): void;
 }
 
 export interface HeroCtx {
@@ -107,6 +109,18 @@ export interface HeroAbility {
   cardCostMod?(ctx: HeroCtx, c: Card): number;
   /** cards you may play from your banished zone */
   playFromBanished?(ctx: HeroCtx, c: Card): boolean;
+  /** you draw during your own action phase (Marlynn) */
+  onDraw?(ctx: HeroCtx, n: number): void;
+  /** cards you may play from your graveyard right now (Gravy Bones) */
+  playFromGraveyard?(ctx: HeroCtx, c: Card): boolean;
+  /** Dash: you may look at the top card of your deck at any time */
+  seeTop?: boolean;
+  /** Kayo: you have 1 weapon zone */
+  oneWeaponZone?: boolean;
+  /** Zane: 2H swords can be equipped as though they were 1H */
+  twoHandSwordsAsOne?: boolean;
+  /** Enigma, New Moon: equipment you own get cloaked */
+  cloakAll?: boolean;
   /** Killjoy: may attack any opposing hero (Pit Fight) */
   attackAny?: boolean;
   /** a trap you control triggered while defending (Riptide) */
@@ -239,6 +253,17 @@ export const HERO_ABILITIES: HeroAbility[] = [
       p.broodOf = p.hero.cardId;
       p.hero.cardId = agent.id;
       api.log(p, `An opponent is marked: ${p.name} becomes ${agent.name}, an Agent of Chaos.`);
+      // Trap-Door: "When you become this, you may search your deck for a card, banish it face-down, then shuffle. If it's a trap, you may play it until the start of your next turn."
+      if (agent.text.startsWith('When you become this, you may search your deck for a card')) {
+        const trap = [...p.deck].filter((x) => cardOf(x).types.includes('Trap')).sort((a, b) => Number(cardOf(b).defense ?? 0) - Number(cardOf(a).defense ?? 0))[0];
+        if (trap) {
+          p.deck = api.shuffle(p.deck.filter((x) => x !== trap));
+          trap.faceDown = true;
+          p.banished.push(trap);
+          (p.playableBanished ??= []).push(trap.uid);
+          api.log(p, `${agent.name}: ${p.name} banishes a trap face-down from their deck; they may play it until the start of their next turn.`);
+        }
+      }
     },
   },
   {
@@ -276,8 +301,8 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'agentOrbWeaver',
-    summary: 'Agent of Chaos. Once per turn Instant, discard an Assassin card: your next stealth attack this turn gets +3{p}. Returns to the brood at your end phase.',
-    partial: true, // the Graphene Chelicera token weapon isn't equipped
+    summary: 'Agent of Chaos. Graphene Chelicerae cost {r} less to activate. Once per turn Instant, discard an Assassin card: equip a Graphene Chelicera token and your next stealth attack this turn gets +3{p}. Returns to the brood at your end phase.',
+    activationCostMod: (_ctx, source) => (source.name === 'Graphene Chelicera' ? -1 : 0),
     match: (t) => t.startsWith('Graphene Chelicerae cost you {r} less to activate.'),
     activations: [{
       label: 'Discard an Assassin card: next stealth attack +3{p}', instant: true, oncePerTurn: true,
@@ -287,6 +312,8 @@ export const HERO_ABILITIES: HeroAbility[] = [
         const d = lowestValue(p.hand.filter((h) => cardOf(h).types.includes('Assassin')));
         if (!d) return;
         api.discard(p, d);
+        const gc = findCard('Graphene Chelicera');
+        if (gc && p.weapons.length < 2) { p.weapons.push({ inst: api.mk(gc.id, p), usedThisTurn: false }); api.log(p, `${p.name} equips a Graphene Chelicera token.`); }
         p.effects.push({ kind: 'nextAttackPower', amount: 3, filter: { kind: 'keyword', value: 'Stealth' }, source: 'Arakni, Orb-Weaver' });
         api.log(p, `${p.name}'s next attack with stealth this turn gets +3{p}.`);
       },
@@ -296,8 +323,7 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'agentTrapDoor',
-    summary: 'Agent of Chaos. Returns to the brood at your end phase.',
-    partial: true, // "when you become this, search your deck for a card and banish it face-down" isn't automated
+    summary: 'Agent of Chaos. When you become this, search your deck for a trap and banish it face-down; you may play it until the start of your next turn. Returns to the brood at your end phase.',
     match: (t) => t.startsWith('When you become this, you may search your deck for a card, banish it face-down'),
     endPhase: returnToBrood,
   },
@@ -413,8 +439,8 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'kayo',
-    summary: 'The first time you discard a card with 6+ power each action phase, create a Might token. (Attack cards count +1 power outside the chain.)',
-    partial: true,
+    summary: 'You have 1 weapon zone. The first time you discard a card with 6+ power each action phase, create a Might token. (Attack cards count +1 power outside the chain.)',
+    oneWeaponZone: true,
     match: (t) => t.startsWith('You have 1 weapon zone.\nAttack action cards you own get +1'),
     onDiscard({ s, p, api }, c) {
       const power = Number(c.power ?? 0) + (has(c, 'Attack') && has(c, 'Action') ? 1 : 0);
@@ -424,7 +450,7 @@ export const HERO_ABILITIES: HeroAbility[] = [
   {
     id: 'kayo-6',
     summary: 'Instant {r}{r}{r}{r}, tap: your attacking attack action card has 6 base power. Whenever the crowd boos you, create a Vigor token.',
-    partial: true, // "you start the game with 1 weapon zone" isn't enforced by the deck builder
+    oneWeaponZone: true,
     onBoo: ({ p, api }) => api.createToken(p, 'Vigor', 1),
     match: (t) => /Instant - \{r\}\{r\}\{r\}\{r\}, \{t\}: Target attack action card you control has 6 base/.test(t),
     activations: [{
@@ -516,15 +542,18 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'maxx',
-    summary: 'Once per turn Action {r}{r}: create a Hyper Driver token if you boosted this turn.',
-    partial: true,
+    summary: 'Once per turn Action {r}{r}: create a Hyper Driver token with 2 steam counters if you boosted this turn. Hyper Drivers you control get crank (remove a steam counter as it enters: gain an action point).',
     match: (t) => t.startsWith('Once per Turn Action - {r}{r}: Create a Hyper Driver token'),
     activations: [{
-      label: 'Create a Hyper Driver', instant: false, oncePerTurn: true,
+      label: 'Create a Hyper Driver (crank)', instant: false, oncePerTurn: true,
       cost: () => 2,
       canUse: ({ p }) => p.turn.boosted,
-      resolve: ({ p, api }) => api.createToken(p, 'Hyper Driver', 1),
-      botValue: () => -1,
+      resolve: ({ p, api }) => {
+        api.createToken(p, 'Hyper Driver', 1);
+        const hd = [...p.permanents].reverse().find((x) => cardOf(x.inst).name === 'Hyper Driver');
+        if (hd) { hd.steam = 1; p.actionPoints += 1; api.log(p, 'Hyper Driver cranks: a steam counter is removed and you gain an action point.'); }
+      },
+      botValue: () => 1.2,
     }],
   },
   {
@@ -619,8 +648,8 @@ export const HERO_ABILITIES: HeroAbility[] = [
   },
   {
     id: 'dash',
-    summary: 'Once per turn: play a Mechanologist item with cost 1 or less from the top of your deck as an instant (costs {r} more).',
-    partial: true,
+    summary: 'You may look at the top card of your deck at any time (it\u2019s shown on your deck). Once per turn: play a Mechanologist item with cost 1 or less from the top of your deck as an instant (costs {r} more).',
+    seeTop: true,
     match: (t) => t.startsWith('You may look at the top card of your deck at any time.\nOnce per turn, you may play a Mechanologist item'),
     activations: [{
       label: 'Play the top-card item', instant: true, oncePerTurn: true,
@@ -810,21 +839,36 @@ HERO_ABILITIES.push(
   },
   {
     id: 'arakni-contract',
-    summary: 'Whenever you play a card with contract, look at the top card of the opponent’s deck and put it on the bottom if it’s a strong card.',
-    partial: true,
+    summary: 'Whenever you play a card with contract, look at the top card of an opponent’s deck; you may put it on the bottom.',
     match: (t) => t.startsWith('Whenever you play a card with contract, you may look at the top card of target opponent'),
     onPlayCard({ p, opp, api }, c) {
       if (!/contract/i.test(c.text) || !opp.deck.length) return;
       const top = cardOf(opp.deck[0]);
       const strong = top.pitch === 1 || Number(top.power ?? 0) >= 5;
-      if (strong) opp.deck.push(opp.deck.shift()!);
-      api.log(p, `${p.name} looks at the top card of ${opp.name}'s deck${strong ? ' and puts it on the bottom' : ' and leaves it'}.`);
+      api.ask(p, p, 'arakniTop', `Arakni: the top card of ${opp.name}'s deck is ${top.name}. Put it on the bottom?`, strong, [opp.id], [top.id]);
+    },
+    onChoice({ s, p, api }, key, yes, data) {
+      if (key !== 'arakniTop') return;
+      const o = s.players[data?.[0] ?? -1];
+      if (o && yes && o.deck.length) { o.deck.push(o.deck.shift()!); api.log(p, `${p.name} puts the top card of ${o.name}'s deck on the bottom.`); }
+      else api.log(p, `${p.name} leaves the top card of ${o?.name ?? 'the'} deck where it is.`);
     },
   },
   {
     id: 'marlynn',
-    summary: 'Action, tap, destroy a Gold: create a Goldfin Harpoon in your hand. Go again.',
-    partial: true,
+    summary: 'Action, tap, destroy a Gold: create a Goldfin Harpoon in your hand. Go again. Whenever you draw a card during your action phase, you may put an arrow from your hand face-up into your arsenal.',
+    onDraw: ({ p, api }) => {
+      if (p.arsenal.length) return;
+      const arrow = [...p.hand].filter((h) => cardOf(h).types.includes('Arrow')).sort((a, b) => Number(cardOf(b).power ?? 0) - Number(cardOf(a).power ?? 0))[0];
+      if (!arrow) return;
+      if (p.isBot) { p.hand = p.hand.filter((x) => x !== arrow); arrow.faceUp = true; p.arsenal.push(arrow); api.log(p, `${p.name} puts ${cardOf(arrow).name} face-up into their arsenal.`); return; }
+      api.ask(p, p, 'marlynnArrow', `Marlynn: put ${cardOf(arrow).name} from your hand face-up into your arsenal?`, true, [arrow.uid], [arrow.cardId]);
+    },
+    onChoice: ({ p, api }, key, yes, data) => {
+      if (key !== 'marlynnArrow' || !yes || p.arsenal.length) return;
+      const arrow = p.hand.find((h) => h.uid === data?.[0]);
+      if (arrow) { p.hand = p.hand.filter((x) => x !== arrow); arrow.faceUp = true; p.arsenal.push(arrow); api.log(p, `${p.name} puts ${cardOf(arrow).name} face-up into their arsenal.`); }
+    },
     match: (t) => t.startsWith('Action - {t}, destroy a Gold you control: Create a Goldfin Harpoon in your hand'),
     activations: [{
       label: 'Goldfin Harpoon (destroy a Gold)', instant: false, oncePerTurn: true, goAgain: true,
@@ -849,8 +893,9 @@ HERO_ABILITIES.push(
   },
   {
     id: 'gravy-bones',
-    summary: 'Instant, tap, destroy a Gold: draw a card, then discard your least useful card.',
-    partial: true,
+    summary: 'Instant, tap, destroy a Gold: draw a card, then discard your least useful card. If a blue card has been put into your graveyard this turn, you may play cards with watery grave from your graveyard.',
+    startOfTurn: ({ p }) => { p.turn.flags.graveStart = p.graveyard.length; },
+    playFromGraveyard: ({ p }, c) => /watery grave/i.test(c.text) && p.graveyard.slice(p.turn.flags.graveStart ?? 0).some((g) => cardOf(g).pitch === 3),
     match: (t) => t.startsWith('Instant - {t}, destroy a Gold you control: Draw a card, then discard a card'),
     activations: [{
       label: 'Loot (destroy a Gold)', instant: true, oncePerTurn: true,
@@ -884,8 +929,8 @@ HERO_ABILITIES.push(
   },
   {
     id: 'zane',
-    summary: 'Whenever you win a wager, the crowd cheers you. The first time the crowd cheers you each turn, each hero draws a card.',
-    partial: true, // 2H swords as 1H isn't modelled (decks are built normally)
+    summary: 'You may equip 2H swords as though they were 1H. Whenever you win a wager, the crowd cheers you. The first time the crowd cheers you each turn, each hero draws a card.',
+    twoHandSwordsAsOne: true,
     match: (t) => t.includes('Whenever you win a wager, the crowd cheers you'),
     onWagerWin: ({ p, api }) => api.crowd(p, true),
     onCheer: ({ s, p, api }) => {
@@ -1014,8 +1059,7 @@ HERO_ABILITIES.push(
   },
   {
     id: 'brutus',
-    summary: 'If all heroes in a clash would fail to win, you choose the winner (you).',
-    partial: true, // deck building with clash cards of any class isn't enforced either way
+    summary: 'You may have cards with clash of any class or talent in your deck. If all heroes in a clash would fail to win, you choose the winner (you).',
     match: (t) => t.includes('If all heroes in a clash would fail to win, instead choose which hero wins the clash'),
     winsTiedClash: true,
   },
@@ -1084,22 +1128,23 @@ HERO_ABILITIES.push(
   },
   {
     id: 'enigma-new-moon',
-    summary: 'Instant {c}{c}{c}: turn a face-down equipment with ward face-up and create 3 Spectral Shield tokens.',
-    partial: true, // equipment is shown face-up in this app; each ward equipment can be "turned up" once
+    summary: 'Equipment you own get cloaked (equipped face-down). Instant {c}{c}{c}: turn a face-down equipment face-up; if it has ward, create 3 Spectral Shield tokens.',
+    cloakAll: true,
     match: (t) => t.startsWith('Equipment you own get cloaked'),
     activations: [{
-      label: 'Turn up a ward equipment (3 Spectral Shields)', instant: true, oncePerTurn: false,
+      label: 'Turn a face-down equipment face-up', instant: true, oncePerTurn: false,
       cost: () => 0,
-      canUse: ({ p }) => p.hand.some((h) => cardOf(h).types.includes('Chi')) && p.equipment.some((e) => !e.destroyed && /ward/i.test(cardOf(e.inst).text) && !p.turn.flags[`up${e.inst.uid}`] && !(e as { up?: boolean }).up),
+      canUse: ({ p }) => p.hand.some((h) => cardOf(h).types.includes('Chi')) && p.equipment.some((e) => !e.destroyed && e.faceDown),
       resolve: ({ p, api }) => {
         const chi = p.hand.find((h) => cardOf(h).types.includes('Chi'));
         if (chi) { p.hand = p.hand.filter((x) => x !== chi); p.pitch.push(chi); }
-        const e = p.equipment.find((x) => !x.destroyed && /ward/i.test(cardOf(x.inst).text) && !(x as { up?: boolean }).up)!;
-        (e as { up?: boolean }).up = true;
+        const e = [...p.equipment].filter((x) => !x.destroyed && x.faceDown).sort((a, b) => Number(/ward/i.test(cardOf(b.inst).text)) - Number(/ward/i.test(cardOf(a.inst).text)))[0];
+        if (!e) return;
+        e.faceDown = false;
         api.log(p, `${p.name} turns ${cardOf(e.inst).name} face-up.`);
-        api.createToken(p, 'Spectral Shield', 3);
+        if (/ward/i.test(cardOf(e.inst).text)) api.createToken(p, 'Spectral Shield', 3);
       },
-      botValue: () => 1.5,
+      botValue: ({ p }) => (p.equipment.some((e) => !e.destroyed && e.faceDown && /ward/i.test(cardOf(e.inst).text)) ? 3 : 0.8),
     }],
   },
   {
@@ -1329,8 +1374,8 @@ HERO_ABILITIES.push(
 HERO_ABILITIES.push(
   {
     id: 'shiyana',
-    summary: 'At the beginning of your action phase, Shiyana becomes a copy of the opposing hero (and uses their ability) until the start of your next turn.',
-    partial: true, // specialization cards of any hero and the class sharing aren't checked by the deck builder
+    summary: 'You may have specialization cards of any hero in your deck. At the beginning of your action phase, Shiyana becomes a copy of the opposing hero (and uses their ability) until the start of your next turn.',
+    partial: true, // "cards you own are the class of your hero in addition to their other classes" isn't modelled
     match: (t) => t.includes('Shiyana becomes a copy of target hero until the start of your next turn'),
   },
   {
@@ -1361,7 +1406,6 @@ HERO_ABILITIES.push(
   {
     id: 'zyggy',
     summary: 'Instant {r}{r}, tap, destroy a Lightning Flow, banish another Lightning aura with no holo counters: return it to the arena with a holo counter.',
-    partial: true, // "when this enters" effects of the returned aura aren't re-triggered
     match: (t) => t.startsWith('Instant - {r}{r}, {t}, destroy a Lightning Flow you control, banish another Lightning aura permanent'),
     activations: [{
       label: 'Flicker a Lightning aura with a holo counter', instant: true, oncePerTurn: true,
@@ -1370,7 +1414,7 @@ HERO_ABILITIES.push(
       resolve: ({ p, api }) => {
         api.destroyNamed(p, 'Lightning Flow');
         const pm = p.permanents.find((x) => cardOf(x.inst).name !== 'Lightning Flow' && cardOf(x.inst).types.includes('Lightning') && has(cardOf(x.inst), 'Aura') && !x.counters);
-        if (pm) { pm.counters = 1; api.log(p, `${cardOf(pm.inst).name} returns to the arena with a holo counter.`); }
+        if (pm) { pm.counters = 1; api.log(p, `${cardOf(pm.inst).name} returns to the arena with a holo counter.`); api.resolve(p, getScript(cardOf(pm.inst)).onPlay, pm.inst); }
       },
       botValue: () => 0.3,
     }],

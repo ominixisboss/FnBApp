@@ -132,6 +132,7 @@ const newTurnInfo = () => ({ attacks: 0, attackActionHits: 0, weaponHits: 0, pla
 function heroApi(s: GameState): HeroApi {
   return {
     log: (p, text) => log(s, p ? p.id : null, text),
+    resolve: (p, effects, inst) => resolveEffects(s, p, effects, inst),
     createToken: (p, name, amount) => createToken(s, p, name, amount),
     draw: (p, amount) => { draw(s, p, amount); log(s, p.id, `${p.name} draws ${amount} card${amount > 1 ? 's' : ''}.`); },
     dealDamage: (t, amount, arcane, source) => { dealDamage(s, t.id, amount, arcane, source); },
@@ -312,11 +313,16 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
     const slots = new Set<string>();
     let hands = 0;
     p.inventory = [...(ps.deck.inventoryIds ?? []), ...ps.deck.cardIds.filter(isDemiHero)];
-    const noWeapons = !!getHeroAbility(hero)?.noWeapons;
+    const heroAb = getHeroAbility(hero);
+    const noWeapons = !!heroAb?.noWeapons;
+    // Kayo: 1 weapon zone (one weapon of any size); Zane: 2H swords count as 1H
+    let weaponsLeft = heroAb?.oneWeaponZone ? 1 : 99;
     for (const wid of noWeapons ? [] : ps.deck.weaponIds) {
       const w = card(wid);
-      const size = w.types.includes('2H') ? 2 : 1;
-      if (hands + size > 2) continue;
+      const size = w.types.includes('2H') && !(heroAb?.twoHandSwordsAsOne && w.types.includes('Sword')) ? 2 : 1;
+      if (weaponsLeft <= 0) continue;
+      if (hands + size > 2 && !heroAb?.oneWeaponZone) continue;
+      weaponsLeft--;
       hands += size;
       p.weapons.push({ inst: mk(s, wid, id), usedThisTurn: false });
     }
@@ -330,7 +336,7 @@ export function createGame(setup: PlayerSetup[], seed = Date.now() & 0x7fffffff,
       }
       if (slots.has(slot)) { p.inventory.push(eid); continue; }
       slots.add(slot);
-      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false, faceDown: getScript(e).cloaked || undefined });
+      p.equipment.push({ inst: mk(s, eid, id), defenseMod: getScript(e).equipCounter ? -1 : 0, destroyed: false, usedThisTurn: false, faceDown: getScript(e).cloaked || heroAb?.cloakAll || undefined });
     }
     s.players[id] = p;
   });
@@ -367,6 +373,7 @@ function draw(s: GameState, p: PlayerState, count = 1, triggers = true) {
   }
   if (!triggers || n === 0) return;
   p.turn.drew = true;
+  if (s.phase === 'action' && s.turnPlayer === p.id) ability(p)?.onDraw?.(heroCtx(s, p), n);
   if (s.phase === 'action' || s.phase === 'defend' || s.phase === 'reaction') {
     for (const o of s.players) if (o.id !== p.id && !o.eliminated) ability(o)?.onOpponentDraw?.(heroCtx(s, o), n);
   }
@@ -384,6 +391,7 @@ function startTurn(s: GameState) {
   p.effects = [];
   p.weapons.forEach((w) => (w.usedThisTurn = false));
   p.equipment.forEach((e) => (e.usedThisTurn = false));
+  p.playableBanished = undefined; // "until the start of your next turn"
   // untap step: the hero and its permanents untap
   p.heroTapped = false;
   for (const pm of p.permanents) pm.tapped = false;
@@ -1608,7 +1616,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const ab0 = ability(p);
   for (const b of p.banished) {
     const c = cardOf(b);
-    const free = !!p.turn.flags[`playBanished${b.uid}`];
+    const free = !!p.turn.flags[`playBanished${b.uid}`] || !!p.playableBanished?.includes(b.uid);
     if (!free && !ab0?.playFromBanished?.(heroCtx(s, p), c)) continue;
     if (fromBanished.includes(b) || !timingOk(s, pid, c)) continue;
     const cost = p.turn.flags[`freePlay${b.uid}`] ? frostbite(p) : effectiveCost(s, p, c);
@@ -1616,7 +1624,7 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     out.push({ uid: b.uid, kind: 'card', index: 0, cost, label: c.name });
   }
   for (const g of p.graveyard) {
-    if (!p.turn.flags[`playGrave${g.uid}`]) continue;
+    if (!p.turn.flags[`playGrave${g.uid}`] && !ab0?.playFromGraveyard?.(heroCtx(s, p), cardOf(g))) continue;
     const c = cardOf(g);
     if (!timingOk(s, pid, c)) continue;
     const cost = effectiveCost(s, p, c);
@@ -1954,7 +1962,7 @@ function resolveCard(s: GameState, p: PlayerState, inst: CardInst, fromArsenal: 
   } else if (['Aura', 'Item', 'Ally'].some((t) => has(c, t))) {
     const pm: PermanentState = { inst, ward: sc.ward, steam: sc.steam || undefined, suspense: sc.suspense ? 2 : undefined, counters: sc.startCounters?.n };
     p.permanents.push(pm);
-    if (sc.crank && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
+    if ((sc.crank || (ability(p)?.id === 'maxx' && c.name.startsWith('Hyper Driver'))) && (pm.steam ?? 0) > 0 && s.phase === 'action' && s.turnPlayer === pid) {
       pm.steam = (pm.steam ?? 0) - 1;
       p.actionPoints += 1;
       ability(p)?.onCrank?.(heroCtx(s, p));

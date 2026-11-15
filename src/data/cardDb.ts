@@ -92,10 +92,15 @@ export function eligibleForHero(c: Card, hero: Card): boolean {
   if (st.length === 0) return true;
   // hero-specific cards ("Specialization") — card text says "<Hero> Specialization"
   const spec = c.keywords.find((k) => k.endsWith('Specialization'));
+  // Shiyana: "You may have specialization cards of any hero in your deck"
+  const anySpec = /You may have specialization cards of any hero in your deck/i.test(hero.text);
   if (spec) {
     const who = spec.replace(' Specialization', '').toLowerCase();
-    if (!hero.name.toLowerCase().startsWith(who)) return false;
+    if (!hero.name.toLowerCase().startsWith(who) && !anySpec) return false;
+    if (anySpec) return true;
   }
+  // Brutus: "You may have cards with clash of any class or talent in your deck"
+  if (/You may have cards with clash of any class or talent in your deck/i.test(hero.text) && /\bclash\b/i.test(c.text)) return true;
   return st.every((t) => heroTypes.has(t));
 }
 
