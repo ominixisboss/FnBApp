@@ -21,4 +21,16 @@ export const TRAINING: PuzzleDef[] = [
     me: { hero: 'TKbRWjjBLJThMmLkTFb6q', hand: ['rLN8wNfkTtF9zBg8zwGzW'], permanents: ['HqGFdH8tMH6fR8bNMkTjq'] },
     opp: { hero: 'Dz6FcRBNMFdBt9fJPMB7d', life: 6, hand: [] },
   },
+  {
+    id: 't4', title: 'Watery grave payoffs', text: '',
+    guide: 'Angry Bones lets you discard a card as it attacks; if that card has watery grave, it gets +1 power. Pitch Wounding Blow to pay, then discard Beneath the Surface (it has watery grave).',
+    me: { hero: 'Fq9Cg9pKGFKrTbfHq9mBb', hand: ['jGn7mnKcjTLRfgQH9kChJ', 'nGQcDzcjQ8gw8HGzwCGnF', 'h9LPFJG86fdMPQmqwWNQw'] },
+    opp: { hero: 'Dz6FcRBNMFdBt9fJPMB7d', life: 6, hand: [] },
+  },
+  {
+    id: 't5', title: 'Another way to pay', text: '',
+    guide: 'You can\u2019t pitch enough for Moon Wish, but it lets you put a card from your hand on top of your deck instead of paying its cost. Tap Moon Wish and choose that option.',
+    me: { hero: 'RHnFkKb8FKdFzp9rdzGjF', hand: ['mhLrKM6RbWGGHNrTGjtMw', 'rLN8wNfkTtF9zBg8zwGzW'] },
+    opp: { hero: 'Dz6FcRBNMFdBt9fJPMB7d', life: 5, hand: [] },
+  },
 ];
