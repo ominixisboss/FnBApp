@@ -12,6 +12,7 @@ export interface User { id: number; username: string; createdAt: number }
 interface AuthState {
   serverUrl: string;          // '' = same origin
   available: boolean | null;  // null = still checking
+  waking: boolean;            // the first check timed out: retrying while a sleeping free server starts up
   ephemeral: boolean;         // server keeps no data between restarts (free hosting)
   user: User | null;
   token: string | null;
@@ -27,6 +28,7 @@ const write = (k: string, v: string | null) => { try { if (v === null) localStor
 let state: AuthState = {
   serverUrl: read(K.server) ?? (import.meta.env.VITE_API_URL as string | undefined) ?? '',
   available: null,
+  waking: false,
   ephemeral: false,
   user: (() => { try { return JSON.parse(read(K.user) ?? 'null'); } catch { return null; } })(),
   token: read(K.token),
@@ -55,26 +57,47 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export async function checkServer(): Promise<boolean> {
+async function pingServer(timeoutMs: number): Promise<{ ok: boolean; ephemeral: boolean } | null> {
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch(`${apiBase()}/api/health`, { signal: ctrl.signal });
     clearTimeout(t);
     const body = res.ok ? await res.json() : null;
-    const ok = body?.ok === true;
-    set({ available: ok, ephemeral: !!body?.ephemeral });
+    return { ok: body?.ok === true, ephemeral: !!body?.ephemeral };
+  } catch {
+    return null;
+  }
+}
+
+let checking: Promise<boolean> | null = null;
+/** Is the game server up? A free server sleeps when idle and takes up to a minute to wake: after a quick first try,
+ *  keep retrying for about 80 seconds while showing "waking up". */
+export function checkServer(): Promise<boolean> {
+  if (checking) return checking;
+  checking = (async () => {
+    let r = await pingServer(4000);
+    if (!r) {
+      set({ waking: true, available: null });
+      const until = Date.now() + 80_000;
+      while (!r && Date.now() < until) {
+        await new Promise((ok) => setTimeout(ok, 3000));
+        r = await pingServer(12_000);
+      }
+    }
+    const ok = !!r?.ok;
+    set({ available: ok, waking: false, ephemeral: !!r?.ephemeral });
     if (ok && state.token) void syncAll();
     return ok;
-  } catch {
-    set({ available: false });
-    return false;
-  }
+  })();
+  void checking.finally(() => { checking = null; });
+  return checking;
 }
 
 export function setServerUrl(url: string) {
   write(K.server, url.trim() || null);
-  set({ serverUrl: url.trim(), available: null });
+  set({ serverUrl: url.trim(), available: null, waking: false });
+  checking = null; // a new address: don't reuse a check of the old one
   void checkServer();
 }
 

@@ -274,6 +274,7 @@ export default function PlayPage({ preselect, tutorial }: { preselect?: string; 
               {selectedHero ? <CardView card={selectedHero} width="100%" /> : <div className="matchup-empty">Choose a deck</div>}
               <span>{selectedHero ? (myDeck?.name ?? `${selectedHero.name} starter`) : 'Pick a deck on the left'}</span>
             </div>
+            {auth.waking && <div className="small muted" role="status">⏳ Waking up the game server (it sleeps when idle; up to a minute)…</div>}
             {auth.available === false && <div className="small err">No game server reachable. Online play needs the FaB Trainer server (see Account → Server settings).</div>}
             {auth.available && !auth.user && <div className="small">Online play needs an account. <a href="#account">Sign in or create one</a>, it’s free.</div>}
             {auth.available && auth.user && (
