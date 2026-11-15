@@ -3,7 +3,7 @@ import './setup';
 import { findCard, getDb } from '../data/cardDb';
 import type { Card } from '../data/types';
 import { getScript } from '../engine/cardScript';
-import { applyAction, createGame, currentLink, defendOptions, HAND_INDEX, linkPower, playOptions } from '../engine/game';
+import { ALT_INDEX, applyAction, createGame, currentLink, defendOptions, HAND_INDEX, linkPower, playOptions } from '../engine/game';
 import type { DeckList } from '../engine/game';
 import type { GameState } from '../engine/types';
 import { chooseAction, decideOptional } from '../ai/bot';
@@ -545,5 +545,51 @@ describe('card text pass: watery grave payoffs, banished discounts, look-and-bot
     const herald = find((x) => /with Herald in its name gets/.test(x.text ?? ''));
     expect(getScript(herald).unparsed.join('|')).not.toMatch(/Herald/);
     expect(getScript(findCard('Depths of Despair')!).defendBanish).toBe(true);
+  });
+});
+
+describe('alternative costs ("rather than pay this card\'s cost")', () => {
+  it('put a card from hand on top of the deck instead of paying', () => {
+    const c = findCard('Rise Above')!;
+    expect(getScript(c).altCost).toEqual({ kind: 'handToTop' });
+    let s = game([findCard('Moon Wish')!.id, filler()]);
+    s.players[0].resources = 0;
+    const moon = s.players[0].hand[0];
+    const other = s.players[0].hand[1];
+    const opts = playOptions(s, 0).filter((o) => o.uid === moon.uid);
+    expect(opts.map((o) => o.index)).toContain(ALT_INDEX);
+    s = applyAction(s, { type: 'play', uid: moon.uid, pitch: [], alt: true });
+    const choice = s.pendingChoices?.[0];
+    if (choice) s = applyAction(s, { type: 'choose', picks: [other.uid] });
+    expect(s.players[0].deck[0].uid).toBe(other.uid);
+    expect(s.players[0].hand.length).toBe(0);
+  });
+  it('destroy a Gold instead of paying; bots never get the option', () => {
+    const c = getDb().cards.find((x) => getScript(x).altCost?.kind === 'destroy' && (getScript(x).altCost as { name: string }).name === 'Gold' && (x.cost ?? 0) > 0 && !x.types.includes('Defense Reaction') && !x.types.includes('Instant'))!;
+    let s = game([c.id, filler()]);
+    s.players[0].resources = 0;
+    s.players[0].hand = s.players[0].hand.slice(0, 1);
+    const gold = findCard('Gold')!;
+    s.players[0].permanents.push({ inst: { uid: 777, cardId: gold.id, owner: 0 }, ward: 0 });
+    const uid = s.players[0].hand[0].uid;
+    expect(playOptions(s, 0).some((o) => o.uid === uid && o.index === ALT_INDEX)).toBe(true);
+    s.players[0].isBot = true;
+    expect(playOptions(s, 0).some((o) => o.uid === uid && o.index === ALT_INDEX)).toBe(false);
+    s.players[0].isBot = false;
+    s = applyAction(s, { type: 'play', uid, pitch: [], alt: true });
+    expect(s.players[0].permanents.some((pm) => pm.inst.uid === 777)).toBe(false);
+  });
+});
+
+describe('Quickstrike', () => {
+  it('"If this has go again, it gets +1{p}" only with go again', () => {
+    const c = findCard('Rush of Power')!;
+    const run = (ga: boolean) => {
+      let s = game([c.id, filler()]);
+      if (ga) s.players[0].effects.push({ kind: 'nextAttackGoAgain', filter: { kind: 'any' } } as never);
+      s = applyAction(s, { type: 'play', uid: s.players[0].hand[0].uid, pitch: [] });
+      return linkPower(currentLink(s)!);
+    };
+    expect(run(true)).toBe(run(false) + 1);
   });
 });

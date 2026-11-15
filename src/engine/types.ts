@@ -294,7 +294,7 @@ export interface GameState {
 }
 
 export type Action =
-  | { type: 'play'; uid: number; pitch: number[]; mode?: number; optional?: OptionalChoice }
+  | { type: 'play'; uid: number; pitch: number[]; mode?: number; optional?: OptionalChoice; alt?: boolean }
   | { type: 'activate'; uid: number; index: number; pitch: number[] }
   | { type: 'pass'; pitchOrder?: number[] }
   | { type: 'defend'; uids: number[]; boosts?: number[]; pitch?: number[] }

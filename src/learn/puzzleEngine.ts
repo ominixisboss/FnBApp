@@ -1,7 +1,7 @@
 // Lethal puzzles: a fixed board where you must win this turn. Includes a brute-force solver used to
 // verify every puzzle (and to show the solution on request).
 import { card } from '../data/cardDb';
-import { applyAction, createGame, playOptions } from '../engine/game';
+import { ALT_INDEX, applyAction, createGame, playOptions } from '../engine/game';
 import { getScript } from '../engine/cardScript';
 import type { Action, CardInst, GameState, PlayerId } from '../engine/types';
 import { chooseAction } from '../ai/bot';
@@ -88,7 +88,7 @@ export function candidateActions(s: GameState): Action[] {
       if (o.kind === 'activation') { out.push({ type: 'activate', uid: o.uid, index: o.index, pitch }); continue; }
       const c = card([...p.hand, ...p.arsenal].find((h) => h.uid === o.uid)!.cardId);
       const modes = getScript(c).modes.length || 1;
-      for (let mode = 0; mode < modes; mode++) out.push({ type: 'play', uid: o.uid, pitch, mode });
+      for (let mode = 0; mode < modes; mode++) out.push({ type: 'play', uid: o.uid, pitch, mode, alt: o.index === ALT_INDEX || undefined });
     }
   }
   out.push({ type: 'pass' });

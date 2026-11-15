@@ -14,6 +14,8 @@ export type AttackFilter =
   | { kind: 'class'; value: string } // Warrior, Ninja, ...
   | { kind: 'anyClass'; values: string[] } // "Assassin or Mystic"
   | { kind: 'boosted' } // "the next attack you boost"
+  /** "the next attack action card you play from arsenal" (optionally of a class) */
+  | { kind: 'fromArsenal'; cls?: string }
   | { kind: 'runeGated' } // "the next attack action card you rune gate"
   | { kind: 'classAttackAction'; value: string } // "your next Guardian attack action card"
   | { kind: 'keyword'; value: string } // "the next attack with stealth"
@@ -184,6 +186,8 @@ export type Condition =
   | { kind: 'draconicLinks'; n: number }
   | { kind: 'arcaneThisTurn' }
   | { kind: 'powerAboveBase' }
+  /** "If this has go again" (Quickstrike) */
+  | { kind: 'hasGoAgain' }
   | { kind: 'instantThisLink' }
   | { kind: 'defendedByFewer'; n: number }
   | { kind: 'powerAtLeast'; n: number }
@@ -415,6 +419,8 @@ export interface CardScript {
   hitDestination?: 'soul' | 'deckBottom';
   /** "If you play this from your banished zone, this costs {r}{r} less to play" */
   costLessBanished?: number;
+  /** "You may <X> rather than pay this card's {r} cost" */
+  altCost?: { kind: 'handToTop' } | { kind: 'destroy'; name: string } | { kind: 'coins' };
   /** "When this defends, banish it when the combat chain closes" (a defending card) */
   defendBanish?: boolean;
   costLessIf?: string; // "If you control a <X>, this costs {r} less"
@@ -543,6 +549,7 @@ export function parseEffect(raw: string): Effect[] | null {
     if (/and go again$/i.test(s)) out.push({ kind: 'nextAttackGoAgain', filter: f });
     return out;
   }
+  if ((m = s.match(/^[Tt]he next (?:([A-Z][a-z]+) )?attack action card you play from arsenal this turn gets \+(\d+)\{p\}$/))) return [{ kind: 'nextAttackPower', amount: +m[2], filter: { kind: 'fromArsenal', cls: m[1] } }];
   if ((m = s.match(/^the next attack action card you play this turn gets \+(\d+)\{p\}$/i)))
     return [{ kind: 'nextAttackPower', amount: +m[1], filter: { kind: 'attackAction' } }];
   if ((m = s.match(/^your next (?:([\w ]+?) )?attack this turn gets go again$/i))) {
@@ -564,6 +571,11 @@ export function parseEffect(raw: string): Effect[] | null {
     const out: Effect[] = [{ kind: 'thisPower', amount: +m[1] }];
     if (/go again$/i.test(s)) out.push({ kind: 'thisGoAgain' });
     return out;
+  }
+  // "it gets "When this attacks a hero, deal 1 arcane damage to them."" checked as it attacks: the trigger happens now
+  if ((m = s.match(/^(?:this|it) gets (?:\+(\d+)\{p\} and )?"when this attacks(?: a hero)?, (deal \d+ arcane damage to (?:them|the defending hero|target hero))\.?"?$/i))) {
+    const inner = parseEffect(m[2].replace(/to (?:them|the defending hero|target hero)$/i, 'to target hero'));
+    if (inner) return [...(m[1] ? [{ kind: 'thisPower' as const, amount: +m[1] }] : []), ...inner];
   }
   if (/^(?:this|it) gets go again$/i.test(s)) return [{ kind: 'thisGoAgain' }];
   if (/^(?:this|it) gets dominate$/i.test(s)) return [{ kind: 'thisDominate' }];
@@ -804,6 +816,7 @@ export function parseCondition(raw: string): Condition | null {
   const t = raw.trim().toLowerCase();
   let m: RegExpMatchArray | null;
   if (/^you've played or created an aura this turn$/.test(t)) return { kind: 'auraThisTurn' };
+  if (/^this has go again$/.test(t)) return { kind: 'hasGoAgain' };
   if (/^you have less \{h\} than an opposing hero$/.test(t)) return { kind: 'lessLife' };
   if ((m = t.match(/^you control (\d+) or more draconic chain links$/))) return { kind: 'draconicLinks', n: +m[1] };
   if (/^you've dealt arcane damage(?: to an opponent| to an opposing hero)? this turn$/.test(t)) return { kind: 'arcaneThisTurn' };
@@ -1516,7 +1529,7 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
     if (e) return void sc.onAttack.push(...e);
   }
   // keyword-labelled conditions ("Rupture - If ...", "Starfall - If ...", "High Tide - If ...", "Reprise - If ...")
-  sent = sent.replace(/^(?:rupture|starfall|high tide|reprise) - (?=if )/i, '');
+  sent = sent.replace(/^(?:rupture|starfall|high tide|reprise|quickstrike) - (?=if )/i, '');
   if ((m = sent.match(/^when this defends, (.+)$/i)) && !/^when this defends, (?:you may|clash)/i.test(sent)) {
     const e = parseEffect(m[1]);
     if (e) return void sc.onDefend.push(...e);
@@ -1599,6 +1612,13 @@ function handleSentence(sc: CardScript, sent: string, isAttack: boolean, isPerma
   if ((m = sent.match(/^(?:if (.+?), )?you may play this from your banished zone\.?$/i))) {
     const cond = m[1] ? parseCondition(m[1]) : undefined;
     if (!m[1] || cond) return void (sc.fromBanished = { cond: cond ?? undefined });
+  }
+  if ((m = sent.match(/^you may (.+?) rather than pay this card's \{r\} cost\.?$/i))) {
+    const t = m[1].toLowerCase();
+    let dm: RegExpMatchArray | null;
+    if (t === 'put a card from your hand on top of your deck') return void (sc.altCost = { kind: 'handToTop' });
+    if (t === 'destroy 4 coppers, 2 silvers, or 1 gold you control') return void (sc.altCost = { kind: 'coins' });
+    if ((dm = t.match(/^destroy (?:a|an) ([a-z' ]+?) you control$/))) return void (sc.altCost = { kind: 'destroy', name: titleCase(dm[1]) });
   }
   if ((m = sent.match(/^if you play this from your banished zone, this costs ((?:\{r\})+) less to play\.?$/i))) return void (sc.costLessBanished = m[1].length / 3);
   if ((m = sent.match(/^when this is played from your banished zone, (.+)$/i))) {
@@ -1688,6 +1708,7 @@ function finish(sc: CardScript, c: Card): CardScript {
 }
 
 export function describeFilter(f: AttackFilter): string {
+  if (f.kind === 'fromArsenal') return `${f.cls ? `${f.cls} ` : ''}attack action card played from arsenal`;
   switch (f.kind) {
     case 'any': return 'attack';
     case 'keyword': return `attack with ${f.value.toLowerCase()}`;

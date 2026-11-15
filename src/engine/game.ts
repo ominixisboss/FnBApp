@@ -268,9 +268,10 @@ export function equipDefense(e: { inst: CardInst; defenseMod: number }): number 
   return Math.max(0, (defenseOf(cardOf(e.inst)) ?? 0) + e.defenseMod);
 }
 
-export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: boolean; ally?: boolean }): boolean {
+export function matchesFilter(f: AttackFilter, l: { inst: CardInst; fromWeapon: boolean; ally?: boolean; fromArsenal?: boolean }): boolean {
   const c = cardOf(l.inst);
   switch (f.kind) {
+    case 'fromArsenal': return !l.fromWeapon && !!l.fromArsenal && (!f.cls || c.types.includes(f.cls));
     case 'any': return true;
     case 'attackAction': return !l.fromWeapon;
     case 'weapon': return l.fromWeapon && !l.ally;
@@ -1068,6 +1069,11 @@ function resolveEventChoice(s: GameState, p: PlayerState, key: string, picks: nu
   const id = s.lastEvent;
   const hero = () => s.players.find((q) => q.hero.uid === picks[0]);
   switch (key) {
+    case 'altTop': {
+      const h = picks[0] !== undefined ? p.hand.find((x) => x.uid === picks[0]) : p.hand[0];
+      if (h) { p.deck.unshift(removeFrom(p.hand, h.uid)!); log(s, p.id, `${p.name} puts a card from hand on top of the deck.`); }
+      break;
+    }
     case 'lookBottom': {
       const t = s.players[_data?.[0] ?? p.id];
       if (picks.length && t.deck[0]?.uid === picks[0]) { t.deck.push(t.deck.shift()!); log(s, p.id, `${p.name} puts it on the bottom.`); }
@@ -1178,6 +1184,7 @@ export function evalCondition(s: GameState, p: PlayerState, cond: Condition, lin
     case 'arcaneThisTurn': return !!p.turn.arcaneDealt;
     case 'dealtArcane': return (p.turn.flags.lastArcane ?? 0) > 0;
     case 'powerAboveBase': return !!link && link.powerMod > 0;
+    case 'hasGoAgain': return !!link && !!link.goAgain;
     case 'instantThisLink': return !!link && (link.instants ?? 0) > 0;
     case 'defendedByFewer': return !!link && link.defenders.filter((d) => d.kind !== 'equipment').length < cond.n;
     case 'powerAtLeast': return !!link && linkPower(link) >= cond.n;
@@ -1615,6 +1622,48 @@ function timingOk(s: GameState, pid: PlayerId, c: Card): boolean {
 
 export const HERO_INDEX = 1000;
 export const HAND_INDEX = 2000;
+/** a card's "rather than pay this card's {r} cost" play option */
+export const ALT_INDEX = 3000;
+
+/** Can the alternative cost be paid (the card being played is `uid`)? */
+function altPayable(p: PlayerState, alt: NonNullable<ReturnType<typeof getScript>['altCost']>, uid: number): boolean {
+  if (alt.kind === 'handToTop') return p.hand.some((h) => h.uid !== uid);
+  const count = (n: string) => p.permanents.filter((pm) => isA(pm.inst, n)).length;
+  if (alt.kind === 'coins') return count('Gold') >= 1 || count('Silver') >= 2 || count('Copper') >= 4;
+  return count(alt.name) >= 1;
+}
+function altLabel(alt: NonNullable<ReturnType<typeof getScript>['altCost']>): string {
+  if (alt.kind === 'handToTop') return 'put a card from hand on top of your deck instead of paying';
+  if (alt.kind === 'coins') return 'destroy 1 Gold, 2 Silvers or 4 Coppers instead of paying';
+  return `destroy a ${alt.name} instead of paying`;
+}
+function payAlt(s: GameState, p: PlayerState, alt: NonNullable<ReturnType<typeof getScript>['altCost']>, src: string) {
+  const destroy = (n: string, k: number) => {
+    for (let i = 0; i < k; i++) {
+      const at = p.permanents.findIndex((pm) => isA(pm.inst, n));
+      if (at < 0) return;
+      const [pm] = p.permanents.splice(at, 1);
+      graveFromArena(p, pm.inst);
+    }
+    log(s, p.id, `${p.name} destroys ${k === 1 ? `a ${n}` : `${k} ${n}s`} to play ${src} without paying its cost.`);
+  };
+  if (alt.kind === 'destroy') return destroy(alt.name, 1);
+  if (alt.kind === 'coins') {
+    const count = (n: string) => p.permanents.filter((pm) => isA(pm.inst, n)).length;
+    if (count('Copper') >= 4) return destroy('Copper', 4);
+    if (count('Silver') >= 2) return destroy('Silver', 2);
+    return destroy('Gold', 1);
+  }
+  // put a card from hand on top of the deck: a person picks it, a bot puts its least useful card
+  if (p.isBot || p.hand.length === 1) {
+    const h = [...p.hand].sort((a, b) => cardPlayValue(cardOf(a)) - cardPlayValue(cardOf(b)))[0];
+    if (!h) return;
+    p.deck.unshift(removeFrom(p.hand, h.uid)!);
+    log(s, p.id, `${p.name} puts a card from hand on top of the deck to play ${src} without paying its cost.`);
+    return;
+  }
+  ask(s, { player: p.id, kind: 'pick', prompt: `${src}: put a card from your hand on top of your deck (instead of paying its cost).`, confirm: 'Put on top', options: p.hand.map((h) => ({ uid: h.uid, cardId: h.cardId })), resume: { type: 'event', key: 'altTop' } });
+}
 
 export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
   const p = s.players[pid];
@@ -1659,8 +1708,9 @@ export function playOptions(s: GameState, pid: PlayerId): PlayOption[] {
     if ((sc.additionalCost.banishGraveyard ?? 0) > p.graveyard.length) continue;
     if (sc.playIf && !evalCondition(s, p, sc.playIf)) continue;
     if (sc.noFromHand && p.hand.some((h) => h.uid === inst.uid)) continue;
-    if (availableResources(p, [inst.uid]) < cost) continue;
-    out.push({ uid: inst.uid, kind: 'card', index: 0, cost, label: c.name });
+    if (availableResources(p, [inst.uid]) >= cost) out.push({ uid: inst.uid, kind: 'card', index: 0, cost, label: c.name });
+    // "rather than pay this card's {r} cost" (people choose it; bots always pay normally)
+    if (sc.altCost && !p.isBot && costOf(c) > 0 && altPayable(p, sc.altCost, inst.uid)) out.push({ uid: inst.uid, kind: 'card', index: ALT_INDEX, cost: frostbite(p), label: `${c.name}: ${altLabel(sc.altCost)}` });
   }
   const sources = [
     ...p.weapons.map((w) => ({ inst: w.inst, used: w.usedThisTurn })),
@@ -1777,7 +1827,7 @@ export function applyAction(prev: GameState, action: Action): GameState {
   if (s.pendingTriggers && !['orderTriggers', 'concede', 'manual'].includes(action.type)) throw new Error('Choose the order of your start-of-turn triggers first.');
   if (s.pendingChoices?.length && !['choose', 'concede', 'manual'].includes(action.type)) throw new Error('Make your choice first.');
   switch (action.type) {
-    case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0, action.optional); break;
+    case 'play': doPlay(s, action.uid, action.pitch, action.mode ?? 0, action.optional, action.alt); break;
     case 'activate': doActivate(s, action.uid, action.index, action.pitch); break;
     case 'pass': doPass(s, action.pitchOrder); break;
     case 'orderTriggers': doOrderTriggers(s, action.order); break;
@@ -1824,10 +1874,10 @@ function pay(s: GameState, p: PlayerState, cost: number, pitch: number[]) {
   if (fb) removePermanent(s, p, fb.inst.uid);
 }
 
-function doPlay(s: GameState, uid: number, pitch: number[], mode: number, optional?: OptionalChoice) {
+function doPlay(s: GameState, uid: number, pitch: number[], mode: number, optional?: OptionalChoice, alt?: boolean) {
   const pid = s.priority;
   const p = s.players[pid];
-  const opt = playOptions(s, pid).find((o) => o.uid === uid && o.kind === 'card');
+  const opt = playOptions(s, pid).find((o) => o.uid === uid && o.kind === 'card' && (alt ? o.index === ALT_INDEX : o.index !== ALT_INDEX));
   if (!opt) throw new Error('That card can’t be played now');
   const fromArsenal = p.arsenal.some((a) => a.uid === uid);
   const fromBanished = !fromArsenal && p.banished.some((b) => b.uid === uid);
@@ -1849,6 +1899,7 @@ function doPlay(s: GameState, uid: number, pitch: number[], mode: number, option
   const inst = removeFrom(zone, uid)!;
   if (fromBanished) p.turn.flags[`banishedPlay${uid}`] = 1;
   pay(s, p, opt.cost + extraCost, pitch);
+  if (alt && sc.altCost) payAlt(s, p, sc.altCost, c.name);
   // additional costs
   for (let i = 0; i < (sc.additionalCost.discardRandom ?? 0); i++) {
     const d = p.hand.splice(Math.floor(rand(s) * p.hand.length), 1)[0];
@@ -2226,7 +2277,7 @@ function startAttack(s: GameState, p: PlayerState, inst: CardInst, fromWeapon: b
   resolveEffects(s, p, sc.onAttack, inst);
   if (grantedOnAttack.length) resolveEffects(s, p, grantedOnAttack, inst);
   // "If ..., this gets ..." is checked once the attack's own triggers (cheers, wagers, ...) have happened
-  if (!fromWeapon) resolveConditionals(s, p, c, inst, 'if');
+  if (!fromWeapon) resolveConditionals(s, p, c, inst, 'if', link);
   if (mode) resolveEffects(s, p, mode.onAttack, inst);
   if (optional && optional.oc.timing === 'attack') optionalPayoff(s, p, optional.oc, optional.used, inst);
   ability(p)?.onAttack?.(heroCtx(s, p), link);

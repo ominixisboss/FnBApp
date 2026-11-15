@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Card } from '../../data/types';
 import {
-  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, optionalPayable, typeMatches,
+  applyAction, autoPitch, availableResources, cardOf, heaveOptions, oppOf, targetableOpponents, checkDefense, currentLink, defendOptions, HAND_INDEX, ALT_INDEX, optionalPayable, typeMatches,
   equipDefense, heroAbilityOf, linkDefense, linkPower, pendingEffectsText, pitchOf, playOptions,
 } from '../../engine/game';
 import type { PlayOption } from '../../engine/game';
@@ -549,7 +549,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     setOptPick(null);
     const cost = opt.cost + extraFor(opt, optional);
     const exclude = [...(opt.kind === 'card' ? [opt.uid] : []), ...(optional?.uid !== undefined ? [optional.uid] : [])];
-    const build = (pitch: number[]): Action => (opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    const build = (pitch: number[]): Action => (opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional, alt: opt.index === ALT_INDEX || undefined } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
     if (me.resources >= cost) return act(build([]));
     if (availableResources(me, exclude) < cost) return setError('Not enough resources.');
     if (autoPay && !shiftHeld.current) {
@@ -563,7 +563,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
   const finishPay = (pitch: number[]) => {
     if (!pending) return;
     const { opt, mode, optional } = pending;
-    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
+    act(opt.kind === 'card' ? { type: 'play', uid: opt.uid, pitch, mode, optional, alt: opt.index === ALT_INDEX || undefined } : { type: 'activate', uid: opt.uid, index: opt.index, pitch });
   };
   const pitchTotal = pending ? me.resources + pending.pitch.reduce((a, u) => a + pitchOf(cardOf(me.hand.find((h) => h.uid === u)!)), 0) : 0;
 
@@ -590,7 +590,7 @@ export default function GameBoard({ initial, tutorial, onExit, onRematch, onGame
     }
     if (state.phase === 'arsenal') return endTurnAct({ type: 'arsenal', uid: inst.uid });
     const opts = options.filter((o) => o.uid === inst.uid);
-    if (opts.length > 1 || (opts.length === 1 && opts[0].index === HAND_INDEX)) return setChoosePlay(opts); // play it, or discard it for its effect?
+    if (opts.length > 1 || (opts.length === 1 && (opts[0].index === HAND_INDEX || opts[0].index === ALT_INDEX))) return setChoosePlay(opts); // play it, or discard it for its effect?
     if (opts.length === 1) return startPlay(opts[0]);
     setDetail(cardOf(inst));
   };
