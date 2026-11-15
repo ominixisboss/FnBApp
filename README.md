@@ -102,7 +102,7 @@ Flesh and Blood has thousands of unique effects, and this simulator automates on
 
 | Card text automation | Cards |
 | --- | --- |
-| Fully automated | ~1,965 |
+| Fully automated | ~2,010 |
 | Partly automated | ~1,350 |
 | Stats only (text not automated) | ~1,505 |
 
